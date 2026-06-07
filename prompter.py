@@ -97,9 +97,23 @@ def generate_prompts_batch(
     title: str,
     user_instructions: str = "",
     style_preset: str = "flat_infographic",
+    worldview_desc: str = "",
 ) -> list:
     """1 バッチのセンテンスを英文プロンプト化"""
     user_block = _build_user_block(user_instructions, style_preset)
+    # 世界観・キャラ統一の指示（illustration/diagram/decorative に適用）
+    worldview_block = ""
+    if worldview_desc.strip():
+        worldview_block = f"""
+
+【世界観・キャラクター統一（最重要・illustration / diagram / decorative にのみ適用）】
+人物や情景を描くイラストでは、以下の世界観・キャラクター設定を**毎回一貫して**反映すること。
+登場人物・画風・色調・タッチを動画全体で統一し、シーンが変わっても同じ世界観に見せる:
+---
+{worldview_desc.strip()}
+---
+※ realphoto（実写）・map（衛星地図）・chart（グラフ）にはこの世界観を適用しない（実写・地図・数値はそのまま）。
+※ 人物が登場する illustration では必ず上のキャラクター設定の人物を使う。"""
 
     # Claude に渡す入力 + 自動抽出済み terms をヒントとして同梱
     # 各行の route（ルーター判定）を type として固定で渡す
@@ -132,7 +146,7 @@ def generate_prompts_batch(
 入力（type=その項目の描画種別。auto_extracted_terms は機械抽出した数値・年代・固有名詞のヒント）:
 {inputs_json}
 
-{user_block}
+{user_block}{worldview_block}
 
 【最重要: type 別の描き方】
 - **realphoto**: 実写写真。"photorealistic documentary photograph, real photo, natural lighting,
@@ -254,6 +268,7 @@ def generate_all_prompts(
     title: str,
     user_instructions: str = "",
     style_preset: str = "flat_infographic",
+    worldview_desc: str = "",
     max_workers: int = 6,
     log: Optional[Callable] = None,
 ) -> list:
@@ -264,14 +279,15 @@ def generate_all_prompts(
     for i in range(0, len(rows), BATCH_SIZE):
         batches.append(rows[i:i + BATCH_SIZE])
 
-    log("prompter", f"{len(rows)} センテンスを {len(batches)} バッチに分割（同時 {max_workers} 並列）/ style={style_preset}")
+    log("prompter", f"{len(rows)} センテンスを {len(batches)} バッチに分割（同時 {max_workers} 並列）/ style={style_preset}"
+                    + ("／世界観統一ON" if worldview_desc.strip() else ""))
 
     prompts_by_no = {}
     completed = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
-            executor.submit(generate_prompts_batch, client, batch, title, user_instructions, style_preset): i
+            executor.submit(generate_prompts_batch, client, batch, title, user_instructions, style_preset, worldview_desc): i
             for i, batch in enumerate(batches)
         }
         for future in as_completed(future_to_idx):

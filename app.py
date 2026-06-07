@@ -159,7 +159,8 @@ def _add_log(job_id: str, category: str, message: str, detail: str = ""):
 def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: str,
                          concurrency: int, provider: str, openai_quality: str,
                          skip_decorative: bool, style_preset: str,
-                         web_image_count: int, max_diagrams: int, route_mode: str):
+                         web_image_count: int, max_diagrams: int, route_mode: str,
+                         worldview_desc: str = ""):
     job_dir = OUTPUT_DIR / job_id
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
                       else f"gpt-image ({openai_quality})")
@@ -185,6 +186,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             provider=provider,
             openai_quality=openai_quality,
             style_preset=style_preset,
+            worldview_desc=worldview_desc,
             skip_decorative=skip_decorative,
             web_image_count=web_image_count,
             max_diagrams=max_diagrams,
@@ -260,6 +262,9 @@ def start_job():
     route_mode = request.form.get("route_mode", "auto")
     if route_mode not in ("auto", "all_ai"):
         route_mode = "auto"
+    # 世界観統一モード（チェックON時のみ description を有効化）
+    worldview_on = request.form.get("worldview_mode", "off") == "on"
+    worldview_desc = request.form.get("worldview_desc", "").strip() if worldview_on else ""
     try:
         web_image_count = int(request.form.get("web_image_count", "0"))
     except ValueError:
@@ -326,6 +331,15 @@ def start_job():
         (job_dir / "prebuilt_chapters.json").write_text(
             json.dumps({"chapters": prebuilt_chapters}, ensure_ascii=False), encoding="utf-8")
 
+    # 冒頭・終わりの固定画像（任意）を保存（images/intro.*, images/outro.*）
+    (job_dir / "images").mkdir(parents=True, exist_ok=True)
+    for slot in ("intro", "outro"):
+        f = request.files.get(f"{slot}_image")
+        if f and f.filename:
+            ext = os.path.splitext(f.filename)[1].lower()
+            if ext in (".png", ".jpg", ".jpeg", ".webp"):
+                f.save(str(job_dir / "images" / f"{slot}{ext}"))
+
     _set_job_state(
         job_id,
         status="queued",
@@ -344,7 +358,7 @@ def start_job():
     thread = threading.Thread(
         target=_run_pipeline_thread,
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
-              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode),
+              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc),
         daemon=True,
     )
     thread.start()
@@ -390,6 +404,81 @@ def api_logs(job_id):
 def api_manifest(job_id):
     manifest = load_json(OUTPUT_DIR / job_id / "manifest.json", {})
     return jsonify(manifest)
+
+
+@app.route("/api/regenerate/<job_id>/<int:no>", methods=["POST"])
+@login_required
+def api_regenerate(job_id, no):
+    """指定シーン(№)の画像を1枚だけ作り直す。
+
+    任意で extra_instruction（追加指示）を受け取り、プロンプト末尾に足して再生成できる。
+    """
+    import json as _json
+    from generator import run_parallel_generation, PROVIDER_NANOBANANA
+    job_dir = OUTPUT_DIR / job_id
+    manifest = load_json(job_dir / "manifest.json", {})
+    prompts = load_json(job_dir / "prompts.json", {"rows": []}).get("rows", [])
+    if not manifest:
+        return jsonify({"error": "ジョブが見つかりません"}), 404
+
+    # 対象行のプロンプト情報を取得
+    target = next((r for r in prompts if r.get("no") == no), None)
+    if not target or not target.get("prompt"):
+        return jsonify({"error": f"№{no} のプロンプトが見つかりません"}), 404
+
+    extra = (request.form.get("extra_instruction", "") or "").strip()
+    prompt_text = target.get("prompt", "")
+    if extra:
+        prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
+
+    provider = manifest.get("provider", PROVIDER_NANOBANANA)
+    openai_quality = manifest.get("openai_quality") or "medium"
+    style_preset = manifest.get("style_preset", "flat_infographic")
+    route = target.get("route") or target.get("type") or "illustration"
+
+    entry = {
+        "index": no,
+        "prompt": prompt_text,
+        "type": route,
+        "section": target.get("chapter_title", ""),
+        "excerpt": target.get("sentence", ""),
+        "keypoint": (target.get("sentence", "") or "")[:30],
+        "allowed_terms": target.get("allowed_terms", []),
+        "style": style_preset,
+    }
+
+    try:
+        results = run_parallel_generation(
+            prompts=[entry],
+            output_dir=job_dir / "images",
+            provider=provider,
+            openai_quality=openai_quality,
+            concurrency=1,
+        )
+    except Exception as e:
+        return jsonify({"error": f"再生成に失敗: {str(e)[:150]}"}), 500
+
+    ok = bool(results and results[0].get("success"))
+    filename = results[0].get("filename") if ok else None
+
+    # rows_progress.json を更新
+    snap_path = job_dir / "rows_progress.json"
+    snap = load_json(snap_path, {"rows": []})
+    for r in snap.get("rows", []):
+        if r.get("no") == no:
+            r["status"] = "ok" if ok else "failed"
+            if filename:
+                r["filename"] = filename
+            break
+    try:
+        snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    if not ok:
+        return jsonify({"error": results[0].get("error", "生成失敗") if results else "生成失敗"}), 500
+    # キャッシュ回避用にタイムスタンプ付き URL を返す
+    return jsonify({"ok": True, "no": no, "filename": filename, "ts": datetime.now().strftime("%H%M%S")})
 
 
 @app.route("/results/<job_id>/<path:filename>")

@@ -201,6 +201,21 @@
             </div>
           </div>
 
+          <!-- 世界観・キャラクター統一モード -->
+          <div class="bg-white rounded-xl border border-emerald-200 p-4">
+            <label class="flex items-start gap-3 cursor-pointer mb-2">
+              <input type="checkbox" name="worldview_mode" id="worldviewMode" class="mt-1 w-4 h-4 text-emerald-600 rounded" checked>
+              <div>
+                <span class="text-sm font-medium text-gray-700 block">🎭 世界観・キャラクター統一モード（推奨・デフォルトON）</span>
+                <span class="text-xs text-gray-400">登場人物・画風・色調を動画全体で統一して、単調さ・バラつきを防ぎます。下の設定文は自由に編集できます。</span>
+              </div>
+            </label>
+            <textarea name="worldview_desc" id="worldviewDesc" rows="5"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs leading-relaxed"
+              placeholder="統一したい世界観・キャラクターの設定を書いてください">Consistent warm, modern educational illustration world used throughout the whole video. Recurring characters: a friendly young Japanese university student (same simple design every time) and a kind professor character. Soft, cohesive color palette (warm tones with one calm accent color — not always blue). Clean flat-vector style with gentle shading, approachable and trustworthy mood. Keep the same character design, line weight, and palette across every scene so the video feels like one unified series.</textarea>
+            <p class="text-[10px] text-gray-400 mt-1">※ 実写・地図・グラフには適用されません（イラスト/図解のみ統一）。OFFにすると従来通りシーンごとに最適な画風になります。</p>
+          </div>
+
           <!-- 画像ソースモード（ルーター） -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">画像ソースの決め方</label>
@@ -270,6 +285,24 @@
                 <span class="text-xs text-gray-400">「では」「皆さんこんにちは」など視覚化困難な文は画像生成を省く（コスト削減）</span>
               </div>
             </label>
+          </div>
+
+          <!-- 冒頭・終わりの固定画像 -->
+          <div class="bg-white rounded-xl border border-gray-200 p-4">
+            <label class="block text-sm font-medium text-gray-700 mb-1">冒頭・終わりに差し込む固定画像（任意）</label>
+            <p class="text-xs text-gray-400 mb-3">監修クレジット・チャンネルロゴ・CTA など、決まった画像を先頭/末尾に入れられます。出力の最初と最後に配置されます。</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <span class="text-xs text-gray-600 block mb-1">▶ 冒頭画像</span>
+                <input type="file" name="intro_image" accept=".png,.jpg,.jpeg,.webp"
+                  class="w-full text-xs text-gray-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:bg-cyan-50 file:text-cyan-700 hover:file:bg-cyan-100">
+              </div>
+              <div>
+                <span class="text-xs text-gray-600 block mb-1">■ 終わり画像（CTA等）</span>
+                <input type="file" name="outro_image" accept=".png,.jpg,.jpeg,.webp"
+                  class="w-full text-xs text-gray-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:bg-cyan-50 file:text-cyan-700 hover:file:bg-cyan-100">
+              </div>
+            </div>
           </div>
 
           <button type="submit" id="submitBtn"

@@ -45,6 +45,7 @@ class SentencePipeline:
         provider: str = PROVIDER_NANOBANANA,
         openai_quality: str = "medium",
         style_preset: str = "flat_infographic",
+        worldview_desc: str = "",
         skip_decorative: bool = False,
         web_image_count: int = 0,
         max_diagrams: int = 150,
@@ -60,6 +61,7 @@ class SentencePipeline:
         self.provider = provider if provider in VALID_PROVIDERS else PROVIDER_NANOBANANA
         self.openai_quality = openai_quality
         self.style_preset = style_preset if style_preset in VALID_STYLES else "flat_infographic"
+        self.worldview_desc = worldview_desc or ""
         self.skip_decorative = skip_decorative
         self.web_image_count = max(0, min(web_image_count, 200))
         self.max_diagrams = max(1, min(max_diagrams, 300))
@@ -259,7 +261,8 @@ class SentencePipeline:
         rows_with_prompts = generate_all_prompts(
             client, ai_rows, title=title,
             user_instructions=self.user_instructions,
-            style_preset=self.style_preset, max_workers=6, log=self._log,
+            style_preset=self.style_preset, worldview_desc=self.worldview_desc,
+            max_workers=6, log=self._log,
         )
         save_json(self.output_dir / "prompts.json", {"rows": rows_with_prompts})
         self._log("prompter", f"プロンプト生成完了: {len(rows_with_prompts)} 件")
@@ -536,6 +539,22 @@ class SentencePipeline:
 <table><thead><tr>
 <th>№</th><th>章</th><th>センテンス</th><th>ソース</th><th>画像</th>
 </tr></thead><tbody>"""]
+
+        # 冒頭の固定画像（あれば先頭に）
+        def _find_fixed(slot):
+            for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                if (self.images_dir / f"{slot}{ext}").exists():
+                    return f"{slot}{ext}"
+            return None
+        intro_fn = _find_fixed("intro")
+        outro_fn = _find_fixed("outro")
+        if intro_fn:
+            parts.append(
+                f'<tr style="background:#ecfeff"><td class="no">▶</td><td class="chap">冒頭固定</td>'
+                f'<td class="sent">（差し込み画像・冒頭）</td><td><span class="src">固定</span></td>'
+                f'<td class="img"><img src="images/{intro_fn}" loading="lazy"></td></tr>'
+            )
+
         last_chap = None
         for r in rows:
             chap = r.get("chapter_title", "")
@@ -551,6 +570,13 @@ class SentencePipeline:
                 f'<td class="sent">{_html.escape(r.get("sentence",""))}</td>'
                 f'<td><span class="src">{_html.escape(route_label)}</span>{web_link}</td>'
                 f'<td class="img">{cell_img(r)}</td></tr>'
+            )
+        # 終わりの固定画像（あれば末尾に）
+        if outro_fn:
+            parts.append(
+                f'<tr style="background:#fef2f2"><td class="no">■</td><td class="chap">終わり固定</td>'
+                f'<td class="sent">（差し込み画像・終わり/CTA）</td><td><span class="src">固定</span></td>'
+                f'<td class="img"><img src="images/{outro_fn}" loading="lazy"></td></tr>'
             )
         parts.append("</tbody></table></body></html>")
         try:
