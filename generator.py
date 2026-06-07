@@ -121,7 +121,6 @@ def _build_full_prompt(
 
     allowed_terms には「画像内に入れて良い日本語の語句」のホワイトリストを渡す。
     リストに無い文字・ラベル・数値はすべて画像から除外するよう AI に厳格指示する。
-    style_preset == "soviet_propaganda" の場合は固定のプロパガンダ様式を強制する。
     """
     style_hints = {
         "illustration": (

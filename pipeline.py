@@ -49,7 +49,6 @@ class SentencePipeline:
         web_image_count: int = 0,
         max_diagrams: int = 150,
         route_mode: str = "auto",
-        propaganda_mix: bool = False,
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
@@ -65,8 +64,6 @@ class SentencePipeline:
         self.web_image_count = max(0, min(web_image_count, 200))
         self.max_diagrams = max(1, min(max_diagrams, 300))
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
-        # プロパガンダ・ミックス: base が propaganda 以外のときだけ有効
-        self.propaganda_mix = bool(propaganda_mix) and self.style_preset != "soviet_propaganda"
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
         self.item_callback = item_callback or (lambda info: None)
@@ -226,7 +223,6 @@ class SentencePipeline:
             routes = route_all_sentences(
                 client, rows, title,
                 user_instructions=self.user_instructions,
-                propaganda_mix=self.propaganda_mix,
                 max_workers=4, log=self._log,
             )
         else:  # all_ai: v1 互換（全文 AI 生成）
@@ -258,36 +254,13 @@ class SentencePipeline:
                   f"振り分け: AI生成 {len(ai_rows)} / Web写真 {len(web_photo_rows)} / skip {len(skip_rows)}")
 
         # ===== Phase 2a: 英文プロンプト（AI 行のみ） =====
-        # プロパガンダ・ミックス時は、昇格文を「プロパガンダのプロンプト」で別生成する
-        # （base スタイルで作ると "flat infographic, navy blue" 等が本文に残り、
-        #   generator のプロパガンダ指定を打ち消してしまうため）
         self._progress(2, f"英文プロンプトを並列生成中（style={self.style_preset}）...", 22)
-        if self.propaganda_mix:
-            prop_rows = [r for r in ai_rows if routes.get(r["no"], {}).get("propaganda")]
-            base_rows = [r for r in ai_rows if not routes.get(r["no"], {}).get("propaganda")]
-            self._log("prompter",
-                      f"プロンプト生成: 通常 {len(base_rows)} 件 + プロパガンダ {len(prop_rows)} 件")
-            rows_with_prompts = []
-            if base_rows:
-                rows_with_prompts += generate_all_prompts(
-                    client, base_rows, title=title,
-                    user_instructions=self.user_instructions,
-                    style_preset=self.style_preset, max_workers=6, log=self._log,
-                )
-            if prop_rows:
-                rows_with_prompts += generate_all_prompts(
-                    client, prop_rows, title=title,
-                    user_instructions=self.user_instructions,
-                    style_preset="soviet_propaganda", max_workers=6, log=self._log,
-                )
-            rows_with_prompts.sort(key=lambda x: x.get("no", 0))
-        else:
-            self._log("prompter", f"{len(ai_rows)} 件（AI生成対象）のプロンプトを生成します")
-            rows_with_prompts = generate_all_prompts(
-                client, ai_rows, title=title,
-                user_instructions=self.user_instructions,
-                style_preset=self.style_preset, max_workers=6, log=self._log,
-            )
+        self._log("prompter", f"{len(ai_rows)} 件（AI生成対象）のプロンプトを生成します")
+        rows_with_prompts = generate_all_prompts(
+            client, ai_rows, title=title,
+            user_instructions=self.user_instructions,
+            style_preset=self.style_preset, max_workers=6, log=self._log,
+        )
         save_json(self.output_dir / "prompts.json", {"rows": rows_with_prompts})
         self._log("prompter", f"プロンプト生成完了: {len(rows_with_prompts)} 件")
 
@@ -412,11 +385,6 @@ class SentencePipeline:
             if self.skip_decorative and r.get("type") == "decorative":
                 continue  # 既に skipped
             if no in selected_nos:
-                # プロパガンダ・ミックス: この文が昇格対象なら propaganda 様式を適用
-                row_style = self.style_preset
-                if self.propaganda_mix and routes.get(no, {}).get("propaganda"):
-                    row_style = "soviet_propaganda"
-                    self._update_row(no, propaganda=True)
                 # 画像 type はルーターの route を最優先（realphoto/map 等を確実に反映）
                 route_type = routes.get(no, {}).get("route", "")
                 img_type = route_type if route_type in AI_ROUTES else r.get("type", "illustration")
@@ -428,7 +396,7 @@ class SentencePipeline:
                     "excerpt": r.get("sentence", ""),
                     "keypoint": r.get("sentence", "")[:30],
                     "allowed_terms": r.get("allowed_terms", []),
-                    "style": row_style,
+                    "style": self.style_preset,
                 })
             else:
                 # 候補だったが均等配置から外れた → 「間引き」
