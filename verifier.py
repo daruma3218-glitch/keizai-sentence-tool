@@ -27,8 +27,14 @@ def verify_image(
     sentence: str,
     img_type: str = "diagram",
     allowed_terms: Optional[list] = None,
+    block_context: str = "",
+    chapter: str = "",
+    theme: str = "",
 ) -> dict:
-    """1 枚の画像が文の意味を正しく表しているか検証する。
+    """1 枚の画像が、原稿の文脈の中で文の意味を正しく表しているか検証する。
+
+    単独の文だけでなく、動画テーマ・章・前後段落（block_context）も渡して
+    「文脈の中でこの文が本当に意味すること」と図が合っているかを判定する。
 
     戻り値: {"ok": bool, "reason": str, "fix_hint": str}
         ok=False のとき fix_hint（英語の改善指示）が入る。
@@ -52,23 +58,39 @@ def verify_image(
     if terms:
         terms_note = f"\n画像に入ってよい日本語ラベル: {', '.join(terms)}"
 
+    # 文脈ブロック（テーマ・章・前後段落）を組み立てる
+    ctx_parts = []
+    if theme.strip():
+        ctx_parts.append(f"【動画全体のテーマ】{theme.strip()[:120]}")
+    if chapter.strip():
+        ctx_parts.append(f"【この図が属する章】{chapter.strip()}")
+    if block_context.strip():
+        ctx_parts.append(f"【前後の文脈（この文を含む段落）】\n{block_context.strip()[:500]}")
+    context_block = "\n".join(ctx_parts)
+    if context_block:
+        context_block = "===== 原稿の文脈 =====\n" + context_block + "\n=====================\n\n"
+
     system = (
-        "あなたは厳しい図解レビュアーです。画像が説明文の意味を正しく・分かりやすく"
-        "表現できているかを評価します。結果は JSON オブジェクトのみで返してください。"
+        "あなたは厳しい図解レビュアーです。動画原稿の文脈を踏まえて、画像がその文の"
+        "意味を正しく・分かりやすく表現できているかを評価します。"
+        "結果は JSON オブジェクトのみで返してください。"
     )
-    query = f"""この画像は次の日本語文の図解（type={img_type}）として生成されました:
+    query = f"""{context_block}この画像は、上の文脈の中の次の1文の図解（type={img_type}）として生成されました:
 「{sentence}」{terms_note}
 
-次の観点で厳しくチェックしてください:
-1. 文の意味を正しく表しているか（無関係・的外れでないか）
-2. 画像内の文字に文字化け・誤字・読めない崩れた文字がないか
-3. 重要な要素（数値・関係・対比・フローなど）が抜けていないか
-4. ぱっと見て内容が伝わるか
+**文脈を踏まえて**、次の観点で厳しくチェックしてください:
+1. 文脈の中でこの文が「本当に伝えたい内容」を正しく表しているか
+   （例: 主語・対象・何が変化したか等が文脈で決まる場合、それを正しく描けているか。
+    文単独では曖昧でも、文脈から読み取れる正しい内容と図がズレていないか）
+2. 図の内容が原稿の主張と矛盾・的外れになっていないか
+3. 画像内の文字に文字化け・誤字・読めない崩れた文字がないか
+4. 重要な要素（数値・関係・対比・フロー・主体）が抜けていないか
+5. ぱっと見て内容が伝わるか
 
 以下の JSON のみで返答:
-{{"ok": true または false, "reason": "判定理由を30字以内の日本語で", "fix_hint": "再生成時の改善指示を英語で60字以内（okがfalseのとき必須）"}}
+{{"ok": true または false, "reason": "判定理由を40字以内の日本語で", "fix_hint": "再生成時の改善指示を英語で80字以内（okがfalseのとき必須・文脈の正しい内容を反映）"}}
 
-少しでも意味がズレている／文字が崩れている場合は ok=false にしてください。"""
+文脈と図がズレている／文字が崩れている場合は ok=false にしてください。"""
 
     try:
         response = client.messages.create(

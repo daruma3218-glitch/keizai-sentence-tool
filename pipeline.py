@@ -399,6 +399,7 @@ class SentencePipeline:
                     "type": img_type,
                     "section": r.get("chapter_title", ""),
                     "excerpt": r.get("sentence", ""),
+                    "block_text": r.get("block_text", ""),  # 検証の文脈用（前後段落）
                     "keypoint": r.get("sentence", "")[:30],
                     "allowed_terms": r.get("allowed_terms", []),
                     "style": self.style_preset,
@@ -445,7 +446,11 @@ class SentencePipeline:
 
         # ===== Phase 3b: 図解の意味を自動検証 → ズレてたら再生成 =====
         if self.verify_diagrams:
-            self._verify_and_fix(results, generation_targets, gemini_key, openai_key)
+            theme = title
+            _sum = analysis.get("summary", "")
+            if _sum:
+                theme = f"{title}（{_sum}）"
+            self._verify_and_fix(results, generation_targets, gemini_key, openai_key, theme=theme)
 
         # Web 検索の完了を待つ（タイムアウト 20 分）
         # Web 検索は I/O bound + Claude Web Search のレート制限により遅い:
@@ -602,7 +607,7 @@ class SentencePipeline:
         "": "",
     }
 
-    def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key):
+    def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key, theme=""):
         """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from verifier import verify_image, DEFAULT_VERIFY_TYPES
@@ -627,12 +632,17 @@ class SentencePipeline:
         self._progress(3, f"図解の意味を検証中（{len(verify_list)} 枚）...", 90)
         self._log("verify", f"diagram/chart {len(verify_list)} 枚の意味を Claude Vision で検証します")
 
-        # 並列で検証
+        # 並列で検証（原稿の文脈＝テーマ・章・前後段落 を渡す）
         def _do_verify(t):
             no = t["index"]
             img_path = self.images_dir / f"{no}.png"
-            v = verify_image(client, img_path, t.get("excerpt", ""), t.get("type", "diagram"),
-                             allowed_terms=t.get("allowed_terms"))
+            v = verify_image(
+                client, img_path, t.get("excerpt", ""), t.get("type", "diagram"),
+                allowed_terms=t.get("allowed_terms"),
+                block_context=t.get("block_text", ""),
+                chapter=t.get("section", ""),
+                theme=theme,
+            )
             return (t, v)
 
         ng = []
