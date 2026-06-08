@@ -287,6 +287,16 @@
             </label>
           </div>
 
+          <div class="bg-white rounded-xl border border-indigo-200 p-4">
+            <label class="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" name="verify_diagrams" class="mt-1 w-4 h-4 text-indigo-600 rounded">
+              <div>
+                <span class="text-sm font-medium text-gray-700 block">🔍 図解の意味を自動検証（diagram / chart）</span>
+                <span class="text-xs text-gray-400">生成後に AI が「図解が文の意味と合うか・文字化けがないか」を確認し、ズレていれば改善指示付きで自動再生成します。差し戻しが減りますが、検証分だけ時間・コストが増えます。</span>
+              </div>
+            </label>
+          </div>
+
           <!-- 冒頭・終わりの固定画像 -->
           <div class="bg-white rounded-xl border border-gray-200 p-4">
             <label class="block text-sm font-medium text-gray-700 mb-1">冒頭・終わりに差し込む固定画像（任意）</label>

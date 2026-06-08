@@ -160,7 +160,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
                          concurrency: int, provider: str, openai_quality: str,
                          skip_decorative: bool, style_preset: str,
                          web_image_count: int, max_diagrams: int, route_mode: str,
-                         worldview_desc: str = ""):
+                         worldview_desc: str = "", verify_diagrams: bool = True):
     job_dir = OUTPUT_DIR / job_id
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
                       else f"gpt-image ({openai_quality})")
@@ -187,6 +187,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             openai_quality=openai_quality,
             style_preset=style_preset,
             worldview_desc=worldview_desc,
+            verify_diagrams=verify_diagrams,
             skip_decorative=skip_decorative,
             web_image_count=web_image_count,
             max_diagrams=max_diagrams,
@@ -265,6 +266,7 @@ def start_job():
     # 世界観統一モード（チェックON時のみ description を有効化）
     worldview_on = request.form.get("worldview_mode", "off") == "on"
     worldview_desc = request.form.get("worldview_desc", "").strip() if worldview_on else ""
+    verify_diagrams = request.form.get("verify_diagrams", "off") == "on"
     try:
         web_image_count = int(request.form.get("web_image_count", "0"))
     except ValueError:
@@ -358,7 +360,7 @@ def start_job():
     thread = threading.Thread(
         target=_run_pipeline_thread,
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
-              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc),
+              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams),
         daemon=True,
     )
     thread.start()

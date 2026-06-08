@@ -46,6 +46,7 @@ class SentencePipeline:
         openai_quality: str = "medium",
         style_preset: str = "flat_infographic",
         worldview_desc: str = "",
+        verify_diagrams: bool = True,
         skip_decorative: bool = False,
         web_image_count: int = 0,
         max_diagrams: int = 150,
@@ -62,6 +63,7 @@ class SentencePipeline:
         self.openai_quality = openai_quality
         self.style_preset = style_preset if style_preset in VALID_STYLES else "flat_infographic"
         self.worldview_desc = worldview_desc or ""
+        self.verify_diagrams = bool(verify_diagrams)
         self.skip_decorative = skip_decorative
         self.web_image_count = max(0, min(web_image_count, 200))
         self.max_diagrams = max(1, min(max_diagrams, 300))
@@ -441,6 +443,10 @@ class SentencePipeline:
         fail_count = len(results) - success_count
         self._log("generator", f"画像生成完了: 成功 {success_count} / 失敗 {fail_count}")
 
+        # ===== Phase 3b: 図解の意味を自動検証 → ズレてたら再生成 =====
+        if self.verify_diagrams:
+            self._verify_and_fix(results, generation_targets, gemini_key, openai_key)
+
         # Web 検索の完了を待つ（タイムアウト 20 分）
         # Web 検索は I/O bound + Claude Web Search のレート制限により遅い:
         # 1 件あたり 5〜15 秒 × 100 件 ÷ 並列 8 ≈ 1〜3 分が目安
@@ -595,6 +601,87 @@ class SentencePipeline:
         "skip": "スキップ",
         "": "",
     }
+
+    def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key):
+        """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from verifier import verify_image, DEFAULT_VERIFY_TYPES
+
+        client = get_anthropic_client()
+        # 検証対象: 生成成功した diagram / chart（targets と results を突合）
+        targets_by_no = {t["index"]: t for t in generation_targets}
+        verify_list = []
+        for r in results:
+            if not r.get("success"):
+                continue
+            no = r.get("index")
+            t = targets_by_no.get(no)
+            if not t:
+                continue
+            if t.get("type") in DEFAULT_VERIFY_TYPES:
+                verify_list.append(t)
+
+        if not verify_list:
+            return
+
+        self._progress(3, f"図解の意味を検証中（{len(verify_list)} 枚）...", 90)
+        self._log("verify", f"diagram/chart {len(verify_list)} 枚の意味を Claude Vision で検証します")
+
+        # 並列で検証
+        def _do_verify(t):
+            no = t["index"]
+            img_path = self.images_dir / f"{no}.png"
+            v = verify_image(client, img_path, t.get("excerpt", ""), t.get("type", "diagram"),
+                             allowed_terms=t.get("allowed_terms"))
+            return (t, v)
+
+        ng = []
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futs = [ex.submit(_do_verify, t) for t in verify_list]
+            for f in as_completed(futs):
+                try:
+                    t, v = f.result()
+                    if not v.get("ok"):
+                        ng.append((t, v))
+                        self._log("verify", f"№{t['index']} 要修正: {v.get('reason','')}")
+                except Exception as e:
+                    self._log("error", f"検証エラー: {str(e)[:80]}")
+
+        if not ng:
+            self._log("verify", "検証完了: 全て意味OK ✓")
+            return
+
+        # 改善指示を付けて再生成（1回）
+        self._log("verify", f"{len(ng)} 枚を改善指示付きで再生成します")
+        fix_targets = []
+        for t, v in ng:
+            entry = dict(t)
+            hint = v.get("fix_hint", "")
+            if hint:
+                entry["prompt"] = f"{t.get('prompt','')}\n\nIMPROVE: {hint}"
+            self._update_row(t["index"], status="generating")
+            fix_targets.append(entry)
+
+        def on_fix_event(info):
+            no = info.get("index", 0)
+            st = info.get("status", "")
+            upd = {"status": st}
+            if st == "ok":
+                upd["filename"] = info.get("filename")
+            self._update_row(no, **upd)
+
+        run_parallel_generation(
+            prompts=fix_targets,
+            output_dir=self.images_dir,
+            provider=self.provider,
+            gemini_api_key=gemini_key,
+            openai_api_key=openai_key,
+            openai_quality=self.openai_quality,
+            concurrency=self.concurrency,
+            style_preset=self.style_preset,
+            progress_callback=on_fix_event,
+        )
+        self._log("verify", f"再生成完了（{len(fix_targets)} 枚を作り直しました）")
 
     def _write_csv(self, path: Path, rows: list):
         """CSV を書き出す（スプレッドシートと同構造）"""
