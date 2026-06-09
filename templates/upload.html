@@ -66,6 +66,22 @@
 
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
 
+          <!-- チャンネル選択（部屋） -->
+          <div class="bg-indigo-50 rounded-xl border border-indigo-200 p-4">
+            <label class="block text-sm font-bold text-indigo-900 mb-2">📺 チャンネル（部屋）を選択</label>
+            <select name="channel_id" id="channelSelect"
+                    class="w-full px-4 py-3 border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm bg-white">
+              {% for c in channels %}
+              <option value="{{ c.id }}"
+                data-defaults='{{ c.defaults | tojson }}'
+                data-keys="{{ '1' if c._has_openai or c._has_gemini else '0' }}">
+                {{ c.name }}{% if c.api_env_prefix %}（専用キー: {{ '設定済み' if (c._has_openai or c._has_gemini) else '未設定' }}）{% else %}（共通キー）{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+            <p class="text-xs text-indigo-700 mt-2">チャンネルを選ぶと、そのチャンネル専用の設定（世界観・スタイル・既定値）と API キーが自動で適用されます。</p>
+          </div>
+
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
               原稿
@@ -414,6 +430,43 @@
         }
       });
     });
+
+    // ===== チャンネル選択 → 設定を自動入力 =====
+    function setRadio(name, val) {
+      const el = document.querySelector(`input[name="${name}"][value="${val}"]`);
+      if (el) { el.checked = true; el.dispatchEvent(new Event('change', {bubbles:true})); }
+    }
+    function setCheckbox(name, val) {
+      const el = document.querySelector(`input[name="${name}"]`);
+      if (el) el.checked = !!val;
+    }
+    function setRange(id, labelId, val) {
+      const el = document.getElementById(id);
+      if (el && val !== undefined && val !== null) { el.value = val; const lb = document.getElementById(labelId); if (lb) lb.textContent = val; }
+    }
+    function applyChannelDefaults() {
+      const opt = document.getElementById('channelSelect').selectedOptions[0];
+      if (!opt) return;
+      let d = {};
+      try { d = JSON.parse(opt.getAttribute('data-defaults') || '{}'); } catch(e) { return; }
+      if (d.provider) setRadio('provider', d.provider);
+      if (d.openai_quality) setRadio('openai_quality', d.openai_quality);
+      if (d.style_preset) setRadio('style_preset', d.style_preset);
+      if (d.route_mode) setRadio('route_mode', d.route_mode);
+      setCheckbox('worldview_mode', d.worldview_mode);
+      setCheckbox('verify_diagrams', d.verify_diagrams);
+      setCheckbox('skip_decorative', d.skip_decorative);
+      if (d.worldview_desc !== undefined) { const t = document.getElementById('worldviewDesc'); if (t) t.value = d.worldview_desc; }
+      if (d.user_instructions !== undefined) { const u = document.querySelector('textarea[name="user_instructions"]'); if (u) u.value = d.user_instructions; }
+      setRange('concurrency', 'concurrencyLabel', d.concurrency);
+      setRange('maxDiagrams', 'maxDiagramsLabel', d.max_diagrams);
+      setRange('webImageCount', 'webImageCountLabel', d.web_image_count);
+    }
+    const channelSelect = document.getElementById('channelSelect');
+    if (channelSelect) {
+      channelSelect.addEventListener('change', applyChannelDefaults);
+      applyChannelDefaults();  // 初期チャンネルの設定を反映
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

@@ -47,6 +47,10 @@ class SentencePipeline:
         style_preset: str = "flat_infographic",
         worldview_desc: str = "",
         verify_diagrams: bool = True,
+        channel_id: str = "default",
+        anthropic_key: str = "",
+        gemini_key: str = "",
+        openai_key: str = "",
         skip_decorative: bool = False,
         web_image_count: int = 0,
         max_diagrams: int = 150,
@@ -64,6 +68,10 @@ class SentencePipeline:
         self.style_preset = style_preset if style_preset in VALID_STYLES else "flat_infographic"
         self.worldview_desc = worldview_desc or ""
         self.verify_diagrams = bool(verify_diagrams)
+        self.channel_id = channel_id or "default"
+        self.anthropic_key = anthropic_key or ""
+        self.gemini_key = gemini_key or ""
+        self.openai_key = openai_key or ""
         self.skip_decorative = skip_decorative
         self.web_image_count = max(0, min(web_image_count, 200))
         self.max_diagrams = max(1, min(max_diagrams, 300))
@@ -159,9 +167,10 @@ class SentencePipeline:
 
     # ---- メインフロー ----
     def run(self) -> dict:
-        client = get_anthropic_client()
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
-        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        # チャンネル別キーがあれば優先、無ければ共通（環境変数）
+        client = get_anthropic_client(self.anthropic_key)
+        gemini_key = (self.gemini_key or "").strip() or os.environ.get("GEMINI_API_KEY", "")
+        openai_key = (self.openai_key or "").strip() or os.environ.get("OPENAI_API_KEY", "")
 
         if self.provider == PROVIDER_NANOBANANA and not gemini_key:
             raise RuntimeError("nanobanana を使うには GEMINI_API_KEY が必要です。")
@@ -487,6 +496,7 @@ class SentencePipeline:
             "provider": self.provider,
             "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
             "style_preset": self.style_preset,
+            "channel_id": self.channel_id,
             "route_mode": self.route_mode,
             "concurrency": self.concurrency,
             "total_sentences": total_sentences,

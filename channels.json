@@ -1,0 +1,43 @@
+{
+  "_readme": "チャンネル定義ファイル。アプリは1つ・設定はチャンネル別。api_env_prefix を設定すると、そのチャンネルは <PREFIX>_OPENAI_API_KEY / <PREFIX>_GEMINI_API_KEY / <PREFIX>_ANTHROPIC_API_KEY を優先使用（未設定なら共通キーにフォールバック）。Render の環境変数でキーを管理するとデプロイで消えず安全。",
+  "channels": [
+    {
+      "id": "default",
+      "name": "共通（デフォルト）",
+      "api_env_prefix": "",
+      "defaults": {
+        "provider": "gpt-image",
+        "openai_quality": "medium",
+        "style_preset": "flat_infographic",
+        "route_mode": "auto",
+        "worldview_mode": true,
+        "worldview_desc": "Consistent warm, modern educational illustration world used throughout the whole video. Soft, cohesive color palette (warm tones with one calm accent color — not always blue). Clean flat-vector style with gentle shading, approachable and trustworthy mood. Keep the same character design, line weight, and palette across every scene so the video feels like one unified series.",
+        "concurrency": 8,
+        "max_diagrams": 150,
+        "verify_diagrams": false,
+        "skip_decorative": false,
+        "web_image_count": 30,
+        "user_instructions": ""
+      }
+    },
+    {
+      "id": "keizai",
+      "name": "経済探求ラボ",
+      "api_env_prefix": "KEIZAI",
+      "defaults": {
+        "provider": "gpt-image",
+        "openai_quality": "medium",
+        "style_preset": "flat_infographic",
+        "route_mode": "auto",
+        "worldview_mode": true,
+        "worldview_desc": "Consistent educational illustration world for an economics-research YouTube channel. Recurring characters: a friendly young Japanese university student and a kind professor (same simple flat-vector design every scene). Warm, trustworthy palette with one calm accent color (avoid all-blue monotony). Clean lines, gentle shading. Keep character design, line weight, and palette unified across every scene.",
+        "concurrency": 8,
+        "max_diagrams": 150,
+        "verify_diagrams": true,
+        "skip_decorative": false,
+        "web_image_count": 30,
+        "user_instructions": ""
+      }
+    }
+  ]
+}

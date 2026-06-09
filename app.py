@@ -38,6 +38,39 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 load_env(PROJECT_ROOT)
 
+
+def load_channels() -> list:
+    """channels.json を読み込みチャンネル一覧を返す（無ければ default 1件）。"""
+    data = load_json(PROJECT_ROOT / "channels.json", {})
+    chans = data.get("channels", []) if isinstance(data, dict) else []
+    if not chans:
+        chans = [{"id": "default", "name": "共通（デフォルト）", "api_env_prefix": "", "defaults": {}}]
+    return chans
+
+
+def get_channel(channel_id: str) -> dict:
+    for c in load_channels():
+        if c.get("id") == channel_id:
+            return c
+    return load_channels()[0]
+
+
+def resolve_channel_keys(channel: dict) -> dict:
+    """チャンネルの api_env_prefix から各APIキーを解決（無ければ共通キーにフォールバック）。"""
+    prefix = (channel.get("api_env_prefix") or "").strip()
+    def pick(name):
+        if prefix:
+            v = os.environ.get(f"{prefix}_{name}", "").strip()
+            if v:
+                return v
+        return os.environ.get(name, "").strip()
+    return {
+        "anthropic": pick("ANTHROPIC_API_KEY"),
+        "gemini": pick("GEMINI_API_KEY"),
+        "openai": pick("OPENAI_API_KEY"),
+    }
+
+
 def _resolve_secret_key() -> str:
     """安定した SECRET_KEY を取得する。
 
@@ -160,14 +193,16 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
                          concurrency: int, provider: str, openai_quality: str,
                          skip_decorative: bool, style_preset: str,
                          web_image_count: int, max_diagrams: int, route_mode: str,
-                         worldview_desc: str = "", verify_diagrams: bool = True):
+                         worldview_desc: str = "", verify_diagrams: bool = True,
+                         channel_id: str = "default", ch_keys: dict = None):
     job_dir = OUTPUT_DIR / job_id
+    ch_keys = ch_keys or {}
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
                       else f"gpt-image ({openai_quality})")
     try:
         _set_job_state(job_id, status="running", phase=0, message="開始しています...", percent=0)
         _add_log(job_id, "system",
-                 f"ジョブ {job_id} を開始（{provider_label} / 並列 {concurrency} / style={style_preset} / route={route_mode} / Web画像 {web_image_count}）")
+                 f"ジョブ {job_id} を開始（ch={channel_id} / {provider_label} / 並列 {concurrency} / style={style_preset} / route={route_mode} / Web画像 {web_image_count}）")
 
         def on_progress(phase, msg, pct):
             _set_job_state(job_id, status="running", phase=phase, message=msg, percent=pct)
@@ -188,6 +223,10 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             style_preset=style_preset,
             worldview_desc=worldview_desc,
             verify_diagrams=verify_diagrams,
+            channel_id=channel_id,
+            anthropic_key=ch_keys.get("anthropic", ""),
+            gemini_key=ch_keys.get("gemini", ""),
+            openai_key=ch_keys.get("openai", ""),
             skip_decorative=skip_decorative,
             web_image_count=web_image_count,
             max_diagrams=max_diagrams,
@@ -230,17 +269,27 @@ def index():
             job_state = load_json(d / "job.json", {})
             if not manifest and not job_state:
                 continue
+            ch_id = manifest.get("channel_id", job_state.get("channel_id", ""))
             past_jobs.append({
                 "id": d.name,
                 "title": manifest.get("title", job_state.get("title", d.name)),
                 "status": job_state.get("status", "unknown"),
                 "generated": manifest.get("generated", job_state.get("generated", 0)),
                 "total": manifest.get("total_sentences", job_state.get("total_sentences", 0)),
+                "channel": ch_id,
                 "date": d.name[:8] if len(d.name) >= 8 else "",
             })
+    # 各チャンネルのキー設定状況（UI 表示用）
+    channels = load_channels()
+    for c in channels:
+        keys = resolve_channel_keys(c)
+        c["_has_gemini"] = bool(keys["gemini"])
+        c["_has_openai"] = bool(keys["openai"])
+        c["_has_anthropic"] = bool(keys["anthropic"])
     return render_template(
         "upload.html",
         past_jobs=past_jobs[:30],
+        channels=channels,
         has_anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
         has_gemini=bool(os.environ.get("GEMINI_API_KEY")),
         has_openai=bool(os.environ.get("OPENAI_API_KEY")),
@@ -250,6 +299,12 @@ def index():
 @app.route("/start", methods=["POST"])
 @login_required
 def start_job():
+    # チャンネル選択 → そのチャンネルの API キーを解決
+    channel_id = request.form.get("channel_id", "default")
+    channel = get_channel(channel_id)
+    channel_id = channel.get("id", "default")
+    ch_keys = resolve_channel_keys(channel)
+
     provider = request.form.get("provider", PROVIDER_NANOBANANA)
     if provider not in VALID_PROVIDERS:
         provider = PROVIDER_NANOBANANA
@@ -278,16 +333,18 @@ def start_job():
         max_diagrams = 150
     max_diagrams = max(1, min(max_diagrams, 300))
 
-    # API キー確認
+    # API キー確認（チャンネルのキー＝個別 or 共通フォールバック）
     missing = []
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not ch_keys["anthropic"]:
         missing.append("ANTHROPIC_API_KEY")
-    if provider == PROVIDER_NANOBANANA and not os.environ.get("GEMINI_API_KEY"):
+    if provider == PROVIDER_NANOBANANA and not ch_keys["gemini"]:
         missing.append("GEMINI_API_KEY")
-    if provider == PROVIDER_GPT_IMAGE and not os.environ.get("OPENAI_API_KEY"):
+    if provider == PROVIDER_GPT_IMAGE and not ch_keys["openai"]:
         missing.append("OPENAI_API_KEY")
     if missing:
-        return jsonify({"error": f"{', '.join(missing)} が設定されていません"}), 400
+        pfx = channel.get("api_env_prefix", "")
+        hint = f"（チャンネル「{channel.get('name','')}」用に {pfx}_... を設定するか共通キーを設定）" if pfx else ""
+        return jsonify({"error": f"{', '.join(missing)} が設定されていません{hint}"}), 400
 
     # 原稿取得（.docx は見出しスタイルを章として解析）
     manuscript_text = ""
@@ -348,6 +405,7 @@ def start_job():
         phase=0,
         message="キューに追加しました",
         percent=0,
+        channel_id=channel_id,
         concurrency=concurrency,
         provider=provider,
         openai_quality=openai_quality if provider == PROVIDER_GPT_IMAGE else None,
@@ -360,7 +418,8 @@ def start_job():
     thread = threading.Thread(
         target=_run_pipeline_thread,
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
-              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams),
+              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
+              channel_id, ch_keys),
         daemon=True,
     )
     thread.start()

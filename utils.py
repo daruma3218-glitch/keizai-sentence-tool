@@ -30,9 +30,12 @@ def load_env(project_root: Path) -> None:
                 os.environ[key] = val
 
 
-def get_anthropic_client() -> anthropic.Anthropic:
-    """Anthropic クライアントを取得（API キー未設定時はエラー）"""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+def get_anthropic_client(api_key: str = "") -> anthropic.Anthropic:
+    """Anthropic クライアントを取得（API キー未設定時はエラー）。
+
+    api_key を渡すとそれを使う（チャンネル別キー用）。空なら環境変数を使う。
+    """
+    api_key = (api_key or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key or api_key == "your_api_key_here":
         raise RuntimeError("ANTHROPIC_API_KEY が設定されていません。.env を確認してください。")
     return anthropic.Anthropic(api_key=api_key)
