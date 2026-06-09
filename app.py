@@ -33,8 +33,13 @@ from generator import PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS
 
 
 PROJECT_ROOT = Path(__file__).parent
-OUTPUT_DIR = PROJECT_ROOT / "output"
-OUTPUT_DIR.mkdir(exist_ok=True)
+# 出力先は環境変数 DATA_DIR で永続ディスク(Render Disk 等)に向けられる。
+# 未設定ならプロジェクト直下（ローカル/ディスク無し運用）。
+# ※ Render は DATA_DIR=/data に Disk をマウントすると、デプロイをまたいで
+#   過去ジョブ（画像・manifest 等）が消えなくなる。
+_DATA_DIR = os.environ.get("DATA_DIR", "").strip()
+OUTPUT_DIR = (Path(_DATA_DIR) if _DATA_DIR else PROJECT_ROOT) / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 load_env(PROJECT_ROOT)
 
@@ -477,10 +482,16 @@ def api_regenerate(job_id, no):
     import json as _json
     from generator import run_parallel_generation, PROVIDER_NANOBANANA
     job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return jsonify({"error": "ジョブのデータがサーバー上にありません（再デプロイ等で消えた可能性）。お手数ですが再生成してください。"}), 404
+
+    # manifest があればそれを、無ければ job.json を params に使う（生成中でも動くように）
     manifest = load_json(job_dir / "manifest.json", {})
+    job_state = load_json(job_dir / "job.json", {})
+    params = manifest or job_state
     prompts = load_json(job_dir / "prompts.json", {"rows": []}).get("rows", [])
-    if not manifest:
-        return jsonify({"error": "ジョブが見つかりません"}), 404
+    if not prompts:
+        return jsonify({"error": "プロンプト情報が見つかりません（まだ生成準備中か、データが消えています）"}), 404
 
     # 対象行のプロンプト情報を取得
     target = next((r for r in prompts if r.get("no") == no), None)
@@ -492,10 +503,14 @@ def api_regenerate(job_id, no):
     if extra:
         prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
 
-    provider = manifest.get("provider", PROVIDER_NANOBANANA)
-    openai_quality = manifest.get("openai_quality") or "medium"
-    style_preset = manifest.get("style_preset", "flat_infographic")
+    provider = params.get("provider", PROVIDER_NANOBANANA)
+    openai_quality = params.get("openai_quality") or "medium"
+    style_preset = params.get("style_preset", "flat_infographic")
     route = target.get("route") or target.get("type") or "illustration"
+
+    # チャンネル別 API キーを解決（再生成も該当チャンネルのキーで）
+    channel_id = params.get("channel_id", "default")
+    ch_keys = resolve_channel_keys(get_channel(channel_id))
 
     entry = {
         "index": no,
@@ -513,6 +528,8 @@ def api_regenerate(job_id, no):
             prompts=[entry],
             output_dir=job_dir / "images",
             provider=provider,
+            gemini_api_key=ch_keys.get("gemini") or None,
+            openai_api_key=ch_keys.get("openai") or None,
             openai_quality=openai_quality,
             concurrency=1,
         )
