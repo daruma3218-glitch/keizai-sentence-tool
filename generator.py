@@ -30,6 +30,8 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-image-preview"
 DEFAULT_OPENAI_MODEL = "gpt-image-2"
 DEFAULT_CONCURRENCY = 12
 MAX_RETRIES = 3
+API_TIMEOUT_SEC = 120          # 1 回の画像生成 API 呼び出しの上限（応答停止対策）
+PER_IMAGE_HARD_TIMEOUT = 360   # 1 枚あたりの全体上限（リトライ込み・asyncio 側の最終防衛線）
 
 # 出力アスペクト比（16:9 に統一）
 TARGET_RATIO = 16 / 9
@@ -356,15 +358,25 @@ class ParallelImageGenerator:
         if provider == PROVIDER_NANOBANANA:
             if not gemini_api_key:
                 raise RuntimeError("nanobanana を使うには GEMINI_API_KEY が必要です")
-            self.gemini_client = genai.Client(api_key=gemini_api_key)
+            # HTTP タイムアウト（ミリ秒）を設定し、応答が止まった呼び出しを必ず失敗させる
+            try:
+                self.gemini_client = genai.Client(
+                    api_key=gemini_api_key,
+                    http_options=types.HttpOptions(timeout=API_TIMEOUT_SEC * 1000),
+                )
+            except Exception:
+                # 古い SDK で http_options 非対応の場合は従来通り
+                self.gemini_client = genai.Client(api_key=gemini_api_key)
         elif provider == PROVIDER_GPT_IMAGE:
             if not openai_api_key:
                 raise RuntimeError("gpt-image を使うには OPENAI_API_KEY が必要です")
             import openai  # 遅延 import
-            self.openai_client = openai.OpenAI(api_key=openai_api_key)
+            # タイムアウト + リトライ0（リトライは自前で制御）
+            self.openai_client = openai.OpenAI(api_key=openai_api_key, timeout=API_TIMEOUT_SEC, max_retries=0)
 
         self.concurrency = max(1, min(concurrency, 32))
         self.progress_callback = progress_callback or (lambda info: None)
+        self._executor = None  # generate_all で専用 ThreadPoolExecutor を割り当てる
         # Lock は async 関数内で生成する（Python 3.9 対策）
         self._counter_lock: Optional[asyncio.Lock] = None
         self._completed = 0
@@ -418,12 +430,19 @@ class ParallelImageGenerator:
             loop = asyncio.get_running_loop()
 
             try:
-                success, error = await loop.run_in_executor(
-                    None,
-                    self._dispatch_sync_generate,
-                    full_prompt,
-                    output_path,
+                # 専用 executor + asyncio.wait_for で、1 枚が固まっても
+                # 全体（asyncio.gather）を巻き込まないようハード上限を設ける
+                success, error = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._executor,
+                        self._dispatch_sync_generate,
+                        full_prompt,
+                        output_path,
+                    ),
+                    timeout=PER_IMAGE_HARD_TIMEOUT,
                 )
+            except asyncio.TimeoutError:
+                success, error = False, f"timeout (> {PER_IMAGE_HARD_TIMEOUT}s)"
             except Exception as e:
                 success, error = False, str(e)[:200]
 
@@ -467,6 +486,7 @@ class ParallelImageGenerator:
 
     async def generate_all(self, prompts: list, output_dir: Path) -> list:
         """全プロンプトを並列生成"""
+        from concurrent.futures import ThreadPoolExecutor
         output_dir.mkdir(parents=True, exist_ok=True)
         self._completed = 0
         self._failed = 0
@@ -475,11 +495,28 @@ class ParallelImageGenerator:
         # asyncio オブジェクトは running loop の中で生成する
         self._counter_lock = asyncio.Lock()
         semaphore = asyncio.Semaphore(self.concurrency)
-        tasks = [
-            self._generate_one(p, output_dir, semaphore)
-            for p in prompts
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        # 専用スレッドプール（デフォルト executor のスレッド枯渇を防ぐ）。
+        # 固まったスレッドが居ても新しい画像生成が進められるよう余裕を持たせる
+        self._executor = ThreadPoolExecutor(max_workers=self.concurrency + 4)
+        try:
+            tasks = [
+                self._generate_one(p, output_dir, semaphore)
+                for p in prompts
+            ]
+            # return_exceptions=True: 1 枚が例外でも全体は止めない
+            raw = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            self._executor.shutdown(wait=False)
+
+        # 例外は失敗扱いに正規化
+        results = []
+        for i, r in enumerate(raw):
+            if isinstance(r, dict):
+                results.append(r)
+            else:
+                idx = prompts[i].get("index", i + 1) if i < len(prompts) else i + 1
+                results.append({"index": idx, "filename": None, "success": False,
+                                "error": f"task error: {str(r)[:120]}"})
         return results
 
 
