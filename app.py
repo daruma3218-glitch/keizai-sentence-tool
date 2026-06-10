@@ -326,6 +326,10 @@ def start_job():
     # 世界観統一モード（チェックON時のみ description を有効化）
     worldview_on = request.form.get("worldview_mode", "off") == "on"
     worldview_desc = request.form.get("worldview_desc", "").strip() if worldview_on else ""
+    # ON なのに本文が空（フォーム未入力など）なら、チャンネル既定の世界観へフォールバック。
+    # これで「先生キャラ等の設定が空欄で効かない」事故を防ぐ。
+    if worldview_on and not worldview_desc:
+        worldview_desc = (channel.get("defaults", {}) or {}).get("worldview_desc", "").strip()
     verify_diagrams = request.form.get("verify_diagrams", "off") == "on"
     try:
         web_image_count = int(request.form.get("web_image_count", "0"))
