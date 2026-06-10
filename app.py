@@ -199,7 +199,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
                          skip_decorative: bool, style_preset: str,
                          web_image_count: int, max_diagrams: int, route_mode: str,
                          worldview_desc: str = "", verify_diagrams: bool = True,
-                         channel_id: str = "default", ch_keys: dict = None):
+                         channel_id: str = "default", ch_keys: dict = None,
+                         character_ref_path: str = ""):
     job_dir = OUTPUT_DIR / job_id
     ch_keys = ch_keys or {}
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
@@ -232,6 +233,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             anthropic_key=ch_keys.get("anthropic", ""),
             gemini_key=ch_keys.get("gemini", ""),
             openai_key=ch_keys.get("openai", ""),
+            character_ref_path=character_ref_path,
             skip_decorative=skip_decorative,
             web_image_count=web_image_count,
             max_diagrams=max_diagrams,
@@ -330,6 +332,15 @@ def start_job():
     # これで「先生キャラ等の設定が空欄で効かない」事故を防ぐ。
     if worldview_on and not worldview_desc:
         worldview_desc = (channel.get("defaults", {}) or {}).get("worldview_desc", "").strip()
+    # キャラ固定の参照画像（チャンネル設定 character_ref）。存在すれば絶対パスを渡す。
+    # 世界観モードON のときだけ有効（キャラ統一の一部）。
+    character_ref_path = ""
+    if worldview_on:
+        _cref = (channel.get("defaults", {}) or {}).get("character_ref", "").strip()
+        if _cref:
+            _crp = PROJECT_ROOT / _cref
+            if _crp.exists():
+                character_ref_path = str(_crp)
     verify_diagrams = request.form.get("verify_diagrams", "off") == "on"
     try:
         web_image_count = int(request.form.get("web_image_count", "0"))
@@ -428,7 +439,7 @@ def start_job():
         target=_run_pipeline_thread,
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
               skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
-              channel_id, ch_keys),
+              channel_id, ch_keys, character_ref_path),
         daemon=True,
     )
     thread.start()
@@ -514,7 +525,15 @@ def api_regenerate(job_id, no):
 
     # チャンネル別 API キーを解決（再生成も該当チャンネルのキーで）
     channel_id = params.get("channel_id", "default")
-    ch_keys = resolve_channel_keys(get_channel(channel_id))
+    channel = get_channel(channel_id)
+    ch_keys = resolve_channel_keys(channel)
+    # キャラ固定の参照画像（チャンネル設定）。先生が描かれる illustration のみ使用。
+    character_ref_path = ""
+    _cref = (channel.get("defaults", {}) or {}).get("character_ref", "").strip()
+    if _cref:
+        _crp = PROJECT_ROOT / _cref
+        if _crp.exists():
+            character_ref_path = str(_crp)
 
     entry = {
         "index": no,
@@ -525,6 +544,8 @@ def api_regenerate(job_id, no):
         "keypoint": (target.get("sentence", "") or "")[:30],
         "allowed_terms": target.get("allowed_terms", []),
         "style": style_preset,
+        # 元の行が先生シーン(character)なら、再生成でもキャラ固定
+        "character": bool(target.get("character", False)) and route == "illustration",
     }
 
     try:
@@ -536,6 +557,7 @@ def api_regenerate(job_id, no):
             openai_api_key=ch_keys.get("openai") or None,
             openai_quality=openai_quality,
             concurrency=1,
+            reference_image_path=character_ref_path,
         )
     except Exception as e:
         return jsonify({"error": f"再生成に失敗: {str(e)[:150]}"}), 500

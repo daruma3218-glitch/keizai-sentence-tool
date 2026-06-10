@@ -164,6 +164,9 @@ def generate_prompts_batch(
 2. メタファー（クマ＝ロシア など寓意）は**禁止**。国は国旗・国名・地図で直接表現する
 3. **画像内テキストは allowed_terms にあるものだけ**（厳格）
 4. 出力の type は入力の type を**そのまま返す**（勝手に変えない）
+5. **character フラグ**: 上の世界観設定に「繰り返し登場する固定キャラ（先生／教授／解説役）」
+   がある場合、そのキャラが実際に画面に描かれる illustration のときだけ "character": true。
+   図表(diagram/chart)・写真(realphoto)・地図(map)・人物のいないシーン・装飾は必ず false。
 
 【allowed_terms 抽出方針（積極的に入れる）】
 - センテンスに登場する以下は**すべて** allowed_terms に入れること:
@@ -201,7 +204,8 @@ def generate_prompts_batch(
     "no": (元のno),
     "prompt": "英語プロンプト（スタイル指示・テキスト制約を必ず含む）",
     "type": "illustration | realphoto | map | diagram | chart | decorative",
-    "allowed_terms": ["積極的に抽出した語"]
+    "allowed_terms": ["積極的に抽出した語"],
+    "character": true または false（ルール5。固定キャラ＝先生/教授/解説役が描かれる illustration のみ true）
   }},
   ...
 ]
@@ -242,6 +246,8 @@ def generate_prompts_batch(
                 p["type"] = forced_type
             elif p.get("type") not in ("illustration", "realphoto", "map", "diagram", "chart", "decorative"):
                 p["type"] = "illustration"
+            # character フラグは illustration のときだけ有効（図表/写真/地図/装飾では必ず False）
+            p["character"] = bool(p.get("character", False)) and p["type"] == "illustration"
             merged.append(p)
         else:
             # フォールバック
@@ -258,6 +264,7 @@ def generate_prompts_batch(
                 "prompt": fallback_prompt,
                 "type": "decorative",
                 "allowed_terms": auto_terms,
+                "character": False,
             })
     return merged
 
@@ -310,6 +317,7 @@ def generate_all_prompts(
         merged_row["prompt"] = p.get("prompt", "")
         merged_row["type"] = p.get("type", "illustration")
         merged_row["allowed_terms"] = p.get("allowed_terms", [])
+        merged_row["character"] = bool(p.get("character", False))  # キャラ固定フラグを引き継ぐ
         out_rows.append(merged_row)
 
     return out_rows

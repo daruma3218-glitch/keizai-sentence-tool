@@ -112,6 +112,18 @@ PROVIDER_NANOBANANA = "nanobanana"
 PROVIDER_GPT_IMAGE = "gpt-image"
 VALID_PROVIDERS = (PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE)
 
+# 参照画像（キャラ固定）を使うときにプロンプト先頭へ付ける指示。
+# 参照画像の「人物」と「絵柄トーン」を新しいシーンでも忠実に再現させる。
+_CHARACTER_LOCK_INSTRUCTION = (
+    "CHARACTER & STYLE REFERENCE: The attached reference image shows the EXACT recurring "
+    "character (the teacher / professor) and the EXACT art style for this video series. "
+    "Reproduce the SAME person — identical face shape, hairstyle, glasses, skin tone and outfit "
+    "(gray tweed blazer over a dark red V-neck sweater) — and the SAME simple, clean, "
+    "thick-outline FLAT CARTOON tone, line weight and flat coloring as the reference image. "
+    "Only change the pose, expression and background to fit the new scene described below. "
+    "Do NOT redesign the character, and do NOT switch to a detailed, anime, or realistic style."
+)
+
 
 def _build_full_prompt(
     user_prompt: str,
@@ -212,14 +224,27 @@ def _sync_generate_image_gemini(
     full_prompt: str,
     output_path: Path,
     model_name: str = DEFAULT_GEMINI_MODEL,
+    reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像
+    reference_mime: str = "image/png",
 ) -> tuple:
-    """1 枚の画像を同期生成（Gemini）"""
+    """1 枚の画像を同期生成（Gemini）。
+
+    reference_bytes を渡すと参照画像 + テキストのマルチモーダル入力で生成し、
+    参照画像のキャラ・絵柄を新シーンに反映する（キャラ固定）。
+    """
     last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
+            if reference_bytes:
+                contents = [
+                    types.Part.from_bytes(data=reference_bytes, mime_type=reference_mime),
+                    full_prompt,
+                ]
+            else:
+                contents = full_prompt
             response = client.models.generate_content(
                 model=model_name,
-                contents=full_prompt,
+                contents=contents,
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
                 ),
@@ -272,18 +297,36 @@ def _sync_generate_image_openai(
     model_name: str = DEFAULT_OPENAI_MODEL,
     size: str = "1536x1024",  # 3:2 横長（16:9 に最も近い）
     quality: str = "medium",  # low / medium / high
+    reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像（あれば images.edit）
 ) -> tuple:
-    """1 枚の画像を同期生成（OpenAI gpt-image-2）"""
+    """1 枚の画像を同期生成（OpenAI gpt-image）。
+
+    reference_bytes を渡すと images.edit を使い、参照画像のキャラ・絵柄を
+    反映した新シーンを生成する（キャラ固定）。無ければ通常の images.generate。
+    """
     last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
-            response = client.images.generate(
-                model=model_name,
-                prompt=full_prompt,
-                n=1,
-                size=size,
-                quality=quality,
-            )
+            if reference_bytes:
+                import io
+                bio = io.BytesIO(reference_bytes)
+                bio.name = "reference.png"  # SDK が拡張子から MIME を判定
+                response = client.images.edit(
+                    model=model_name,
+                    image=bio,
+                    prompt=full_prompt,
+                    n=1,
+                    size=size,
+                    quality=quality,
+                )
+            else:
+                response = client.images.generate(
+                    model=model_name,
+                    prompt=full_prompt,
+                    n=1,
+                    size=size,
+                    quality=quality,
+                )
 
             if not response or not response.data:
                 last_error = "no data in response"
@@ -341,6 +384,7 @@ class ParallelImageGenerator:
         concurrency: int = DEFAULT_CONCURRENCY,
         style_preset: str = "",
         progress_callback: Optional[Callable[[dict], None]] = None,
+        reference_image_path: Optional[str] = None,  # キャラ固定の参照画像パス
     ):
         if provider not in VALID_PROVIDERS:
             raise ValueError(f"unknown provider: {provider} (valid: {VALID_PROVIDERS})")
@@ -348,6 +392,19 @@ class ParallelImageGenerator:
         self.openai_quality = openai_quality
         self.openai_size = openai_size
         self.style_preset = style_preset
+
+        # 参照画像（キャラ固定用）。character=True のシーンでのみ使用。
+        # ファイルが無ければ None（=テキスト方式に自動フォールバック、壊れない）。
+        self.reference_bytes = None
+        self.reference_mime = "image/png"
+        if reference_image_path:
+            try:
+                rp = Path(reference_image_path)
+                if rp.exists() and rp.stat().st_size > 200:
+                    self.reference_bytes = rp.read_bytes()
+                    self.reference_mime = "image/jpeg" if rp.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+            except Exception:
+                self.reference_bytes = None
 
         # クライアント初期化（必要な分だけ）
         self.gemini_client = None
@@ -383,11 +440,16 @@ class ParallelImageGenerator:
         self._failed = 0
         self._total = 0
 
-    def _dispatch_sync_generate(self, full_prompt: str, output_path: Path) -> tuple:
-        """provider に応じた同期生成関数を呼び分ける"""
+    def _dispatch_sync_generate(self, full_prompt: str, output_path: Path, use_reference: bool = False) -> tuple:
+        """provider に応じた同期生成関数を呼び分ける。
+
+        use_reference=True かつ参照画像があれば、キャラ固定モードで生成する。
+        """
+        ref = self.reference_bytes if use_reference else None
         if self.provider == PROVIDER_NANOBANANA:
             return _sync_generate_image_gemini(
-                self.gemini_client, full_prompt, output_path, self.gemini_model
+                self.gemini_client, full_prompt, output_path, self.gemini_model,
+                reference_bytes=ref, reference_mime=self.reference_mime,
             )
         else:  # gpt-image
             return _sync_generate_image_openai(
@@ -395,6 +457,7 @@ class ParallelImageGenerator:
                 model_name=self.openai_model,
                 size=self.openai_size,
                 quality=self.openai_quality,
+                reference_bytes=ref,
             )
 
     async def _generate_one(
@@ -427,6 +490,10 @@ class ParallelImageGenerator:
             })
 
             full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms, style_preset=row_style)
+            # キャラ固定: character=True かつ参照画像があるシーンだけ参照モードで生成
+            use_reference = bool(prompt_entry.get("character")) and self.reference_bytes is not None
+            if use_reference:
+                full_prompt = _CHARACTER_LOCK_INSTRUCTION + "\n\n" + full_prompt
             loop = asyncio.get_running_loop()
 
             try:
@@ -438,6 +505,7 @@ class ParallelImageGenerator:
                         self._dispatch_sync_generate,
                         full_prompt,
                         output_path,
+                        use_reference,
                     ),
                     timeout=PER_IMAGE_HARD_TIMEOUT,
                 )
@@ -533,6 +601,7 @@ def run_parallel_generation(
     concurrency: int = DEFAULT_CONCURRENCY,
     style_preset: str = "",
     progress_callback: Optional[Callable[[dict], None]] = None,
+    reference_image_path: Optional[str] = None,  # キャラ固定の参照画像
 ) -> list:
     """同期エントリポイント: pipeline から呼び出す"""
     # 環境変数からデフォルト補完
@@ -556,5 +625,6 @@ def run_parallel_generation(
         concurrency=concurrency,
         style_preset=style_preset,
         progress_callback=progress_callback,
+        reference_image_path=reference_image_path,
     )
     return asyncio.run(generator.generate_all(prompts, output_dir))

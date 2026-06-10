@@ -51,6 +51,7 @@ class SentencePipeline:
         anthropic_key: str = "",
         gemini_key: str = "",
         openai_key: str = "",
+        character_ref_path: str = "",
         skip_decorative: bool = False,
         web_image_count: int = 0,
         max_diagrams: int = 150,
@@ -72,6 +73,7 @@ class SentencePipeline:
         self.anthropic_key = anthropic_key or ""
         self.gemini_key = gemini_key or ""
         self.openai_key = openai_key or ""
+        self.character_ref_path = character_ref_path or ""
         self.skip_decorative = skip_decorative
         self.web_image_count = max(0, min(web_image_count, 200))
         self.max_diagrams = max(1, min(max_diagrams, 300))
@@ -412,6 +414,8 @@ class SentencePipeline:
                     "keypoint": r.get("sentence", "")[:30],
                     "allowed_terms": r.get("allowed_terms", []),
                     "style": self.style_preset,
+                    # キャラ固定: 先生が描かれる illustration のみ参照画像を使う
+                    "character": bool(r.get("character", False)) and img_type == "illustration",
                 })
             else:
                 # 候補だったが均等配置から外れた → 「間引き」
@@ -447,6 +451,7 @@ class SentencePipeline:
             concurrency=self.concurrency,
             style_preset=self.style_preset,
             progress_callback=on_item_event,
+            reference_image_path=self.character_ref_path,
         )
 
         success_count = sum(1 for r in results if r.get("success"))
@@ -746,6 +751,7 @@ class SentencePipeline:
             concurrency=self.concurrency,
             style_preset=self.style_preset,
             progress_callback=on_fix_event,
+            reference_image_path=self.character_ref_path,
         )
         self._log("verify", f"再生成完了（{len(fix_targets)} 枚を作り直しました）")
 

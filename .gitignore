@@ -8,3 +8,7 @@ output/*/
 venv/
 *.log
 .secret_key
+
+# キャラ固定の参照画像はコミットする
+!references/
+!references/*.png
