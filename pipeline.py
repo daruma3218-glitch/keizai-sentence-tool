@@ -454,12 +454,16 @@ class SentencePipeline:
         self._log("generator", f"画像生成完了: 成功 {success_count} / 失敗 {fail_count}")
 
         # ===== Phase 3b: 図解の意味を自動検証 → ズレてたら再生成 =====
+        # 検証は「あれば嬉しい」機能。何があってもジョブ完了を止めない（必ず先へ進む）。
         if self.verify_diagrams:
             theme = title
             _sum = analysis.get("summary", "")
             if _sum:
                 theme = f"{title}（{_sum}）"
-            self._verify_and_fix(results, generation_targets, gemini_key, openai_key, theme=theme)
+            try:
+                self._verify_and_fix(results, generation_targets, gemini_key, openai_key, theme=theme)
+            except Exception as e:
+                self._log("error", f"検証フェーズをスキップしました（{str(e)[:80]}）。生成画像はそのまま使えます。")
 
         # Web 検索の完了を待つ（タイムアウト 20 分）
         # Web 検索は I/O bound + Claude Web Search のレート制限により遅い:
@@ -618,29 +622,45 @@ class SentencePipeline:
     }
 
     def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key, theme=""):
-        """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。"""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。
+
+        検証は「あれば嬉しい」機能なので、絶対にジョブ完了をブロックしない:
+        - 全体に時間予算（budget）を設け、超過したら残りはスキップして先へ進む
+        - 1 枚ごとにもタイムアウト（固まった検証で全体が止まらない）
+        - チャンネル別 Anthropic キーを使い、リトライを抑えて素早く諦める
+        """
+        import time as _time
+        from concurrent.futures import (
+            ThreadPoolExecutor, as_completed, TimeoutError as _FutTimeout)
         from verifier import verify_image, DEFAULT_VERIFY_TYPES
 
-        client = get_anthropic_client()
+        # チャンネル別 Anthropic キーを使う。固まっても素早く諦めるためリトライ抑制。
+        try:
+            client = get_anthropic_client(self.anthropic_key).with_options(
+                max_retries=1, timeout=60.0)
+        except Exception as e:
+            self._log("verify", f"検証をスキップ（APIクライアント初期化失敗: {str(e)[:60]}）")
+            return
+
         # 検証対象: 生成成功した diagram / chart（targets と results を突合）
         targets_by_no = {t["index"]: t for t in generation_targets}
         verify_list = []
         for r in results:
             if not r.get("success"):
                 continue
-            no = r.get("index")
-            t = targets_by_no.get(no)
-            if not t:
-                continue
-            if t.get("type") in DEFAULT_VERIFY_TYPES:
+            t = targets_by_no.get(r.get("index"))
+            if t and t.get("type") in DEFAULT_VERIFY_TYPES:
                 verify_list.append(t)
 
         if not verify_list:
             return
 
-        self._progress(3, f"図解の意味を検証中（{len(verify_list)} 枚）...", 90)
-        self._log("verify", f"diagram/chart {len(verify_list)} 枚の意味を Claude Vision で検証します")
+        # 時間予算: 1 枚 ~12 秒 ÷ 4 並列 を目安に、最大 10 分。超えたら打ち切って先へ進む。
+        budget = min(600, max(90, int(len(verify_list) / 4 * 12) + 60))
+        self._progress(3, f"図解の意味を検証中（0/{len(verify_list)} 枚）...", 90)
+        self._log("verify",
+                  f"diagram/chart {len(verify_list)} 枚の意味を Claude Vision で検証します"
+                  f"（最大 {budget // 60} 分・超過分はスキップ）")
 
         # 並列で検証（原稿の文脈＝テーマ・章・前後段落 を渡す）
         def _do_verify(t):
@@ -656,19 +676,45 @@ class SentencePipeline:
             return (t, v)
 
         ng = []
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futs = [ex.submit(_do_verify, t) for t in verify_list]
-            for f in as_completed(futs):
-                try:
-                    t, v = f.result()
-                    if not v.get("ok"):
-                        ng.append((t, v))
-                        self._log("verify", f"№{t['index']} 要修正: {v.get('reason','')}")
-                except Exception as e:
-                    self._log("error", f"検証エラー: {str(e)[:80]}")
+        checked = 0
+        timed_out = False
+        deadline = _time.monotonic() + budget
+        ex = ThreadPoolExecutor(max_workers=4)
+        try:
+            futs = {ex.submit(_do_verify, t): t for t in verify_list}
+            try:
+                for f in as_completed(futs, timeout=budget):
+                    remaining = deadline - _time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    try:
+                        t, v = f.result(timeout=max(1.0, remaining))
+                        checked += 1
+                        if checked % 20 == 0:
+                            self._progress(3, f"図解の意味を検証中（{checked}/{len(verify_list)} 枚）...", 90)
+                        if not v.get("ok"):
+                            ng.append((t, v))
+                            self._log("verify", f"№{t['index']} 要修正: {v.get('reason','')}")
+                    except _FutTimeout:
+                        timed_out = True
+                        break
+                    except Exception as e:
+                        self._log("error", f"検証エラー: {str(e)[:80]}")
+            except _FutTimeout:
+                timed_out = True
+        finally:
+            # 残りの未実行タスクはキャンセル。実行中スレッドは待たずに先へ進む。
+            ex.shutdown(wait=False, cancel_futures=True)
+
+        if timed_out:
+            self._log("verify",
+                      f"検証は時間上限({budget // 60}分)に達したため打ち切りました"
+                      f"（{checked}/{len(verify_list)} 枚確認）。生成画像はそのまま使えます。")
 
         if not ng:
-            self._log("verify", "検証完了: 全て意味OK ✓")
+            if not timed_out:
+                self._log("verify", "検証完了: 全て意味OK ✓")
             return
 
         # 改善指示を付けて再生成（1回）

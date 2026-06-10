@@ -97,7 +97,7 @@ def verify_image(
             model=CLAUDE_MODEL,
             max_tokens=500,
             system=system,
-            timeout=90,  # 検証が固まって全体を止めないようタイムアウト
+            timeout=45,  # 検証が固まって全体を止めないようタイムアウト（短めに）
             messages=[{
                 "role": "user",
                 "content": [
