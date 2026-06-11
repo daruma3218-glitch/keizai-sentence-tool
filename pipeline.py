@@ -471,6 +471,9 @@ class SentencePipeline:
         # ===== Phase 3b: 図解の意味を自動検証 → ズレてたら再生成 =====
         # 検証は「あれば嬉しい」機能。何があってもジョブ完了を止めない（必ず先へ進む）。
         if self.verify_diagrams:
+            # 生成フェーズのバッファを解放してから検証に入る（512MB環境のOOM対策）。
+            import gc as _gc
+            _gc.collect()
             theme = title
             _sum = analysis.get("summary", "")
             if _sum:
@@ -694,7 +697,8 @@ class SentencePipeline:
         checked = 0
         timed_out = False
         deadline = _time.monotonic() + budget
-        ex = ThreadPoolExecutor(max_workers=4)
+        # 並列は 3 に抑える（縮小済み画像 + 512MB 環境でのピークメモリ削減）
+        ex = ThreadPoolExecutor(max_workers=3)
         try:
             futs = {ex.submit(_do_verify, t): t for t in verify_list}
             try:
@@ -721,6 +725,8 @@ class SentencePipeline:
         finally:
             # 残りの未実行タスクはキャンセル。実行中スレッドは待たずに先へ進む。
             ex.shutdown(wait=False, cancel_futures=True)
+            import gc as _gc
+            _gc.collect()  # 検証で使った画像バッファを解放
 
         if timed_out:
             self._log("verify",

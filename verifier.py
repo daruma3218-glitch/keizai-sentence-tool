@@ -49,9 +49,26 @@ def verify_image(
     if not img_bytes or len(img_bytes) < 200:
         return {"ok": True, "reason": "画像が空（スキップ）", "fix_hint": ""}
 
-    b64 = base64.standard_b64encode(img_bytes).decode("ascii")
-    ext = p.suffix.lower()
-    media_type = "image/jpeg" if ext in (".jpg", ".jpeg") else ("image/webp" if ext == ".webp" else "image/png")
+    # 検証用に縮小（長辺1024px・JPEG）してから送る。
+    # メモリ・アップロード時間・Vision のトークン/コストを大幅に削減する。
+    # 図解の良し悪し・文字化け判定には 1024px で十分。失敗時は元画像にフォールバック。
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((1024, 1024))  # 長辺1024pxへ（アスペクト維持）
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=82)
+            small = buf.getvalue()
+        b64 = base64.standard_b64encode(small).decode("ascii")
+        media_type = "image/jpeg"
+    except Exception:
+        b64 = base64.standard_b64encode(img_bytes).decode("ascii")
+        ext = p.suffix.lower()
+        media_type = "image/jpeg" if ext in (".jpg", ".jpeg") else ("image/webp" if ext == ".webp" else "image/png")
+    finally:
+        img_bytes = None  # 元のバイト列を早期解放（メモリ削減）
 
     terms_note = ""
     terms = [t for t in (allowed_terms or []) if isinstance(t, str) and t.strip()]
