@@ -29,9 +29,12 @@ from PIL import Image
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-image-preview"
 DEFAULT_OPENAI_MODEL = "gpt-image-2"
 DEFAULT_CONCURRENCY = 12
-MAX_RETRIES = 3
+MAX_RETRIES = 2                # リトライ回数（多いとレート制限時に1枚が長時間スレッドを占有する）
 API_TIMEOUT_SEC = 120          # 1 回の画像生成 API 呼び出しの上限（応答停止対策）
 PER_IMAGE_HARD_TIMEOUT = 360   # 1 枚あたりの全体上限（リトライ込み・asyncio 側の最終防衛線）
+# 重要: MAX_RETRIES × API_TIMEOUT_SEC + リトライsleep合計 < PER_IMAGE_HARD_TIMEOUT を必ず満たす。
+# 満たさないと wait_for が先に発火し、実行中スレッドが残留（ゾンビ化）→ 実効並列が枯渇する。
+# 現状: 2×120 + (12+20) = 272s < 360s ✓
 
 # 出力アスペクト比（16:9 に統一）
 TARGET_RATIO = 16 / 9
@@ -355,7 +358,8 @@ def _sync_generate_image_openai(
             last_error = err[:200]
             err_lower = err.lower()
             if "429" in err or "rate" in err_lower or "limit" in err_lower:
-                time.sleep(30 * (attempt + 1))
+                # レート制限。待ちすぎるとスレッドを長時間占有するので上限20秒。
+                time.sleep(min(20, 12 * (attempt + 1)))
                 continue
             if "safety" in err_lower or "policy" in err_lower or "moderation" in err_lower:
                 return False, f"content policy blocked: {err[:120]}"
@@ -566,25 +570,46 @@ class ParallelImageGenerator:
         # 専用スレッドプール（デフォルト executor のスレッド枯渇を防ぐ）。
         # 固まったスレッドが居ても新しい画像生成が進められるよう余裕を持たせる
         self._executor = ThreadPoolExecutor(max_workers=self.concurrency + 4)
+        # 全体の時間予算（安全網）: 超えたら未完了を打ち切り、必ず完了させる。
+        # 自然完了の理論上限（バッチ数 × 1枚ハード上限）＋余裕に設定するので、
+        # 正常な「遅いだけ」のジョブは切らず、真の暴走（無限ハング）だけを止める。最大4時間。
+        batches = (len(prompts) + self.concurrency - 1) // max(1, self.concurrency)
+        overall_budget = min(14400, max(1800, batches * (PER_IMAGE_HARD_TIMEOUT + 90)))
         try:
             tasks = [
-                self._generate_one(p, output_dir, semaphore)
+                asyncio.ensure_future(self._generate_one(p, output_dir, semaphore))
                 for p in prompts
             ]
-            # return_exceptions=True: 1 枚が例外でも全体は止めない
-            raw = await asyncio.gather(*tasks, return_exceptions=True)
+            done, pending = await asyncio.wait(tasks, timeout=overall_budget)
+            if pending:
+                print(f"  [generator] 時間予算({overall_budget}s)超過: 未完了 {len(pending)} 枚を打ち切り", flush=True)
         finally:
             self._executor.shutdown(wait=False)
 
-        # 例外は失敗扱いに正規化
+        # 入力順に正規化。未完了はキャンセルして「失敗」確定（行の🌀を必ず消す）。
         results = []
-        for i, r in enumerate(raw):
-            if isinstance(r, dict):
-                results.append(r)
+        for i, t in enumerate(tasks):
+            idx = prompts[i].get("index", i + 1) if i < len(prompts) else i + 1
+            if t in done:
+                try:
+                    r = t.result()
+                    results.append(r if isinstance(r, dict) else {
+                        "index": idx, "filename": None, "success": False,
+                        "error": f"task error: {str(r)[:120]}"})
+                except Exception as e:
+                    results.append({"index": idx, "filename": None, "success": False,
+                                    "error": f"task error: {str(e)[:120]}"})
             else:
-                idx = prompts[i].get("index", i + 1) if i < len(prompts) else i + 1
+                t.cancel()
+                try:
+                    self.progress_callback({
+                        "index": idx, "status": "failed", "provider": self.provider,
+                        "error": "時間上限により打ち切り（並列度を下げる/枚数を分割してください）",
+                    })
+                except Exception:
+                    pass
                 results.append({"index": idx, "filename": None, "success": False,
-                                "error": f"task error: {str(r)[:120]}"})
+                                "error": "時間上限により打ち切り"})
         return results
 
 

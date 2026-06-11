@@ -440,6 +440,16 @@ class SentencePipeline:
             if info.get("error"):
                 update["error"] = info["error"]
             self._update_row(no, **update)
+            # 生成が1枚進むたびにプログレスバー(40→85%)とメッセージを更新し、
+            # 長時間ジョブでも「止まって見えない」ようにする。
+            if status in ("ok", "failed"):
+                gt = info.get("grand_total") or 0
+                done = (info.get("completed_total") or 0) + (info.get("failed_total") or 0)
+                if gt:
+                    pct = 40 + int(done / gt * 45)
+                    self._progress(3,
+                                   f"画像を並列生成中（{done}/{gt} 枚 / {provider_label}）...",
+                                   min(85, pct))
 
         results = run_parallel_generation(
             prompts=generation_targets,
