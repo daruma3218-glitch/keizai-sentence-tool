@@ -58,6 +58,7 @@ class SentencePipeline:
         route_mode: str = "auto",
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
+        photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
@@ -83,6 +84,7 @@ class SentencePipeline:
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
+        self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.chart_theme = chart_theme or None
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
@@ -375,6 +377,10 @@ class SentencePipeline:
                 web_local_file=local_file,
                 web_topic=info.get("topic", ""),
                 web_source_title=info.get("source_title", ""),
+                # v3 Step3: Commons のライセンス・クレジット（CSV / credits.txt 用）
+                license=info.get("license", ""),
+                attribution=info.get("attribution", ""),
+                commons_page_url=info.get("commons_page_url", ""),
             )
             try:
                 save_json(
@@ -390,6 +396,10 @@ class SentencePipeline:
                     self.output_dir / "web_results.json",
                     {"items": list(web_results_accumulator)},
                 )
+                # v3 Step3: 採用した Commons 画像のクレジット一覧（概要欄用）
+                from commons_searcher import build_credits_text
+                txt = build_credits_text(list(web_results_accumulator))
+                (self.output_dir / "credits.txt").write_text(txt, encoding="utf-8")
             except Exception:
                 pass
 
@@ -410,12 +420,20 @@ class SentencePipeline:
 
             def web_task_auto():
                 try:
-                    run_web_search_for_selections(
-                        client, selections, max_workers=8,
-                        log=self._log, item_callback=_web_on_item,
-                    )
+                    if self.photo_source == "commons":
+                        # v3 Step3: Wikimedia Commons 限定（許可ライセンスのみ・権利安全）
+                        from commons_searcher import run_commons_search_for_selections
+                        run_commons_search_for_selections(
+                            client, selections, max_workers=8,
+                            log=self._log, item_callback=_web_on_item,
+                        )
+                    else:
+                        run_web_search_for_selections(
+                            client, selections, max_workers=8,
+                            log=self._log, item_callback=_web_on_item,
+                        )
                 except Exception as e:
-                    self._log("error", f"Web 画像取得失敗: {str(e)[:120]}")
+                    self._log("error", f"Web/Commons 画像取得失敗: {str(e)[:120]}")
                 _web_save_final()
 
             web_thread = threading.Thread(target=web_task_auto, daemon=True)
