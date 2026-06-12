@@ -241,6 +241,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             chart_engine=(get_channel(channel_id).get("defaults") or {}).get("chart_engine", "ai"),
             map_engine=(get_channel(channel_id).get("defaults") or {}).get("map_engine", "ai"),
             photo_source=(get_channel(channel_id).get("defaults") or {}).get("photo_source", "web"),
+            beat_mode=bool((get_channel(channel_id).get("defaults") or {}).get("beat_mode", False)),
+            chars_per_sec=(get_channel(channel_id).get("defaults") or {}).get("chars_per_sec", 5.5),
             chart_theme=(get_channel(channel_id).get("defaults") or {}).get("chart_theme"),
             progress_callback=on_progress,
             log_callback=on_log,

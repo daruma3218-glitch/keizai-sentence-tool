@@ -29,6 +29,26 @@ VALID_ROUTES = ("web_photo", "realphoto", "map", "diagram", "chart", "illustrati
 AI_ROUTES = ("realphoto", "map", "diagram", "chart", "illustration")  # AI生成班が担当
 
 
+# ===== v3 Step4: importance/entities/beat の正規化 =====
+def _clamp_importance(v) -> int:
+    """importance を 1〜5 に正規化（不正なら 3）。"""
+    try:
+        return max(1, min(5, int(v)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _clean_entities(v) -> list:
+    """entities を文字列・最大3件に正規化。"""
+    if not isinstance(v, list):
+        return []
+    out = []
+    for e in v:
+        if isinstance(e, str) and e.strip():
+            out.append(e.strip()[:30])
+    return out[:3]
+
+
 def _route_chunk(
     client: anthropic.Anthropic,
     rows_chunk: list,
@@ -105,6 +125,12 @@ def _route_chunk(
 - 物理的シーンでなく抽象・比喩なら illustration
 - 繋ぎ・挨拶は遠慮なく skip（あとで均等配置の対象から外れる）
 
+【v3: 各文に importance / entities / beat も付与すること】
+- importance: 1〜5（動画の主張にとっての重要度）。5=章の核心主張・驚きのデータ / 3=主張を支える説明 / 1=繋ぎに近い
+- entities: 繰り返し描かれ得る被写体（国・地域・繰り返す概念・組織）。最大3つ。無ければ []
+- beat: "new"（話題・被写体が直前の文から切り替わった＝新しい視覚的まとまり） / "continue"（直前と同じまとまり）。
+  各チャンクの先頭文は "new" でよい。
+
 【出力 JSON（必ずこの形式のみ）】
 [
   {{
@@ -112,16 +138,18 @@ def _route_chunk(
     "route": "web_photo",
     "reason": "判定理由を15字以内で",
     "search_query": "Web検索クエリ（web_photoのときのみ、日本語30字以内、固有名詞を含む）",
-    "topic": "トピック名（web_photoのときのみ、10〜20字）"{propaganda_field}
+    "topic": "トピック名（web_photoのときのみ、10〜20字）",
+    "importance": 4, "entities": ["ロシア"], "beat": "new"{propaganda_field}
   }},
   {{
     "no": 2,
     "route": "diagram",
-    "reason": "概念の対比のため"
+    "reason": "概念の対比のため",
+    "importance": 3, "entities": [], "beat": "continue"
   }}
 ]
 
-必ず {len(rows_chunk)} 件すべてに route を付与すること。JSON 配列のみ返す。"""
+必ず {len(rows_chunk)} 件すべてに route / importance / entities / beat を付与すること。JSON 配列のみ返す。"""
 
     result = claude_query(client, query, system, max_tokens=8000, model=CLAUDE_MODEL)
     parsed = parse_json_array(result)
@@ -174,6 +202,10 @@ def route_all_sentences(
                         "search_query": item.get("search_query", ""),
                         "topic": item.get("topic", ""),
                         "propaganda": bool(item.get("propaganda", False)) if propaganda_mix else False,
+                        # v3 Step4
+                        "importance": _clamp_importance(item.get("importance")),
+                        "entities": _clean_entities(item.get("entities")),
+                        "beat": "new" if item.get("beat") == "new" else "continue",
                     }
                 completed += 1
                 log("router", f"チャンク {completed}/{len(chunks)} 分類完了")
@@ -190,6 +222,7 @@ def route_all_sentences(
                 "search_query": "",
                 "topic": "",
                 "propaganda": False,
+                "importance": 2, "entities": [], "beat": "new",
             }
 
     # 集計ログ

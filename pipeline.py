@@ -59,6 +59,8 @@ class SentencePipeline:
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
+        beat_mode: bool = False,           # v3: ビート単位で重要度加重配分（False=v2均等）
+        chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
@@ -85,6 +87,8 @@ class SentencePipeline:
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
+        self.beat_mode = bool(beat_mode)                     # v3: ビート加重配分
+        self.chars_per_sec = float(chars_per_sec or 5.5)
         self.chart_theme = chart_theme or None
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
@@ -138,6 +142,16 @@ class SentencePipeline:
             pass
 
     # ---- 画像配置ロジック ----
+    def _wants_image(self, r) -> bool:
+        """この文を今回のジョブで画像化するか。
+
+        beat_mode=True のとき allocator が選んだ display=image の文のみ。
+        False は v2（全候補→均等間引きに委ねる）。
+        """
+        if self.beat_mode:
+            return r.get("display") == "image"
+        return True
+
     @staticmethod
     def _select_evenly_distributed(candidates: list, max_count: int) -> set:
         """候補センテンスから max_count 個を全文均等に間引いて選定する。
@@ -264,6 +278,36 @@ class SentencePipeline:
         for no, rt in routes.items():
             self._update_row(no, route=rt.get("route", "illustration"), route_reason=rt.get("reason", ""))
 
+        # ===== v3 Step4: ビート確定・タイムコード・重要度加重配分（LLM不使用）=====
+        # beat_mode=True のとき max_diagrams をビート単位で重要度加重配分し、画像を付ける
+        # 文(display=image)だけを画像化する。False は v2（均等間引き）。失敗時は v2 に倒す。
+        try:
+            from allocator import allocate, write_allocation
+            alloc = allocate(rows, routes, self.max_diagrams,
+                             chars_per_sec=self.chars_per_sec, beat_mode=self.beat_mode)
+            for r in rows:
+                a = alloc.get(r["no"], {})
+                r["beat_id"] = a.get("beat_id")
+                r["est_start"] = a.get("est_start", "")
+                r["display"] = a.get("display", "none")
+                r["importance"] = a.get("importance", 3)
+                self._update_row(r["no"], beat_id=r["beat_id"],
+                                 est_start=r["est_start"], importance=r["importance"],
+                                 display=r["display"])
+            write_allocation(self.output_dir / "allocation.json", rows, routes, alloc)
+            if self.beat_mode:
+                n_img = sum(1 for r in rows if r.get("display") == "image")
+                n_hold = sum(1 for r in rows if r.get("display") == "hold")
+                self._log("allocator",
+                          f"ビート配分: 画像 {n_img} 枚 / 継続(hold) {n_hold} 文"
+                          f"（重要度加重・上限 {self.max_diagrams}）")
+                for r in rows:
+                    if r.get("display") == "hold":
+                        self._update_row(r["no"], status="hold")
+        except Exception as e:
+            self._log("error", f"allocator をスキップ（{str(e)[:80]}）。v2 配分にフォールバック。")
+            self.beat_mode = False
+
         # ===== v3 Step1: chart を matplotlib で決定論レンダリング（engine:render）=====
         # chart_engine=render のとき chart 文の数値を抽出し正確に描画。抽出不能/描画失敗は
         # diagram(engine:ai) へ降格して v2 同様 AI 生成へ。何が起きても v2 にフォールバック。
@@ -272,7 +316,7 @@ class SentencePipeline:
         if self.chart_engine == "render":
             try:
                 from router import extract_chart_specs
-                chart_rows = [r for r in rows if r.get("route") == "chart"]
+                chart_rows = [r for r in rows if r.get("route") == "chart" and self._wants_image(r)]
                 if chart_rows:
                     self._progress(2, "chart の数値を抽出して図を描画中...", 20)
                     specs = extract_chart_specs(client, chart_rows, log=self._log)
@@ -298,7 +342,7 @@ class SentencePipeline:
         if self.map_engine == "render":
             try:
                 from router import extract_map_specs
-                map_rows = [r for r in rows if r.get("route") == "map"]
+                map_rows = [r for r in rows if r.get("route") == "map" and self._wants_image(r)]
                 if map_rows:
                     self._progress(2, "地図データを抽出して描画中...", 21)
                     specs = extract_map_specs(client, map_rows, log=self._log)
@@ -325,7 +369,8 @@ class SentencePipeline:
 
         # route で分類（engine:render はレンダリング済みなので AI 対象から除外）
         web_photo_rows = [r for r in rows if r.get("route") == "web_photo"]
-        ai_rows = [r for r in rows if r.get("route") in AI_ROUTES and r.get("engine") != "render"]
+        ai_rows = [r for r in rows if r.get("route") in AI_ROUTES
+                   and r.get("engine") != "render" and self._wants_image(r)]
         skip_rows = [r for r in rows if r.get("route") == "skip"]
 
         # skip 文をマーク
@@ -406,9 +451,11 @@ class SentencePipeline:
         web_thread = None
 
         if self.route_mode == "auto" and web_photo_rows:
-            # ルーターが web_photo に振った文を検索（選定済み）
+            # ルーターが web_photo に振った文を検索（beat_mode 時は display=image のみ）
             selections = []
             for r in web_photo_rows:
+                if not self._wants_image(r):
+                    continue
                 rt = routes.get(r["no"], {})
                 selections.append({
                     "no": r["no"],
@@ -470,8 +517,12 @@ class SentencePipeline:
                 continue
             candidates.append(r)
 
-        # Step B: 候補数が max_diagrams 以下ならそのまま全部、超えていれば均等間引き
-        selected_nos = self._select_evenly_distributed(candidates, self.max_diagrams)
+        # Step B: 選定。beat_mode は allocator が配分済み（candidates 全部）。
+        # v2 は候補が max_diagrams 超なら均等間引き。
+        if self.beat_mode:
+            selected_nos = set(r["no"] for r in candidates)
+        else:
+            selected_nos = self._select_evenly_distributed(candidates, self.max_diagrams)
         self._log("generator",
                   f"画像配置方式: 全文均等配置 "
                   f"(候補 {len(candidates)} / 選定 {len(selected_nos)} / 上限 {self.max_diagrams})")
@@ -914,7 +965,10 @@ class SentencePipeline:
         """CSV を書き出す（スプレッドシートと同構造）"""
         with path.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["章", "ブロック", "センテンス", "№", "ソース", "画像", "URL", "Web トピック"])
+            # v3: ビート/推定開始/エンジン/重要度/表示/ライセンス/クレジット 列を追加
+            w.writerow(["章", "ブロック", "センテンス", "№", "ビート", "推定開始", "ソース",
+                        "エンジン", "重要度", "表示", "画像", "URL", "ライセンス", "クレジット"])
+            _disp = {"image": "画像", "hold": "継続", "none": "なし"}
             for r in rows:
                 block_text = ""
                 if r.get("sentence_index") == 0:
@@ -923,13 +977,23 @@ class SentencePipeline:
                 if r.get("block_index") == 0 and r.get("sentence_index") == 0:
                     chapter = r.get("chapter_title", "")
                 route_label = self.ROUTE_LABELS.get(r.get("route", ""), r.get("route", ""))
+                beat = r.get("beat_id")
+                disp_label = _disp.get(r.get("display", ""), "")
+                if not disp_label and r.get("filename"):
+                    disp_label = "画像"  # v2(beat_mode無し)でも画像があれば「画像」
                 w.writerow([
                     chapter,
                     block_text,
                     r.get("sentence", ""),
                     r.get("no", ""),
+                    "" if beat is None else beat,
+                    r.get("est_start", "") or "",
                     route_label,
+                    r.get("engine", "") or "",
+                    r.get("importance", "") or "",
+                    disp_label,
                     r.get("filename", "") or "",
-                    r.get("web_source_url", "") or "",
-                    r.get("web_topic", "") or "",
+                    r.get("web_source_url", "") or r.get("commons_page_url", "") or "",
+                    r.get("license", "") or "",
+                    r.get("attribution", "") or "",
                 ])

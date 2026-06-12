@@ -38,6 +38,8 @@
         "chart_engine": "render",
         "map_engine": "render",
         "photo_source": "commons",
+        "beat_mode": true,
+        "chars_per_sec": 5.5,
         "chart_theme": {
           "bg": "#FFFDF7", "main": "#1E40AF", "accent": "#C2410C",
           "grid": "#E5E7EB", "text": "#1F2937", "font": "NotoSansJP"
