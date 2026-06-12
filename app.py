@@ -238,6 +238,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             web_image_count=web_image_count,
             max_diagrams=max_diagrams,
             route_mode=route_mode,
+            chart_engine=(get_channel(channel_id).get("defaults") or {}).get("chart_engine", "ai"),
+            chart_theme=(get_channel(channel_id).get("defaults") or {}).get("chart_theme"),
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,

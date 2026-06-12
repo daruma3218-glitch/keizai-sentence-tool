@@ -202,3 +202,116 @@ def route_all_sentences(
     log("router", f"分類結果: {summary}")
 
     return routes_by_no
+
+
+# ===== v3 Step1: chart_spec 抽出（router 第2段・LLM使用）=====
+# 2026-06-12 安福: chart を matplotlib で正確描画するため、原稿の数値を構造化抽出する。
+# 数値は原文にあるものだけ。抽出後にコードで原文照合し、ハルシネーションは降格させる。
+_CHART_TYPES = ("bar", "line", "pie", "big_number", "comparison", "timeline")
+
+
+def _chart_numbers_in_source(spec: dict, source_text: str) -> bool:
+    """spec の数値が原文(文+block_context)に部分一致するか（ハルシネーション・ガード）。
+
+    数値の半数以上が原文に見当たらなければ False（呼び出し側で chart→diagram 降格）。
+    区切り(カンマ/空白)は無視して照合する。万/億等の表記揺れは許容寄り。
+    """
+    import re as _re
+    src = _re.sub(r"[,\s　]", "", source_text or "")
+    vals = []
+    for it in (spec.get("series") or []):
+        if isinstance(it, dict) and it.get("value") is not None:
+            vals.append(it.get("value"))
+    if spec.get("value") is not None:
+        vals.append(spec.get("value"))
+    nums = []
+    for v in vals:
+        try:
+            nums.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if not nums:
+        return False
+    matched = 0
+    for n in nums:
+        cand = set()
+        s = f"{n:.4f}".rstrip("0").rstrip(".")
+        cand.add(s)
+        cand.add(s.replace(".", ""))
+        if n == int(n):
+            cand.add(str(int(n)))
+        if any(c and c in src for c in cand):
+            matched += 1
+    return matched * 2 >= len(nums)
+
+
+def extract_chart_specs(client, chart_rows: list, log: Optional[Callable] = None) -> dict:
+    """route=chart の文から chart_spec を抽出する（router 第2段）。
+
+    数値は文と block_context にあるものだけ。創作禁止。抽出不能や数値が原文に
+    無い場合は None を返す（呼び出し側で chart→diagram(engine:ai) へ降格）。
+    戻り値: {no: chart_spec(dict) or None}
+    """
+    log = log or (lambda *a, **kw: None)
+    if not chart_rows:
+        return {}
+    out = {}
+    for i in range(0, len(chart_rows), CHUNK_SIZE):
+        batch = chart_rows[i:i + CHUNK_SIZE]
+        inputs = [{
+            "no": r["no"],
+            "sentence": r.get("sentence", ""),
+            "block_context": (r.get("block_text") or "")[:400],
+        } for r in batch]
+        inputs_json = json.dumps(inputs, ensure_ascii=False, indent=1)
+        system = (
+            "あなたは動画原稿の数値からグラフ仕様(chart_spec)を構造化抽出する係です。"
+            "数値は与えられた文と block_context に書かれているものだけを使い、"
+            "推測・補完・創作は絶対にしないこと。JSON 配列のみを返す。"
+        )
+        query = f"""次の各文(route=chart)について、グラフ化のための chart_spec を抽出してください。
+
+入力:
+{inputs_json}
+
+【厳守ルール】
+1. 数値は sentence と block_context に**実際に書かれている数値のみ**。推測・補完・創作は禁止。
+2. 数値が曖昧・文に無い → その no は {{"no": N, "chart_type": null}}（抽出不能）。
+3. 比較対象が1つしかない(単一の値) → "big_number" 型にする。
+4. chart_type は bar|line|pie|big_number|comparison|timeline のいずれか。
+5. title は短く（その図が何を示すか）。
+6. source_note は文/block_context に出典が**書かれている場合のみ**。無ければ省略（創作禁止）。
+
+【出力 JSON（各 no につき1オブジェクト・入力と同数）】
+[
+  {{"no": 12, "chart_type": "bar", "title": "軍事費の対GDP比",
+    "series": [{{"label": "ロシア", "value": 6.3}}, {{"label": "NATO平均", "value": 2.1}}],
+    "unit": "%", "highlight_index": 0, "source_note": "SIPRI 2025"}},
+  {{"no": 13, "chart_type": null}}
+]
+- big_number: series に1要素 {{"label": ラベル, "value": 数値}} か "value": 数値
+- timeline: series=[{{"label": 時点, "value": 出来事(文字でも可)}}]
+JSON 配列のみ。"""
+        text = claude_query(client, query, system, max_tokens=6000)
+        specs = parse_json_array(text)
+        by_no = {}
+        for s in specs:
+            if isinstance(s, dict) and s.get("no") is not None:
+                by_no[s["no"]] = s
+        for r in batch:
+            no = r["no"]
+            spec = by_no.get(no)
+            src = f"{r.get('sentence', '')} {r.get('block_text') or ''}"
+            if (not spec) or (spec.get("chart_type") not in _CHART_TYPES):
+                out[no] = None
+                continue
+            if not _chart_numbers_in_source(spec, src):
+                out[no] = None  # 原文に無い数値 → 降格
+                continue
+            sn = (spec.get("source_note") or "").strip()
+            if sn and sn not in src:
+                spec.pop("source_note", None)  # 出典の創作防止
+            out[no] = spec
+    n_ok = sum(1 for v in out.values() if v)
+    log("renderer", f"chart_spec 抽出: {n_ok} 件 / 降格(ai) {len(out) - n_ok} 件")
+    return out

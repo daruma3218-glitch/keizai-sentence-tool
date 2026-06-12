@@ -56,6 +56,8 @@ class SentencePipeline:
         web_image_count: int = 0,
         max_diagrams: int = 150,
         route_mode: str = "auto",
+        chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
+        chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート配色
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
@@ -78,6 +80,8 @@ class SentencePipeline:
         self.web_image_count = max(0, min(web_image_count, 200))
         self.max_diagrams = max(1, min(max_diagrams, 300))
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
+        self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
+        self.chart_theme = chart_theme or None
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
         self.item_callback = item_callback or (lambda info: None)
@@ -256,9 +260,42 @@ class SentencePipeline:
         for no, rt in routes.items():
             self._update_row(no, route=rt.get("route", "illustration"), route_reason=rt.get("reason", ""))
 
-        # route で 3 分類
+        # ===== v3 Step1: chart を matplotlib で決定論レンダリング（engine:render）=====
+        # chart_engine=render のとき chart 文の数値を抽出し正確に描画。抽出不能/描画失敗は
+        # diagram(engine:ai) へ降格して v2 同様 AI 生成へ。何が起きても v2 にフォールバック。
+        for r in rows:
+            r.setdefault("engine", "ai")
+        if self.chart_engine == "render":
+            try:
+                from router import extract_chart_specs
+                chart_rows = [r for r in rows if r.get("route") == "chart"]
+                if chart_rows:
+                    self._progress(2, "chart の数値を抽出して図を描画中...", 20)
+                    specs = extract_chart_specs(client, chart_rows, log=self._log)
+                    to_render = []
+                    for r in chart_rows:
+                        spec = specs.get(r["no"])
+                        if spec:
+                            r["engine"] = "render"
+                            r["chart_spec"] = spec
+                            to_render.append(r)
+                        else:
+                            r["route"] = "diagram"  # 降格（chart→diagram, engine:ai）
+                            r["engine"] = "ai"
+                            self._update_row(r["no"], route="diagram")
+                    if to_render:
+                        self._render_charts(to_render)
+            except Exception as e:
+                self._log("error", f"chartレンダリングをスキップ（{str(e)[:80]}）。AI生成に回します。")
+                for r in rows:
+                    if r.get("route") == "chart" and r.get("engine") == "render":
+                        r["engine"] = "ai"
+        for r in rows:
+            self._update_row(r["no"], engine=r.get("engine", "ai"))
+
+        # route で分類（engine:render はレンダリング済みなので AI 対象から除外）
         web_photo_rows = [r for r in rows if r.get("route") == "web_photo"]
-        ai_rows = [r for r in rows if r.get("route") in AI_ROUTES]
+        ai_rows = [r for r in rows if r.get("route") in AI_ROUTES and r.get("engine") != "render"]
         skip_rows = [r for r in rows if r.get("route") == "skip"]
 
         # skip 文をマーク
@@ -638,6 +675,34 @@ class SentencePipeline:
         "skip": "スキップ",
         "": "",
     }
+
+    def _render_charts(self, render_rows):
+        """chart_spec を matplotlib で 1920x1080 PNG に描画（engine:render・LLM不使用）。
+
+        数値の狂い・文字化けが構造的にゼロ。描画失敗は diagram(engine:ai) へ降格する。
+        """
+        try:
+            from renderer import render_chart
+        except Exception as e:
+            self._log("error", f"renderer 読込失敗（{str(e)[:60]}）。chart は AI 生成へ降格。")
+            for r in render_rows:
+                r["route"] = "diagram"
+                r["engine"] = "ai"
+                self._update_row(r["no"], route="diagram", engine="ai")
+            return
+        done = 0
+        for r in render_rows:
+            no = r["no"]
+            self._update_row(no, status="generating", engine="render")
+            ok = render_chart(r.get("chart_spec"), self.images_dir / f"{no}.png", theme=self.chart_theme)
+            if ok:
+                self._update_row(no, status="ok", filename=f"{no}.png", engine="render")
+                done += 1
+            else:
+                r["route"] = "diagram"
+                r["engine"] = "ai"
+                self._update_row(no, route="diagram", engine="ai")
+        self._log("renderer", f"chart レンダリング完了: {done} 枚（決定論・文字化けゼロ）")
 
     def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key, theme=""):
         """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。

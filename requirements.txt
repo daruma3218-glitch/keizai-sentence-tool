@@ -9,3 +9,5 @@ openai==2.32.0
 httpcore @ https://files.pythonhosted.org/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl
 pillow==11.1.0
 python-docx==1.1.2
+# v3 Step1: chart を matplotlib で決定論レンダリング（LLM不使用・文字化け/数値ズレを構造的に排除）
+matplotlib==3.9.4
