@@ -57,7 +57,8 @@ class SentencePipeline:
         max_diagrams: int = 150,
         route_mode: str = "auto",
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
-        chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート配色
+        map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
+        chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
@@ -81,6 +82,7 @@ class SentencePipeline:
         self.max_diagrams = max(1, min(max_diagrams, 300))
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
+        self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.chart_theme = chart_theme or None
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
@@ -289,6 +291,32 @@ class SentencePipeline:
                 self._log("error", f"chartレンダリングをスキップ（{str(e)[:80]}）。AI生成に回します。")
                 for r in rows:
                     if r.get("route") == "chart" and r.get("engine") == "render":
+                        r["engine"] = "ai"
+        # ----- map（Step2）: route=map を Natural Earth GeoJSON で正確描画。降格先は illustration -----
+        if self.map_engine == "render":
+            try:
+                from router import extract_map_specs
+                map_rows = [r for r in rows if r.get("route") == "map"]
+                if map_rows:
+                    self._progress(2, "地図データを抽出して描画中...", 21)
+                    specs = extract_map_specs(client, map_rows, log=self._log)
+                    to_render = []
+                    for r in map_rows:
+                        spec = specs.get(r["no"])
+                        if spec:
+                            r["engine"] = "render"
+                            r["map_spec"] = spec
+                            to_render.append(r)
+                        else:
+                            r["route"] = "illustration"  # 降格（map→illustration, engine:ai）
+                            r["engine"] = "ai"
+                            self._update_row(r["no"], route="illustration")
+                    if to_render:
+                        self._render_maps(to_render)
+            except Exception as e:
+                self._log("error", f"地図レンダリングをスキップ（{str(e)[:80]}）。AI生成に回します。")
+                for r in rows:
+                    if r.get("route") == "map" and r.get("engine") == "render":
                         r["engine"] = "ai"
         for r in rows:
             self._update_row(r["no"], engine=r.get("engine", "ai"))
@@ -703,6 +731,34 @@ class SentencePipeline:
                 r["engine"] = "ai"
                 self._update_row(no, route="diagram", engine="ai")
         self._log("renderer", f"chart レンダリング完了: {done} 枚（決定論・文字化けゼロ）")
+
+    def _render_maps(self, render_rows):
+        """map_spec を Natural Earth GeoJSON + matplotlib で描画（engine:render・LLM不使用）。
+
+        国境が正確（AI の航空写真風のデタラメ国境を排除）。失敗は illustration(ai) へ降格。
+        """
+        try:
+            from renderer import render_map
+        except Exception as e:
+            self._log("error", f"renderer 読込失敗（{str(e)[:60]}）。map は AI 生成へ降格。")
+            for r in render_rows:
+                r["route"] = "illustration"
+                r["engine"] = "ai"
+                self._update_row(r["no"], route="illustration", engine="ai")
+            return
+        done = 0
+        for r in render_rows:
+            no = r["no"]
+            self._update_row(no, status="generating", engine="render")
+            ok = render_map(r.get("map_spec"), self.images_dir / f"{no}.png", theme=self.chart_theme)
+            if ok:
+                self._update_row(no, status="ok", filename=f"{no}.png", engine="render")
+                done += 1
+            else:
+                r["route"] = "illustration"
+                r["engine"] = "ai"
+                self._update_row(no, route="illustration", engine="ai")
+        self._log("renderer", f"map レンダリング完了: {done} 枚（正確な国境）")
 
     def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key, theme=""):
         """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。

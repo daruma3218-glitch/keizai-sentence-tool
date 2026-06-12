@@ -10,6 +10,7 @@ verifier による検品（確率的）を不要にする。
 LLM は一切使わない。
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -295,6 +296,228 @@ def render_chart(spec: dict, output_path, theme: dict = None) -> bool:
         return True
     except Exception as e:
         print(f"  [renderer ERROR] chart_type={ctype}: {str(e)[:140]}", flush=True)
+        return False
+    finally:
+        if fig is not None:
+            plt.close(fig)
+        else:
+            plt.close("all")
+
+
+# ============================================================
+# Map (v3 Step2) — Natural Earth 1:50m + matplotlib（LLM不使用）
+# 2026-06-12 安福: AI製「航空写真風」地図の国境デタラメ事故を防ぐため、
+# 正確な GeoJSON を同梱して決定論描画する。海色・国塗り分け・ラベル・矢印。
+# ============================================================
+_GEO_PATH = _ASSETS / "geo" / "ne_50m_admin_0_countries.geojson"
+_GEO_CACHE = None  # {iso3: {"name_ja": str, "geom": shapely, "rings": [[(lon,lat)...]]}}
+
+VALID_MAP_TYPES = ("highlight", "route", "neighbors")
+
+# extent プリセット（lon0, lon1, lat0, lat1）。地政学チャンネルで頻出の範囲を固定。
+_EXTENTS = {
+    "world": (-168.0, 190.0, -58.0, 84.0),
+    "europe": (-26.0, 50.0, 33.0, 72.0),
+    "asia": (40.0, 150.0, 3.0, 58.0),
+    "former_ussr": (18.0, 180.0, 35.0, 82.0),
+}
+
+
+def _geom_to_rings(geom: dict):
+    """GeoJSON geometry → 外環座標 [[(lon,lat),...], ...]（穴は無視）。"""
+    t = geom.get("type")
+    c = geom.get("coordinates")
+    rings = []
+    try:
+        if t == "Polygon" and c:
+            rings.append([(float(x), float(y)) for x, y in c[0]])
+        elif t == "MultiPolygon" and c:
+            for poly in c:
+                if poly:
+                    rings.append([(float(x), float(y)) for x, y in poly[0]])
+    except Exception:
+        return []
+    return rings
+
+
+def _load_geo():
+    """同梱 GeoJSON を読み込み iso3 で索引化（初回のみ。shapely で重心算出用）。"""
+    global _GEO_CACHE
+    if _GEO_CACHE is not None:
+        return _GEO_CACHE
+    cache = {}
+    try:
+        import json as _json
+        from shapely.geometry import shape
+        data = _json.loads(_GEO_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  [renderer map] GeoJSON 読込失敗: {str(e)[:100]}", flush=True)
+        _GEO_CACHE = {}
+        return _GEO_CACHE
+    for f in data.get("features", []):
+        p = f.get("properties", {}) or {}
+        iso = p.get("ISO_A3")
+        if not iso or iso == "-99":
+            iso = p.get("ADM0_A3") or p.get("ISO_A3_EH")
+        if not iso or iso == "-99":
+            continue
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        rings = _geom_to_rings(geom)
+        if not rings:
+            continue
+        try:
+            sgeom = shape(geom)
+        except Exception:
+            sgeom = None
+        cache[iso] = {"name_ja": p.get("NAME_JA") or p.get("NAME") or iso,
+                      "geom": sgeom, "rings": rings}
+    _GEO_CACHE = cache
+    return cache
+
+
+def _rep_point(info, extent=None):
+    """ラベル/矢印用の代表点（内点）。extent を渡すと、表示範囲に交差した
+    可視部分の中で代表点を取る（ロシア等の大国でも画面内に配置される）。"""
+    g = info.get("geom")
+    try:
+        if g is None:
+            raise ValueError
+        if extent is not None:
+            from shapely.geometry import box
+            x0, x1, y0, y1 = extent
+            clipped = g.intersection(box(x0, y0, x1, y1))
+            if (not clipped.is_empty) and clipped.area > 0:
+                g = clipped
+        if g.geom_type == "MultiPolygon":
+            g = max(g.geoms, key=lambda x: x.area)
+        pt = g.representative_point()
+        return (pt.x, pt.y)
+    except Exception:
+        ring = max(info["rings"], key=len)
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+
+def _lighten(hex_color: str, amt: float = 0.55) -> str:
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        r = int(r + (255 - r) * amt)
+        g = int(g + (255 - g) * amt)
+        b = int(b + (255 - b) * amt)
+        return f"#{r:02X}{g:02X}{b:02X}"
+    except Exception:
+        return hex_color
+
+
+def _resolve_extent(spec: dict, geo: dict, countries: list):
+    ext = (spec.get("extent") or "").strip()
+    if ext in _EXTENTS:
+        return _EXTENTS[ext]
+    # custom / 未知 → focus+secondary の bbox から自動算出（余白付き）
+    xs0, xs1, ys0, ys1 = 180, -180, 90, -90
+    for iso in countries:
+        info = geo.get(iso)
+        if not info:
+            continue
+        for ring in info["rings"]:
+            for x, y in ring:
+                xs0, xs1 = min(xs0, x), max(xs1, x)
+                ys0, ys1 = min(ys0, y), max(ys1, y)
+    if xs0 > xs1:
+        return _EXTENTS["world"]
+    padx = max(4.0, (xs1 - xs0) * 0.25)
+    pady = max(4.0, (ys1 - ys0) * 0.25)
+    return (xs0 - padx, xs1 + padx, ys0 - pady, ys1 + pady)
+
+
+def render_map(spec: dict, output_path, theme: dict = None) -> bool:
+    """map_spec を 1920x1080 PNG に描画する。
+
+    成功で True。解決できる国が無い/描画失敗時は False（呼び出し側で
+    route を illustration(engine:ai) へ降格すること）。
+    """
+    if not isinstance(spec, dict):
+        return False
+    theme = {**DEFAULT_THEME, **(theme or {})}
+    geo = _load_geo()
+    if not geo:
+        return False
+    focus = [c for c in (spec.get("focus_countries") or []) if c in geo]
+    if not focus:
+        return False  # 国コードが解決できない → 降格
+    secondary = [c for c in (spec.get("secondary_countries") or []) if c in geo and c not in focus]
+    mtype = spec.get("map_type", "highlight")
+    fig = None
+    try:
+        fig = plt.figure(figsize=(_W_IN, _H_IN), dpi=_DPI)
+        fig.patch.set_facecolor(theme["bg"])
+        ax = fig.add_axes([0.01, 0.03, 0.98, 0.84])
+        ax.set_facecolor("#DCEAF7")  # 海
+        ax.axis("off")
+        x0, x1, y0, y1 = _resolve_extent(spec, geo, focus + secondary)
+        ax.set_xlim(x0, x1)
+        ax.set_ylim(y0, y1)
+        # 簡易メルカトル風: 緯度方向の歪みを抑える
+        mean_lat = max(-80, min(80, (y0 + y1) / 2))
+        ax.set_aspect(1.0 / max(0.2, math.cos(math.radians(mean_lat))))
+        # 全ての国を描画（その他=グレー / focus=アクセント / secondary=薄アクセント）
+        light = _lighten(theme["accent"])
+        for iso, info in geo.items():
+            if iso in focus:
+                color = theme["accent"]
+            elif iso in secondary:
+                color = light
+            else:
+                color = "#D7DBE0"
+            for ring in info["rings"]:
+                xs = [p[0] for p in ring]
+                ys = [p[1] for p in ring]
+                ax.fill(xs, ys, facecolor=color, edgecolor="white", linewidth=0.4, zorder=2)
+        # ラベル（spec.labels 指定があればそれを、無ければ focus に自動）
+        import matplotlib.patheffects as pe
+        stroke = [pe.withStroke(linewidth=4, foreground="white")]
+        label_targets = []
+        if spec.get("labels"):
+            for lab in spec["labels"]:
+                iso = lab.get("country")
+                txt = lab.get("text")
+                if iso in geo and txt:
+                    label_targets.append((iso, txt))
+        else:
+            for iso in focus:
+                label_targets.append((iso, geo[iso]["name_ja"]))
+        for iso, txt in label_targets:
+            px, py = _rep_point(geo[iso], extent=(x0, x1, y0, y1))
+            if x0 <= px <= x1 and y0 <= py <= y1:
+                ax.text(px, py, txt, ha="center", va="center", fontsize=34,
+                        fontweight="bold", color=theme["text"], zorder=6,
+                        path_effects=stroke)
+        # 矢印（route 型）
+        if mtype == "route":
+            for ar in (spec.get("arrows") or []):
+                a, b = ar.get("from"), ar.get("to")
+                if a in geo and b in geo:
+                    ax_, ay_ = _rep_point(geo[a], extent=(x0, x1, y0, y1))
+                    bx_, by_ = _rep_point(geo[b], extent=(x0, x1, y0, y1))
+                    ax.annotate("", xy=(bx_, by_), xytext=(ax_, ay_),
+                                arrowprops=dict(arrowstyle="-|>", color=theme["main"],
+                                                lw=5, connectionstyle="arc3,rad=0.2",
+                                                shrinkA=8, shrinkB=8), zorder=7)
+                    if ar.get("label"):
+                        ax.text((ax_ + bx_) / 2, (ay_ + by_) / 2 + 1.5, ar["label"],
+                                ha="center", va="center", fontsize=26,
+                                fontweight="bold", color=theme["main"], zorder=8,
+                                path_effects=stroke)
+        _draw_title_and_source(fig, spec, theme)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(output_path), dpi=_DPI, facecolor=theme["bg"])
+        return True
+    except Exception as e:
+        print(f"  [renderer map ERROR] {str(e)[:140]}", flush=True)
         return False
     finally:
         if fig is not None:

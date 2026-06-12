@@ -315,3 +315,74 @@ JSON 配列のみ。"""
     n_ok = sum(1 for v in out.values() if v)
     log("renderer", f"chart_spec 抽出: {n_ok} 件 / 降格(ai) {len(out) - n_ok} 件")
     return out
+
+
+# ===== v3 Step2: map_spec 抽出（router 第2段・LLM使用）=====
+# 2026-06-12 安福: map を Natural Earth で正確描画するため、地名→ISO3 を抽出する。
+# 国レベルに落とせない（都市・地形が主役）場合は None→illustration 降格。
+_MAP_TYPES = ("highlight", "route", "neighbors")
+
+
+def extract_map_specs(client, map_rows: list, log: Optional[Callable] = None) -> dict:
+    """route=map の文から map_spec を抽出する（router 第2段）。
+
+    国は ISO 3166-1 alpha-3。国レベルに落とせない（都市・地形が主役）→ None を返し、
+    呼び出し側で route を illustration(engine:ai) へ降格する。
+    戻り値: {no: map_spec(dict) or None}
+    """
+    log = log or (lambda *a, **kw: None)
+    if not map_rows:
+        return {}
+    out = {}
+    for i in range(0, len(map_rows), CHUNK_SIZE):
+        batch = map_rows[i:i + CHUNK_SIZE]
+        inputs = [{
+            "no": r["no"],
+            "sentence": r.get("sentence", ""),
+            "block_context": (r.get("block_text") or "")[:400],
+        } for r in batch]
+        inputs_json = json.dumps(inputs, ensure_ascii=False, indent=1)
+        system = (
+            "あなたは動画原稿の地理情報から地図仕様(map_spec)を構造化抽出する係です。"
+            "国は ISO 3166-1 alpha-3 コードで表す。JSON 配列のみを返す。"
+        )
+        query = f"""次の各文(route=map)について、地図化のための map_spec を抽出してください。
+
+入力:
+{inputs_json}
+
+【ルール】
+1. 国は ISO 3166-1 alpha-3（例: ロシア=RUS, ウクライナ=UKR, ドイツ=DEU, 中国=CHN,
+   日本=JPN, アメリカ=USA, カザフスタン=KAZ, ベラルーシ=BLR, フィンランド=FIN, モンゴル=MNG）。
+2. 主役が国・地域でなく**都市・地形・建造物**（例: ウラジオストク、シベリア平原）の場合は
+   {{"no": N, "map_type": null}}（国レベルに落とせない→降格）。
+3. map_type: highlight(国を強調) | route(国から国への経路・輸出入。arrows必須) | neighbors(隣接関係)
+4. extent: world | europe | asia | former_ussr | custom（文脈から最適なもの）。
+5. focus_countries = 主役の国(ISO3・最大3)。secondary_countries = 関連/隣接国。
+6. labels = {{"text": 表示名, "country": ISO3}}。arrows は route 型のみ {{"from": ISO3, "to": ISO3, "label": 短い説明}}。
+
+【出力 JSON（各 no につき1オブジェクト）】
+[
+  {{"no": 7, "map_type": "route", "title": "ロシアからのガス輸出",
+    "focus_countries": ["RUS"], "secondary_countries": ["DEU"],
+    "labels": [{{"text": "ロシア", "country": "RUS"}}, {{"text": "ドイツ", "country": "DEU"}}],
+    "arrows": [{{"from": "RUS", "to": "DEU", "label": "ガス輸出"}}], "extent": "europe"}},
+  {{"no": 8, "map_type": null}}
+]
+JSON 配列のみ。"""
+        text = claude_query(client, query, system, max_tokens=5000)
+        specs = parse_json_array(text)
+        by_no = {}
+        for s in specs:
+            if isinstance(s, dict) and s.get("no") is not None:
+                by_no[s["no"]] = s
+        for r in batch:
+            no = r["no"]
+            spec = by_no.get(no)
+            if (not spec) or (spec.get("map_type") not in _MAP_TYPES) or (not spec.get("focus_countries")):
+                out[no] = None
+                continue
+            out[no] = spec
+    n_ok = sum(1 for v in out.values() if v)
+    log("renderer", f"map_spec 抽出: {n_ok} 件 / 降格(ai) {len(out) - n_ok} 件")
+    return out
