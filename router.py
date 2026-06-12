@@ -55,6 +55,7 @@ def _route_chunk(
     title: str,
     user_instructions: str = "",
     propaganda_mix: bool = False,
+    few_shot: list = None,
 ) -> list:
     """1 チャンク（最大 CHUNK_SIZE 文）を route 分類する。
 
@@ -88,6 +89,22 @@ def _route_chunk(
         )
         propaganda_field = ',\n    "propaganda": true/false（上記基準で判定）'
 
+    # v3 Step5: 過去の編集者フィードバック（ルート違い）を few-shot として注入
+    few_shot_block = ""
+    if few_shot:
+        lines = []
+        for ex in few_shot[:12]:
+            s = (ex.get("sentence", "") or "")[:50]
+            g = ex.get("given_route", "")
+            c = ex.get("correct_route", "")
+            if s and c:
+                lines.append(f"- 「{s}」は {g} ではなく {c} が正しい")
+        if lines:
+            few_shot_block = (
+                "\n【過去の編集者フィードバック（同じ判定ミスを避けること）】\n"
+                + "\n".join(lines) + "\n"
+            )
+
     system = (
         "あなたは動画ディレクターです。原稿の各センテンスに、最適な画像ソースの種別（route）を"
         "1 つ割り当てます。結果は必ず JSON 配列のみで返してください。"
@@ -97,7 +114,7 @@ def _route_chunk(
 
 センテンス一覧:
 {inputs_json}
-{user_block}{propaganda_block}
+{user_block}{propaganda_block}{few_shot_block}
 
 【route の種別と判定基準】
 1. web_photo … **実在の特定の**歴史人物・事件・建造物で「本物の写真/絵画」が見たいもの
@@ -164,6 +181,7 @@ def route_all_sentences(
     propaganda_mix: bool = False,
     max_workers: int = 4,
     log: Optional[Callable] = None,
+    few_shot: list = None,
 ) -> dict:
     """全センテンスを route 分類する。
 
@@ -181,7 +199,7 @@ def route_all_sentences(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
-            executor.submit(_route_chunk, client, chunk, title, user_instructions, propaganda_mix): i
+            executor.submit(_route_chunk, client, chunk, title, user_instructions, propaganda_mix, few_shot): i
             for i, chunk in enumerate(chunks)
         }
         completed = 0

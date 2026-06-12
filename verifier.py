@@ -15,10 +15,12 @@ import anthropic
 from utils import parse_json_object
 
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+# v3 Step5: chart/map が renderer 化されたため、Vision 検品は diagram のみに縮小。
+# モデルも Haiku に変更してコストを約 1/5 に（判定失敗時 ok=True の安全設計は維持）。
+CLAUDE_MODEL = "claude-haiku-4-5"
 
-# 検証対象にするデフォルトの type（意味の正確さが重要なもの）
-DEFAULT_VERIFY_TYPES = ("diagram", "chart")
+# 検証対象にするデフォルトの type（chart は決定論レンダリングのため検品不要）
+DEFAULT_VERIFY_TYPES = ("diagram",)
 
 
 def verify_image(

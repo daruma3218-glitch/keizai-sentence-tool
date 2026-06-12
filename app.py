@@ -112,6 +112,8 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 _jobs: dict = {}
 _job_logs: dict = {}
 _jobs_lock = threading.Lock()
+# route_feedback.jsonl への追記を直列化（同時フィードバックでも行が壊れないように）
+FEEDBACK_LOCK = threading.Lock()
 
 
 # ====== 認証 ======
@@ -243,6 +245,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             photo_source=(get_channel(channel_id).get("defaults") or {}).get("photo_source", "web"),
             beat_mode=bool((get_channel(channel_id).get("defaults") or {}).get("beat_mode", False)),
             chars_per_sec=(get_channel(channel_id).get("defaults") or {}).get("chars_per_sec", 5.5),
+            realphoto_watermark=bool((get_channel(channel_id).get("defaults") or {}).get("realphoto_watermark", False)),
             chart_theme=(get_channel(channel_id).get("defaults") or {}).get("chart_theme"),
             progress_callback=on_progress,
             log_callback=on_log,
@@ -589,6 +592,66 @@ def api_regenerate(job_id, no):
         return jsonify({"error": results[0].get("error", "生成失敗") if results else "生成失敗"}), 500
     # キャッシュ回避用にタイムスタンプ付き URL を返す
     return jsonify({"ok": True, "no": no, "filename": filename, "ts": datetime.now().strftime("%H%M%S")})
+
+
+# v3 Step5: ルート違いフィードバック。編集者が「この文は別ルートが正しい」と教えると、
+# チャンネル別の route_feedback.jsonl に蓄積し、次回以降のルーターに few-shot として渡す。
+_FEEDBACK_ROUTES = ("web_photo", "realphoto", "map", "diagram", "chart", "illustration", "skip")
+
+
+@app.route("/api/feedback/<job_id>/<int:no>", methods=["POST"])
+@login_required
+def api_feedback(job_id, no):
+    """指定シーン(№)のルート判定が間違っていたことを記録する。
+
+    body: correct_route（正しいルート）。文・誤判定ルート・チャンネルは
+    サーバー側のジョブデータから補完して route_feedback.jsonl に追記する。
+    """
+    import json as _json
+    correct_route = (request.form.get("correct_route", "") or "").strip()
+    if correct_route not in _FEEDBACK_ROUTES:
+        return jsonify({"error": f"未知のルート: {correct_route}"}), 400
+
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return jsonify({"error": "ジョブのデータが見つかりません"}), 404
+
+    # 文・誤判定ルート・チャンネルをジョブデータから取得
+    prompts = load_json(job_dir / "prompts.json", {"rows": []}).get("rows", [])
+    target = next((r for r in prompts if r.get("no") == no), None)
+    if target is None:
+        snap = load_json(job_dir / "rows_progress.json", {"rows": []})
+        target = next((r for r in snap.get("rows", []) if r.get("no") == no), None)
+    if target is None:
+        return jsonify({"error": f"№{no} が見つかりません"}), 404
+
+    sentence = (target.get("sentence", "") or "").strip()
+    given_route = (target.get("route") or target.get("type") or "").strip()
+    if given_route == correct_route:
+        return jsonify({"error": "同じルートです"}), 400
+
+    manifest = load_json(job_dir / "manifest.json", {})
+    job_state = load_json(job_dir / "job.json", {})
+    channel_id = manifest.get("channel_id") or job_state.get("channel_id") or "default"
+
+    record = {
+        "channel_id": channel_id,
+        "sentence": sentence[:200],
+        "given_route": given_route,
+        "correct_route": correct_route,
+        "job_id": job_id,
+        "no": no,
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    fb_path = OUTPUT_DIR / "route_feedback.jsonl"
+    try:
+        with FEEDBACK_LOCK:
+            with open(fb_path, "a", encoding="utf-8") as f:
+                f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        return jsonify({"error": f"保存に失敗: {str(e)[:150]}"}), 500
+
+    return jsonify({"ok": True, "no": no, "given_route": given_route, "correct_route": correct_route})
 
 
 @app.route("/results/<job_id>/<path:filename>")

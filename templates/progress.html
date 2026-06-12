@@ -370,7 +370,10 @@
       const v = map[route];
       if (!v) return `<span class="text-gray-300 text-[10px]">—</span>`;
       const reason = escapeHtml(row.route_reason || '');
-      return `<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${v.cls}" title="${reason}">${v.icon} ${v.label}</span>`;
+      const badge = `<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${v.cls}" title="${reason}">${v.icon} ${v.label}</span>`;
+      // ルート違いフィードバック（次回以降のルーター学習に反映）
+      const fb = `<br><button onclick='reportRouteError(${row.no}, event)' class="mt-0.5 text-[9px] text-gray-400 hover:text-rose-500 hover:underline" title="このルート判定が違う場合に正しいルートを教えると、次回以降のルーターが学習します">✎ ルート違い</button>`;
+      return badge + fb;
     }
 
     function updateSummary(rows) {
@@ -495,6 +498,34 @@
         }
         tr.setAttribute('data-filename', data.filename);
         tr.setAttribute('data-status', 'ok');
+      } catch (e) {
+        alert('通信エラー: ' + e.message);
+      }
+    }
+
+    // ルート違いを記録 → 次回以降のルーターが few-shot として学習する
+    const ROUTE_CHOICES = [
+      ['web_photo', '🌐 Web写真'], ['realphoto', '📷 実写風'], ['map', '🗺️ 地図'],
+      ['diagram', '📊 図解'], ['chart', '📈 グラフ'], ['illustration', '🎨 イラスト'], ['skip', '⊘ スキップ'],
+    ];
+    async function reportRouteError(no, ev) {
+      if (ev) ev.stopPropagation();
+      const tr = document.querySelector(`tr[data-no="${no}"]`);
+      const cur = tr ? (tr.getAttribute('data-route') || '') : '';
+      const menu = ROUTE_CHOICES.map((c, i) => `${i + 1}. ${c[1]}`).join('\n');
+      const ans = prompt(`№${no} の正しいルートを番号で選んでください（現在: ${cur}）。\nこの修正は次回以降のルーター学習に反映されます。\n\n${menu}`, "");
+      if (ans === null) return;
+      const idx = parseInt(ans.trim(), 10) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= ROUTE_CHOICES.length) { alert('番号が不正です'); return; }
+      const correct = ROUTE_CHOICES[idx][0];
+      if (correct === cur) { alert('現在と同じルートです'); return; }
+      try {
+        const fd = new FormData();
+        fd.append('correct_route', correct);
+        const res = await fetch(`/api/feedback/${JOB_ID}/${no}`, { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok || data.error) { alert('記録に失敗: ' + (data.error || res.status)); return; }
+        alert(`記録しました（${data.given_route} → ${data.correct_route}）。次回以降のルーターが学習します。`);
       } catch (e) {
         alert('通信エラー: ' + e.message);
       }

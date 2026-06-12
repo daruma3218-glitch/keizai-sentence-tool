@@ -61,6 +61,7 @@ class SentencePipeline:
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         beat_mode: bool = False,           # v3: ビート単位で重要度加重配分（False=v2均等）
         chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
+        realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
@@ -89,6 +90,7 @@ class SentencePipeline:
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.beat_mode = bool(beat_mode)                     # v3: ビート加重配分
         self.chars_per_sec = float(chars_per_sec or 5.5)
+        self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
         self.chart_theme = chart_theme or None
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
@@ -189,6 +191,35 @@ class SentencePipeline:
 
         return selected
 
+    def _load_route_feedback(self, limit: int = 12) -> list:
+        """v3 Step5: 過去の「ルート違い」フィードバックを読み、ルーターに渡す few-shot を作る。
+
+        route_feedback.jsonl（output ルート直下＝全ジョブ共通）から、同じチャンネルの
+        記録だけを新しい順に最大 limit 件返す。ファイルが無い／壊れていても落とさない。
+        """
+        fb_path = self.output_dir.parent / "route_feedback.jsonl"
+        if not fb_path.exists():
+            return []
+        records = []
+        try:
+            with open(fb_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if rec.get("channel_id", "default") != self.channel_id:
+                        continue
+                    if rec.get("sentence") and rec.get("correct_route"):
+                        records.append(rec)
+        except Exception:
+            return []
+        # 新しい順（末尾優先）に limit 件
+        return records[-limit:]
+
     # ---- メインフロー ----
     def run(self) -> dict:
         # チャンネル別キーがあれば優先、無ければ共通（環境変数）
@@ -257,10 +288,14 @@ class SentencePipeline:
         if self.route_mode == "auto":
             self._progress(2, "各文のソースを判定中（ルーター）...", 16)
             self._log("router", "ルーターが各文の最適なソースを判定します")
+            few_shot = self._load_route_feedback()
+            if few_shot:
+                self._log("router", f"過去のルート違いフィードバック {len(few_shot)} 件を学習に反映します")
             routes = route_all_sentences(
                 client, rows, title,
                 user_instructions=self.user_instructions,
                 max_workers=4, log=self._log,
+                few_shot=few_shot,
             )
         else:  # all_ai: v1 互換（全文 AI 生成）
             self._log("router", "route_mode=all_ai: 全文を AI 生成に回します")
@@ -596,6 +631,7 @@ class SentencePipeline:
             style_preset=self.style_preset,
             progress_callback=on_item_event,
             reference_image_path=self.character_ref_path,
+            realphoto_watermark=self.realphoto_watermark,
         )
 
         success_count = sum(1 for r in results if r.get("success"))
@@ -958,6 +994,7 @@ class SentencePipeline:
             style_preset=self.style_preset,
             progress_callback=on_fix_event,
             reference_image_path=self.character_ref_path,
+            realphoto_watermark=self.realphoto_watermark,
         )
         self._log("verify", f"再生成完了（{len(fix_targets)} 枚を作り直しました）")
 

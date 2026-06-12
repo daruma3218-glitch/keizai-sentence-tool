@@ -110,6 +110,55 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path) -> None:
 
     canvas.save(output_path, format="PNG")
 
+
+# ===== v3 Step5: realphoto キャプション焼き込み（報道映像との誤認防止）=====
+_CAPTION_FONT_DIR = Path(__file__).parent / "assets" / "fonts"
+_caption_font_cache = {}
+
+
+def _caption_font(size: int):
+    from PIL import ImageFont
+    if size in _caption_font_cache:
+        return _caption_font_cache[size]
+    f = None
+    p = _CAPTION_FONT_DIR / "NotoSansJP-Bold.ttf"
+    try:
+        if p.exists():
+            f = ImageFont.truetype(str(p), size)
+    except Exception:
+        f = None
+    if f is None:
+        f = ImageFont.load_default()
+    _caption_font_cache[size] = f
+    return f
+
+
+def add_image_caption(path, text: str = "イメージ") -> bool:
+    """画像の右下に半透明の「イメージ」キャプションを焼き込む（realphoto 用）。"""
+    try:
+        from PIL import Image, ImageDraw
+        im = Image.open(path).convert("RGBA")
+        W, H = im.size
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(overlay)
+        fsize = max(22, H // 30)
+        font = _caption_font(fsize)
+        bbox = d.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        pad = max(8, fsize // 3)
+        m = max(10, H // 60)
+        x1 = W - tw - pad * 2 - m
+        y1 = H - th - pad * 2 - m
+        d.rounded_rectangle([x1, y1, W - m, H - m], radius=pad, fill=(0, 0, 0, 130))
+        d.text((x1 + pad - bbox[0], y1 + pad - bbox[1]), text, font=font,
+               fill=(255, 255, 255, 230))
+        Image.alpha_composite(im, overlay).convert("RGB").save(path)
+        return True
+    except Exception as e:
+        print(f"  [caption ERROR] {str(e)[:80]}", flush=True)
+        return False
+
+
 # プロバイダ識別子
 PROVIDER_NANOBANANA = "nanobanana"
 PROVIDER_GPT_IMAGE = "gpt-image"
@@ -389,6 +438,7 @@ class ParallelImageGenerator:
         style_preset: str = "",
         progress_callback: Optional[Callable[[dict], None]] = None,
         reference_image_path: Optional[str] = None,  # キャラ固定の参照画像パス
+        realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
     ):
         if provider not in VALID_PROVIDERS:
             raise ValueError(f"unknown provider: {provider} (valid: {VALID_PROVIDERS})")
@@ -396,6 +446,7 @@ class ParallelImageGenerator:
         self.openai_quality = openai_quality
         self.openai_size = openai_size
         self.style_preset = style_preset
+        self.realphoto_watermark = bool(realphoto_watermark)
 
         # 参照画像（キャラ固定用）。character=True のシーンでのみ使用。
         # ファイルが無ければ None（=テキスト方式に自動フォールバック、壊れない）。
@@ -518,6 +569,13 @@ class ParallelImageGenerator:
             except Exception as e:
                 success, error = False, str(e)[:200]
 
+            # v3 Step5: realphoto は「イメージ」を焼き込む（報道映像との誤認防止）
+            if success and prompt_type == "realphoto" and self.realphoto_watermark:
+                try:
+                    await loop.run_in_executor(self._executor, add_image_caption, output_path)
+                except Exception:
+                    pass
+
             async with self._counter_lock:
                 if success:
                     self._completed += 1
@@ -627,6 +685,7 @@ def run_parallel_generation(
     style_preset: str = "",
     progress_callback: Optional[Callable[[dict], None]] = None,
     reference_image_path: Optional[str] = None,  # キャラ固定の参照画像
+    realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
 ) -> list:
     """同期エントリポイント: pipeline から呼び出す"""
     # 環境変数からデフォルト補完
@@ -651,5 +710,6 @@ def run_parallel_generation(
         style_preset=style_preset,
         progress_callback=progress_callback,
         reference_image_path=reference_image_path,
+        realphoto_watermark=realphoto_watermark,
     )
     return asyncio.run(generator.generate_all(prompts, output_dir))
