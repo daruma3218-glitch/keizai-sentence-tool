@@ -176,6 +176,20 @@ _CHARACTER_LOCK_INSTRUCTION = (
     "Do NOT redesign the character, and do NOT switch to a detailed, anime, or realistic style."
 )
 
+# v3 Step6: エンティティ参照（一貫性ロック）。同じ被写体が繰り返し出るとき、初出画像を
+# 参照にして見た目を揃える。nanobanana は参照画像つき、gpt-image は文言のみ（v3.0）。
+_ENTITY_LOCK_INSTRUCTION = (
+    "CONSISTENCY REFERENCE: The attached reference image shows the SAME recurring subject that "
+    "appears earlier in this video. Maintain the SAME visual design, colors, shapes and overall "
+    "look as the reference image for this subject, changing only the composition to fit the new "
+    "scene described below. Keep it visually consistent so the video feels like one series."
+)
+_ENTITY_LOCK_TEXT_ONLY = (
+    "CONSISTENCY NOTE: This scene shows a recurring subject that appears multiple times in this "
+    "video. Keep its visual design, colors and overall look consistent with a clean, unified "
+    "series style, so repeated appearances of the same subject feel coherent."
+)
+
 
 def _build_full_prompt(
     user_prompt: str,
@@ -491,20 +505,33 @@ class ParallelImageGenerator:
         self._executor = None  # generate_all で専用 ThreadPoolExecutor を割り当てる
         # Lock は async 関数内で生成する（Python 3.9 対策）
         self._counter_lock: Optional[asyncio.Lock] = None
+        # v3 Step6: エンティティ canonical の完成イベント／確保バイト列（generate_all で構築）
+        self._canonical_events: dict = {}
+        self._canonical_bytes: dict = {}
         self._completed = 0
         self._failed = 0
         self._total = 0
 
-    def _dispatch_sync_generate(self, full_prompt: str, output_path: Path, use_reference: bool = False) -> tuple:
+    def _dispatch_sync_generate(self, full_prompt: str, output_path: Path,
+                                use_reference: bool = False,
+                                ref_bytes_override: Optional[bytes] = None,
+                                ref_mime_override: Optional[str] = None) -> tuple:
         """provider に応じた同期生成関数を呼び分ける。
 
         use_reference=True かつ参照画像があれば、キャラ固定モードで生成する。
+        ref_bytes_override を渡すと、その画像（v3 Step6 のエンティティ canonical 画像など）を
+        参照として使う（self.reference_bytes より優先）。
         """
-        ref = self.reference_bytes if use_reference else None
+        if ref_bytes_override is not None:
+            ref = ref_bytes_override
+            ref_mime = ref_mime_override or "image/png"
+        else:
+            ref = self.reference_bytes if use_reference else None
+            ref_mime = self.reference_mime
         if self.provider == PROVIDER_NANOBANANA:
             return _sync_generate_image_gemini(
                 self.gemini_client, full_prompt, output_path, self.gemini_model,
-                reference_bytes=ref, reference_mime=self.reference_mime,
+                reference_bytes=ref, reference_mime=ref_mime,
             )
         else:  # gpt-image
             return _sync_generate_image_openai(
@@ -534,6 +561,22 @@ class ParallelImageGenerator:
         filename = f"{idx}.png"  # 数字だけのファイル名（№と一致）
         output_path = output_dir / filename
 
+        # v3 Step6: エンティティ follower は、参照する canonical 画像の完成を待ってから
+        # セマフォを取りに行く（待機中はスロットを占有しない＝canonical が確実に進める）。
+        # ここで待つことで「直列化はエンティティ内のみ」を満たし、デッドロックを避ける。
+        entity_role = prompt_entry.get("entity_role")
+        entity_ref_bytes = None
+        # 参照画像の受け渡しは nanobanana のみ（gpt-image は文言のみ＝待機不要）。
+        if entity_role == "follower" and self.provider == PROVIDER_NANOBANANA:
+            canon_idx = prompt_entry.get("entity_ref_of")
+            ev = self._canonical_events.get(canon_idx) if self._canonical_events else None
+            if ev is not None:
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=PER_IMAGE_HARD_TIMEOUT)
+                except asyncio.TimeoutError:
+                    pass  # canonical が間に合わなければ参照なしで進む（壊さない）
+                entity_ref_bytes = (self._canonical_bytes or {}).get(canon_idx)
+
         async with semaphore:
             self.progress_callback({
                 "index": idx,
@@ -549,6 +592,17 @@ class ParallelImageGenerator:
             use_reference = bool(prompt_entry.get("character")) and self.reference_bytes is not None
             if use_reference:
                 full_prompt = _CHARACTER_LOCK_INSTRUCTION + "\n\n" + full_prompt
+
+            # v3 Step6: エンティティ follower の一貫性ロック（キャラ固定シーンとは排他）。
+            # nanobanana は canonical 画像を参照に渡す。gpt-image は文言のみ（v3.0）。
+            ref_override = None
+            if entity_role == "follower" and not use_reference:
+                if self.provider == PROVIDER_NANOBANANA and entity_ref_bytes:
+                    ref_override = entity_ref_bytes
+                    full_prompt = _ENTITY_LOCK_INSTRUCTION + "\n\n" + full_prompt
+                else:
+                    full_prompt = _ENTITY_LOCK_TEXT_ONLY + "\n\n" + full_prompt
+
             loop = asyncio.get_running_loop()
 
             try:
@@ -561,6 +615,7 @@ class ParallelImageGenerator:
                         full_prompt,
                         output_path,
                         use_reference,
+                        ref_override,
                     ),
                     timeout=PER_IMAGE_HARD_TIMEOUT,
                 )
@@ -575,6 +630,18 @@ class ParallelImageGenerator:
                     await loop.run_in_executor(self._executor, add_image_caption, output_path)
                 except Exception:
                     pass
+
+            # v3 Step6: canonical は完成画像を後続(follower)の参照用に確保し、待機を解除する。
+            # 失敗時も必ず解除して follower を無限待機させない（参照なしで進む）。nanobanana のみ。
+            if entity_role == "canonical" and self.provider == PROVIDER_NANOBANANA:
+                if success and self._canonical_bytes is not None:
+                    try:
+                        self._canonical_bytes[idx] = output_path.read_bytes()
+                    except Exception:
+                        self._canonical_bytes[idx] = None
+                ev = self._canonical_events.get(idx) if self._canonical_events else None
+                if ev is not None:
+                    ev.set()
 
             async with self._counter_lock:
                 if success:
@@ -625,6 +692,17 @@ class ParallelImageGenerator:
         # asyncio オブジェクトは running loop の中で生成する
         self._counter_lock = asyncio.Lock()
         semaphore = asyncio.Semaphore(self.concurrency)
+        # v3 Step6: エンティティ canonical の完成イベント群を running loop 内で生成。
+        # follower は対応する canonical のイベントを待ってから生成する（nanobanana のみ）。
+        self._canonical_events = {}
+        self._canonical_bytes = {}
+        if self.provider == PROVIDER_NANOBANANA:
+            for p in prompts:
+                if p.get("entity_role") == "canonical":
+                    ci = p.get("index")
+                    if ci is not None:
+                        self._canonical_events[ci] = asyncio.Event()
+                        self._canonical_bytes[ci] = None
         # 専用スレッドプール（デフォルト executor のスレッド枯渇を防ぐ）。
         # 固まったスレッドが居ても新しい画像生成が進められるよう余裕を持たせる
         self._executor = ThreadPoolExecutor(max_workers=self.concurrency + 4)

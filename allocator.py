@@ -169,3 +169,61 @@ def write_allocation(path, rows: list, routes: dict, alloc: dict) -> None:
         )
     except Exception:
         pass
+
+
+# v3 Step6: エンティティ参照（一貫性ロック）。同じ被写体が 3 回以上 AI 画像に登場する
+# とき、初出を canonical とし、後続は canonical 画像を参照画像にして見た目を揃える。
+_ENTITY_MIN_OCCURRENCE = 3
+
+
+def assign_entity_refs(image_nos: list, routes: dict,
+                       min_occurrence: int = _ENTITY_MIN_OCCURRENCE) -> dict:
+    """AI 画像化する文の並び(image_nos)から、エンティティ参照チェーンを決める（決定論）。
+
+    入力:
+      image_nos: 実際に AI 生成する文番号のリスト（時系列＝生成順の基準）
+      routes:    {no: {entities: [...], ...}}
+    出力:
+      {no: {"role": "canonical"|"follower", "entity": str, "canon_no": int}}
+      （チェーンに属さない文は結果に現れない）
+
+    規則:
+      - 各エンティティの登場回数を image_nos 内で数える
+      - min_occurrence 回以上のものだけ対象
+      - 優先度（登場回数の多い順 → 名前昇順）でグリーディに割り当て、
+        各文は最大 1 チェーンにのみ属する（generator が参照する canonical は 1 つ）
+      - チェーンは初出(最小 no)を canonical、それ以外を follower とする
+      - 未割り当てが 2 件未満（canonical＋follower が作れない）のエンティティはスキップ
+    """
+    pos = {no: i for i, no in enumerate(image_nos)}  # 時系列順の安定ソート用
+
+    # エンティティ → 登場 no リスト（image_nos の順序を維持）
+    ent_rows: dict = {}
+    for no in image_nos:
+        ents = (routes.get(no, {}) or {}).get("entities", []) or []
+        seen = set()
+        for e in ents:
+            if not isinstance(e, str):
+                continue
+            e = e.strip()
+            if not e or e in seen:
+                continue
+            seen.add(e)
+            ent_rows.setdefault(e, []).append(no)
+
+    # 対象エンティティ（min_occurrence 以上）を優先度順に
+    candidates = [(e, nos) for e, nos in ent_rows.items() if len(nos) >= min_occurrence]
+    candidates.sort(key=lambda kv: (-len(kv[1]), kv[0]))
+
+    assigned: dict = {}
+    for entity, nos in candidates:
+        free = [n for n in nos if n not in assigned]
+        if len(free) < 2:
+            continue  # canonical + follower が作れない
+        free.sort(key=lambda n: pos.get(n, 0))  # 時系列順 → 初出が canonical
+        canon = free[0]
+        assigned[canon] = {"role": "canonical", "entity": entity, "canon_no": canon}
+        for n in free[1:]:
+            assigned[n] = {"role": "follower", "entity": entity, "canon_no": canon}
+
+    return assigned

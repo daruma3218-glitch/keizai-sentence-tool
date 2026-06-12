@@ -591,6 +591,34 @@ class SentencePipeline:
                 self._update_row(no, status="thinned")
                 thinned_count += 1
 
+        # ===== v3 Step6: エンティティ参照（一貫性ロック）=====
+        # 同じ被写体（国・組織・繰り返す概念）が 3 回以上 AI 画像に登場するとき、
+        # 初出を canonical とし、後続は canonical 画像を参照に見た目を揃える。
+        # beat_mode（v3 チャンネル）のときのみ。失敗しても生成は止めない。
+        if self.beat_mode and generation_targets:
+            try:
+                from allocator import assign_entity_refs
+                image_nos = [t["index"] for t in generation_targets]
+                ent_assign = assign_entity_refs(image_nos, routes)
+                if ent_assign:
+                    targets_by_no = {t["index"]: t for t in generation_targets}
+                    for no, a in ent_assign.items():
+                        t = targets_by_no.get(no)
+                        if not t:
+                            continue
+                        t["entity_role"] = a["role"]
+                        t["entity_name"] = a["entity"]
+                        if a["role"] == "follower":
+                            t["entity_ref_of"] = a["canon_no"]
+                    n_canon = sum(1 for v in ent_assign.values() if v["role"] == "canonical")
+                    n_follow = sum(1 for v in ent_assign.values() if v["role"] == "follower")
+                    n_kind = len({v["entity"] for v in ent_assign.values()})
+                    self._log("generator",
+                              f"エンティティ参照ロック: 初出 {n_canon} / 後続 {n_follow}（{n_kind} 種の繰り返し被写体）",
+                              "後続は初出画像を参照して見た目を統一します")
+            except Exception as e:
+                self._log("generator", f"エンティティ参照の割当をスキップ（{str(e)[:80]}）")
+
         provider_label = ("nanobanana (Gemini)" if self.provider == PROVIDER_NANOBANANA
                           else f"gpt-image ({self.openai_quality})")
         self._progress(3,
