@@ -518,14 +518,100 @@ def api_manifest(job_id):
     return jsonify(manifest)
 
 
+def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None):
+    """再生成結果を rows_progress.json に反映（chart/map/AI 共通）。"""
+    import json as _json
+    snap_path = job_dir / "rows_progress.json"
+    snap = load_json(snap_path, {"rows": []})
+    for r in snap.get("rows", []):
+        if r.get("no") == no:
+            r["status"] = "ok" if ok else "failed"
+            if filename:
+                r["filename"] = filename
+            if engine:
+                r["engine"] = engine
+            break
+    try:
+        snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra=""):
+    """v3: chart 行（決定論レンダ）を再生成。数値を抽出し直して matplotlib で描き直す。
+
+    chart は AI 生成ではないので、文から chart_spec を再抽出 → renderer で描画する。
+    数値が文に無い等で spec が作れなければ 422 を返す（呼び出し元の UI が表示）。
+    """
+    from utils import get_anthropic_client
+    from router import extract_chart_specs
+    from renderer import render_chart
+    row = snap_row or {}
+    sentence = (row.get("sentence") or "").strip()
+    if not sentence:
+        return jsonify({"error": "グラフ再生成に必要な文が見つかりません（データが消えた可能性）"}), 404
+    block_text = row.get("block_text") or ""
+    chart_theme = defaults.get("chart_theme")
+    try:
+        client = get_anthropic_client(ch_keys.get("anthropic", ""))
+        chart_row = {"no": no, "sentence": sentence, "block_text": block_text}
+        specs = extract_chart_specs(client, [chart_row], extra_context=extra)
+        spec = specs.get(no)
+    except Exception as e:
+        return jsonify({"error": f"グラフの数値抽出に失敗: {str(e)[:140]}"}), 500
+    if not spec:
+        return jsonify({"error": "この文からグラフ化できる数値が見つかりませんでした（数値のある文のみ再生成できます）"}), 422
+    out = job_dir / "images" / f"{no}.png"
+    try:
+        ok = bool(render_chart(spec, out, theme=chart_theme))
+    except Exception as e:
+        return jsonify({"error": f"グラフ描画に失敗: {str(e)[:140]}"}), 500
+    if not ok:
+        return jsonify({"error": "グラフ描画に失敗しました"}), 500
+    _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+    return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "ts": datetime.now().strftime("%H%M%S")})
+
+
+def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra=""):
+    """v3: map 行（決定論レンダ）を再生成。地名を抽出し直して GeoJSON で描き直す。"""
+    from utils import get_anthropic_client
+    from router import extract_map_specs
+    from renderer import render_map
+    row = snap_row or {}
+    sentence = (row.get("sentence") or "").strip()
+    if not sentence:
+        return jsonify({"error": "地図再生成に必要な文が見つかりません（データが消えた可能性）"}), 404
+    block_text = row.get("block_text") or ""
+    chart_theme = defaults.get("chart_theme")
+    try:
+        client = get_anthropic_client(ch_keys.get("anthropic", ""))
+        map_row = {"no": no, "sentence": sentence, "block_text": block_text}
+        specs = extract_map_specs(client, [map_row])
+        spec = specs.get(no)
+    except Exception as e:
+        return jsonify({"error": f"地図の地名抽出に失敗: {str(e)[:140]}"}), 500
+    if not spec:
+        return jsonify({"error": "この文から地図化できる国・地域が特定できませんでした"}), 422
+    out = job_dir / "images" / f"{no}.png"
+    try:
+        ok = bool(render_map(spec, out, theme=chart_theme))
+    except Exception as e:
+        return jsonify({"error": f"地図描画に失敗: {str(e)[:140]}"}), 500
+    if not ok:
+        return jsonify({"error": "地図描画に失敗しました（対象の国/地域を特定できませんでした）"}), 500
+    _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+    return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "ts": datetime.now().strftime("%H%M%S")})
+
+
 @app.route("/api/regenerate/<job_id>/<int:no>", methods=["POST"])
 @login_required
 def api_regenerate(job_id, no):
     """指定シーン(№)の画像を1枚だけ作り直す。
 
+    - chart / map（決定論レンダ）: 文から spec を再抽出して renderer で描き直す
+    - それ以外（illustration / realphoto / diagram など）: AI で作り直す
     任意で extra_instruction（追加指示）を受け取り、プロンプト末尾に足して再生成できる。
     """
-    import json as _json
     from generator import run_parallel_generation, PROVIDER_NANOBANANA
     job_dir = OUTPUT_DIR / job_id
     if not job_dir.exists():
@@ -536,15 +622,34 @@ def api_regenerate(job_id, no):
     job_state = load_json(job_dir / "job.json", {})
     params = manifest or job_state
     prompts = load_json(job_dir / "prompts.json", {"rows": []}).get("rows", [])
+    snap_all = load_json(job_dir / "rows_progress.json", {"rows": []}).get("rows", [])
+    target = next((r for r in prompts if r.get("no") == no), None)
+    snap_row = next((r for r in snap_all if r.get("no") == no), None)
+    extra = (request.form.get("extra_instruction", "") or "").strip()
+
+    # チャンネル設定・キーを解決（再生成も該当チャンネルの設定で）
+    channel_id = params.get("channel_id", "default")
+    channel = get_channel(channel_id)
+    ch_keys = resolve_channel_keys(channel)
+    defaults = channel.get("defaults", {}) or {}
+
+    # 対象行のルート/エンジン（snapshot 優先：chart/map は render エンジン）
+    route = (snap_row or {}).get("route") or (target or {}).get("route") or (target or {}).get("type") or ""
+    engine = (snap_row or {}).get("engine") or ""
+
+    # ===== v3: chart / map は決定論レンダ（AIプロンプトを持たない）→ 抽出し直して描き直す =====
+    if route == "chart" and (engine == "render" or defaults.get("chart_engine") == "render"):
+        return _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra)
+    if route == "map" and (engine == "render" or defaults.get("map_engine") == "render"):
+        return _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra)
+
+    # ===== AI 生成（illustration / realphoto / diagram など）=====
     if not prompts:
         return jsonify({"error": "プロンプト情報が見つかりません（まだ生成準備中か、データが消えています）"}), 404
-
-    # 対象行のプロンプト情報を取得
-    target = next((r for r in prompts if r.get("no") == no), None)
     if not target or not target.get("prompt"):
-        return jsonify({"error": f"№{no} のプロンプトが見つかりません"}), 404
+        return jsonify({"error": f"№{no} のAI生成用プロンプトが見つかりません（chart/map は数値・地名のある文のみ再生成可）"}), 404
 
-    extra = (request.form.get("extra_instruction", "") or "").strip()
+    route = route or "illustration"
     prompt_text = target.get("prompt", "")
     if extra:
         prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
@@ -552,15 +657,10 @@ def api_regenerate(job_id, no):
     provider = params.get("provider", PROVIDER_NANOBANANA)
     openai_quality = params.get("openai_quality") or "medium"
     style_preset = params.get("style_preset", "flat_infographic")
-    route = target.get("route") or target.get("type") or "illustration"
 
-    # チャンネル別 API キーを解決（再生成も該当チャンネルのキーで）
-    channel_id = params.get("channel_id", "default")
-    channel = get_channel(channel_id)
-    ch_keys = resolve_channel_keys(channel)
     # キャラ固定の参照画像（チャンネル設定）。先生が描かれる illustration のみ使用。
     character_ref_path = ""
-    _cref = (channel.get("defaults", {}) or {}).get("character_ref", "").strip()
+    _cref = defaults.get("character_ref", "").strip()
     if _cref:
         _crp = PROJECT_ROOT / _cref
         if _crp.exists():
@@ -596,19 +696,8 @@ def api_regenerate(job_id, no):
     ok = bool(results and results[0].get("success"))
     filename = results[0].get("filename") if ok else None
 
-    # rows_progress.json を更新
-    snap_path = job_dir / "rows_progress.json"
-    snap = load_json(snap_path, {"rows": []})
-    for r in snap.get("rows", []):
-        if r.get("no") == no:
-            r["status"] = "ok" if ok else "failed"
-            if filename:
-                r["filename"] = filename
-            break
-    try:
-        snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    # rows_progress.json を更新（AI 生成は engine=ai のまま）
+    _update_regen_snapshot(job_dir, no, ok, filename=filename)
 
     if not ok:
         return jsonify({"error": results[0].get("error", "生成失敗") if results else "生成失敗"}), 500
