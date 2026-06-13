@@ -296,16 +296,29 @@ def _chart_numbers_in_source(spec: dict, source_text: str) -> bool:
     return matched * 2 >= len(nums)
 
 
-def extract_chart_specs(client, chart_rows: list, log: Optional[Callable] = None) -> dict:
+def extract_chart_specs(client, chart_rows: list, log: Optional[Callable] = None,
+                        extra_context: str = "") -> dict:
     """route=chart の文から chart_spec を抽出する（router 第2段）。
 
     数値は文と block_context にあるものだけ。創作禁止。抽出不能や数値が原文に
     無い場合は None を返す（呼び出し側で chart→diagram(engine:ai) へ降格）。
+    extra_context（v3 Step7: final.json の fact_report 等）があれば、source_note の
+    精度向上のための参考として渡す（数値の新規持ち込みは禁止のまま）。
     戻り値: {no: chart_spec(dict) or None}
     """
     log = log or (lambda *a, **kw: None)
     if not chart_rows:
         return {}
+    # v3 Step7: 検証済みの数値・出典（fact_report 等）。source_note を補うための参考に限る。
+    ctx_block = ""
+    ec = (extra_context or "").strip()
+    if ec:
+        ctx_block = (
+            "\n\n【検証済みの数値・出典情報（source_note 精度向上の参考）】\n"
+            "※原稿の事実確認レポート等です。グラフの数値は必ず各文/block_context の値を使い、"
+            "ここから新しい数値を持ち込まないこと。対応する数値の出典を補える場合のみ source_note に使う。\n"
+            + ec[:2000]
+        )
     out = {}
     for i in range(0, len(chart_rows), CHUNK_SIZE):
         batch = chart_rows[i:i + CHUNK_SIZE]
@@ -331,7 +344,7 @@ def extract_chart_specs(client, chart_rows: list, log: Optional[Callable] = None
 3. 比較対象が1つしかない(単一の値) → "big_number" 型にする。
 4. chart_type は bar|line|pie|big_number|comparison|timeline のいずれか。
 5. title は短く（その図が何を示すか）。
-6. source_note は文/block_context に出典が**書かれている場合のみ**。無ければ省略（創作禁止）。
+6. source_note は文/block_context（または下記の検証済み出典情報）に出典が**ある場合のみ**。無ければ省略（創作禁止）。{ctx_block}
 
 【出力 JSON（各 no につき1オブジェクト・入力と同数）】
 [

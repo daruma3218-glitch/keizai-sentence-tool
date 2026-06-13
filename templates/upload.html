@@ -89,17 +89,17 @@
             </label>
 
             <div id="dropZone" class="drop-zone border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer bg-white">
-              <input type="file" id="fileInput" name="manuscript_file" accept=".txt,.md,.docx" class="hidden">
+              <input type="file" id="fileInput" name="manuscript_file" accept=".txt,.md,.docx,.json" class="hidden">
               <svg class="w-10 h-10 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 8.25H7.5a2.25 2.25 0 00-2.25 2.25v9a2.25 2.25 0 002.25 2.25h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25H15M9 12l3 3m0 0l3-3m-3 3V2.25"/>
               </svg>
-              <p id="dropText" class="text-sm text-gray-600">クリックまたはドラッグ&ドロップで .txt / .md / .docx ファイル</p>
+              <p id="dropText" class="text-sm text-gray-600">クリックまたはドラッグ&ドロップで .txt / .md / .docx / final.json ファイル</p>
               <p class="text-xs text-gray-400 mt-1">Googleドキュメントは「ファイル→ダウンロード→Word(.docx)」でDLしてアップ。見出しスタイルが章タイトルになります</p>
-              <p class="text-xs text-gray-400 mt-1">下のテキストエリアに直接貼り付けでもOK</p>
+              <p class="text-xs text-gray-400 mt-1">原稿パイプラインの <span class="font-medium text-gray-500">final.json</span> をそのままアップ/貼り付けでも直結（タイトル・検証済み出典も自動取り込み）。下のテキストエリアに直接貼り付けでもOK</p>
             </div>
 
             <textarea id="manuscriptText" name="manuscript_text" rows="12"
-                      placeholder="ここに完成原稿を貼り付け（章の区切りは空行2〜3行）"
+                      placeholder="ここに完成原稿を貼り付け（章の区切りは空行2〜3行）。原稿パイプラインの final.json をそのまま貼り付けてもOK"
                       class="mt-3 w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm resize-y"></textarea>
             <div class="text-xs text-gray-400 mt-1 text-right">
               <span id="charCount">0</span> 文字（目安: 1000 文字 ≒ 20〜40 センテンス ≒ 20〜40 枚生成）

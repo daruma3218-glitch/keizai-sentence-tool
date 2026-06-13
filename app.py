@@ -202,7 +202,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
                          web_image_count: int, max_diagrams: int, route_mode: str,
                          worldview_desc: str = "", verify_diagrams: bool = True,
                          channel_id: str = "default", ch_keys: dict = None,
-                         character_ref_path: str = ""):
+                         character_ref_path: str = "",
+                         title_override: str = "", fact_context: str = ""):
     job_dir = OUTPUT_DIR / job_id
     ch_keys = ch_keys or {}
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
@@ -247,6 +248,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             chars_per_sec=(get_channel(channel_id).get("defaults") or {}).get("chars_per_sec", 5.5),
             realphoto_watermark=bool((get_channel(channel_id).get("defaults") or {}).get("realphoto_watermark", False)),
             chart_theme=(get_channel(channel_id).get("defaults") or {}).get("chart_theme"),
+            title_override=title_override,
+            fact_context=fact_context,
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,
@@ -375,9 +378,13 @@ def start_job():
         hint = f"（チャンネル「{channel.get('name','')}」用に {pfx}_... を設定するか共通キーを設定）" if pfx else ""
         return jsonify({"error": f"{', '.join(missing)} が設定されていません{hint}"}), 400
 
-    # 原稿取得（.docx は見出しスタイルを章として解析）
+    # 原稿取得（.docx は見出しを章として解析 / .json または貼り付けJSONは原稿パイプライン final.json 直結）
+    from utils import parse_final_json, extract_from_final_json
     manuscript_text = ""
     prebuilt_chapters = None
+    title_override = ""      # v3 Step7: final.json の tentative_title をタイトルに
+    fact_context = ""        # v3 Step7: final.json の fact_report 等を chart 抽出の文脈に
+    _final_obj = None
     if "manuscript_file" in request.files and request.files["manuscript_file"].filename:
         f = request.files["manuscript_file"]
         fname = f.filename.lower()
@@ -391,11 +398,26 @@ def start_job():
             except Exception as e:
                 return jsonify({"error": f".docx の解析に失敗: {str(e)[:120]}"}), 400
         else:
-            manuscript_text = raw.decode("utf-8", errors="ignore")
+            decoded = raw.decode("utf-8", errors="ignore")
+            _final_obj = parse_final_json(decoded)
+            if fname.endswith(".json") and _final_obj is None:
+                return jsonify({"error": "final.json の形式が不正です（本文の final キーが見つかりません）"}), 400
+            if _final_obj is None:
+                manuscript_text = decoded
     elif request.form.get("manuscript_text"):
-        manuscript_text = request.form["manuscript_text"]
+        pasted = request.form["manuscript_text"]
+        _final_obj = parse_final_json(pasted)  # JSON を貼り付けても final.json として扱う
+        if _final_obj is None:
+            manuscript_text = pasted
     else:
         return jsonify({"error": "原稿が入力されていません"}), 400
+
+    # final.json から本文・タイトル・検証文脈を取り出す（存在しないキーは任意扱い）
+    if _final_obj is not None:
+        _info = extract_from_final_json(_final_obj)
+        manuscript_text = _info["manuscript"]
+        title_override = _info["title"]
+        fact_context = _info["fact_context"]
 
     if len(manuscript_text.strip()) < 100:
         return jsonify({"error": "原稿が短すぎます（100文字以上必要）"}), 400
@@ -448,7 +470,7 @@ def start_job():
         target=_run_pipeline_thread,
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
               skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
-              channel_id, ch_keys, character_ref_path),
+              channel_id, ch_keys, character_ref_path, title_override, fact_context),
         daemon=True,
     )
     thread.start()

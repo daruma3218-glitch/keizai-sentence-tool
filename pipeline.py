@@ -63,6 +63,8 @@ class SentencePipeline:
         chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
         realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
+        title_override: str = "",           # v3 Step7: final.json の tentative_title
+        fact_context: str = "",             # v3 Step7: final.json の検証済み数値・出典
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
@@ -92,6 +94,8 @@ class SentencePipeline:
         self.chars_per_sec = float(chars_per_sec or 5.5)
         self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
         self.chart_theme = chart_theme or None
+        self.title_override = (title_override or "").strip()   # v3 Step7
+        self.fact_context = (fact_context or "").strip()       # v3 Step7
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
         self.item_callback = item_callback or (lambda info: None)
@@ -255,7 +259,8 @@ class SentencePipeline:
         chapters = split_result["chapters"]
         rows = split_result["rows"]
         total_sentences = split_result["total_sentences"]
-        title = analysis.get("title", "無題")
+        # v3 Step7: final.json の tentative_title があれば最優先（無ければ分解で推定）
+        title = self.title_override or analysis.get("title", "無題")
 
         # 上限を超えるなら警告して切り詰める
         if total_sentences > self.max_diagrams:
@@ -354,7 +359,8 @@ class SentencePipeline:
                 chart_rows = [r for r in rows if r.get("route") == "chart" and self._wants_image(r)]
                 if chart_rows:
                     self._progress(2, "chart の数値を抽出して図を描画中...", 20)
-                    specs = extract_chart_specs(client, chart_rows, log=self._log)
+                    specs = extract_chart_specs(client, chart_rows, log=self._log,
+                                                extra_context=self.fact_context)
                     to_render = []
                     for r in chart_rows:
                         spec = specs.get(r["no"])
