@@ -75,6 +75,71 @@ def test_regenerate_chart_without_numbers_is_422(tmp_path, monkeypatch):
     assert isinstance(resp, tuple) and resp[1] == 422  # (Response, 422)
 
 
+def test_regenerate_chart_uses_saved_spec_without_llm(tmp_path, monkeypatch):
+    """保存済み chart_spec があり追加指示が無ければ、LLM を呼ばずにそのまま描き直す。"""
+    job_dir = tmp_path / "job_saved"
+    (job_dir / "images").mkdir(parents=True)
+
+    called = {"extract": 0, "spec": None}
+
+    def boom(*a, **k):
+        called["extract"] += 1
+        raise AssertionError("保存specがあるのに抽出を呼んではいけない")
+    monkeypatch.setattr(router, "extract_chart_specs", boom)
+
+    def fake_render_chart(spec, out, theme=None):
+        called["spec"] = spec
+        _png(out)
+        return True
+    monkeypatch.setattr(renderer, "render_chart", fake_render_chart)
+
+    saved = {"chart_type": "bar", "series": [{"label": "A", "value": 6.3}]}
+    snap_row = {"no": 3, "sentence": "軍事費はGDP比6.3%。", "block_text": "",
+                "route": "chart", "engine": "render", "chart_spec": saved}
+    with appmod.app.app_context():
+        resp = appmod._regenerate_render_chart(
+            job_dir, 3, snap_row, {"anthropic": "k"}, {}, extra="")
+
+    body = resp.get_json()
+    assert body.get("ok") is True
+    assert called["extract"] == 0           # LLM 抽出は呼ばれていない
+    assert called["spec"] == saved          # 保存 spec をそのまま描いた
+
+
+def test_regenerate_chart_instruction_forces_reextract(tmp_path, monkeypatch):
+    """追加指示があれば保存 spec を使わず抽出し直す（数値・体裁を変えられる）。"""
+    job_dir = tmp_path / "job_instr"
+    (job_dir / "images").mkdir(parents=True)
+
+    new_spec = {"chart_type": "pie", "series": [{"label": "X", "value": 50}]}
+    seen_ctx = {}
+
+    def fake_extract(client, rows, log=None, extra_context=""):
+        seen_ctx["block_text"] = rows[0].get("block_text", "")
+        return {rows[0]["no"]: new_spec}
+    monkeypatch.setattr(router, "extract_chart_specs", fake_extract)
+    monkeypatch.setattr(utils, "get_anthropic_client", lambda key="": object())
+
+    rendered = {}
+    def fake_render_chart(spec, out, theme=None):
+        rendered["spec"] = spec
+        _png(out)
+        return True
+    monkeypatch.setattr(renderer, "render_chart", fake_render_chart)
+
+    saved = {"chart_type": "bar", "series": [{"label": "A", "value": 1}]}
+    snap_row = {"no": 4, "sentence": "ある文。", "block_text": "段落。",
+                "route": "chart", "engine": "render", "chart_spec": saved}
+    with appmod.app.app_context():
+        resp = appmod._regenerate_render_chart(
+            job_dir, 4, snap_row, {"anthropic": "k"}, {}, extra="円グラフで X=50")
+
+    body = resp.get_json()
+    assert body.get("ok") is True
+    assert rendered["spec"] == new_spec                  # 抽出し直した spec で描いた
+    assert "円グラフで X=50" in seen_ctx["block_text"]   # 指示が文脈に入っている
+
+
 def test_regenerate_map_rerenders(tmp_path, monkeypatch):
     job_dir = tmp_path / "job_map"
     (job_dir / "images").mkdir(parents=True)

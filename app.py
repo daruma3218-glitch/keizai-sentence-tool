@@ -538,30 +538,50 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None):
 
 
 def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra=""):
-    """v3: chart 行（決定論レンダ）を再生成。数値を抽出し直して matplotlib で描き直す。
+    """v3: chart 行（決定論レンダ）を再生成。
 
-    chart は AI 生成ではないので、文から chart_spec を再抽出 → renderer で描画する。
-    数値が文に無い等で spec が作れなければ 422 を返す（呼び出し元の UI が表示）。
+    1) 保存済み chart_spec があり追加指示が無ければ、その spec をそのまま描き直す
+       （決定論・確実に同じグラフ）。
+    2) 保存 spec が無い（旧ジョブ）or 追加指示あり → 文（＋指示）から spec を抽出し直す。
+       追加指示は block_context に足すので、ユーザーが数値を補えば原文照合も通る。
     """
-    from utils import get_anthropic_client
-    from router import extract_chart_specs
     from renderer import render_chart
     row = snap_row or {}
-    sentence = (row.get("sentence") or "").strip()
-    if not sentence:
-        return jsonify({"error": "グラフ再生成に必要な文が見つかりません（データが消えた可能性）"}), 404
-    block_text = row.get("block_text") or ""
     chart_theme = defaults.get("chart_theme")
-    try:
-        client = get_anthropic_client(ch_keys.get("anthropic", ""))
-        chart_row = {"no": no, "sentence": sentence, "block_text": block_text}
-        specs = extract_chart_specs(client, [chart_row], extra_context=extra)
-        spec = specs.get(no)
-    except Exception as e:
-        return jsonify({"error": f"グラフの数値抽出に失敗: {str(e)[:140]}"}), 500
-    if not spec:
-        return jsonify({"error": "この文からグラフ化できる数値が見つかりませんでした（数値のある文のみ再生成できます）"}), 422
     out = job_dir / "images" / f"{no}.png"
+    saved_spec = row.get("chart_spec")
+
+    # 1) 保存 spec をそのまま再描画（追加指示が無いとき）
+    if saved_spec and not extra:
+        try:
+            if render_chart(saved_spec, out, theme=chart_theme):
+                _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+                return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
+                                "ts": datetime.now().strftime("%H%M%S")})
+        except Exception:
+            pass  # 失敗したら抽出し直しへフォールバック
+
+    # 2) 抽出し直し（旧ジョブ or 追加指示で数値・体裁を変えたいとき）
+    from utils import get_anthropic_client
+    from router import extract_chart_specs
+    sentence = (row.get("sentence") or "").strip()
+    if not sentence and not saved_spec:
+        return jsonify({"error": "グラフ再生成に必要な文が見つかりません（データが消えた可能性）"}), 404
+    ctx = row.get("block_text") or ""
+    if extra:
+        ctx = (ctx + "\n" + extra).strip()  # 追加指示を文脈に（数値を補える＝原文照合も通る）
+    spec = None
+    if sentence:
+        try:
+            client = get_anthropic_client(ch_keys.get("anthropic", ""))
+            specs = extract_chart_specs(client, [{"no": no, "sentence": sentence, "block_text": ctx}])
+            spec = specs.get(no)
+        except Exception as e:
+            if not saved_spec:
+                return jsonify({"error": f"グラフの数値抽出に失敗: {str(e)[:140]}"}), 500
+    spec = spec or saved_spec  # 抽出できなければ保存 spec にフォールバック
+    if not spec:
+        return jsonify({"error": "この文からグラフ化できる数値が読み取れませんでした。再生成ダイアログに数値（例: ロシア 6.3%, NATO 2.1%）を書くと作り直せます。"}), 422
     try:
         ok = bool(render_chart(spec, out, theme=chart_theme))
     except Exception as e:
@@ -573,26 +593,42 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="")
 
 
 def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra=""):
-    """v3: map 行（決定論レンダ）を再生成。地名を抽出し直して GeoJSON で描き直す。"""
-    from utils import get_anthropic_client
-    from router import extract_map_specs
+    """v3: map 行（決定論レンダ）を再生成。保存 map_spec を優先、無ければ抽出し直す。"""
     from renderer import render_map
     row = snap_row or {}
-    sentence = (row.get("sentence") or "").strip()
-    if not sentence:
-        return jsonify({"error": "地図再生成に必要な文が見つかりません（データが消えた可能性）"}), 404
-    block_text = row.get("block_text") or ""
     chart_theme = defaults.get("chart_theme")
-    try:
-        client = get_anthropic_client(ch_keys.get("anthropic", ""))
-        map_row = {"no": no, "sentence": sentence, "block_text": block_text}
-        specs = extract_map_specs(client, [map_row])
-        spec = specs.get(no)
-    except Exception as e:
-        return jsonify({"error": f"地図の地名抽出に失敗: {str(e)[:140]}"}), 500
-    if not spec:
-        return jsonify({"error": "この文から地図化できる国・地域が特定できませんでした"}), 422
     out = job_dir / "images" / f"{no}.png"
+    saved_spec = row.get("map_spec")
+
+    if saved_spec and not extra:
+        try:
+            if render_map(saved_spec, out, theme=chart_theme):
+                _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+                return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
+                                "ts": datetime.now().strftime("%H%M%S")})
+        except Exception:
+            pass
+
+    from utils import get_anthropic_client
+    from router import extract_map_specs
+    sentence = (row.get("sentence") or "").strip()
+    if not sentence and not saved_spec:
+        return jsonify({"error": "地図再生成に必要な文が見つかりません（データが消えた可能性）"}), 404
+    ctx = row.get("block_text") or ""
+    if extra:
+        ctx = (ctx + "\n" + extra).strip()
+    spec = None
+    if sentence:
+        try:
+            client = get_anthropic_client(ch_keys.get("anthropic", ""))
+            specs = extract_map_specs(client, [{"no": no, "sentence": sentence, "block_text": ctx}])
+            spec = specs.get(no)
+        except Exception as e:
+            if not saved_spec:
+                return jsonify({"error": f"地図の地名抽出に失敗: {str(e)[:140]}"}), 500
+    spec = spec or saved_spec
+    if not spec:
+        return jsonify({"error": "この文から地図化できる国・地域が特定できませんでした。再生成ダイアログに国名を書くと作り直せます。"}), 422
     try:
         ok = bool(render_map(spec, out, theme=chart_theme))
     except Exception as e:

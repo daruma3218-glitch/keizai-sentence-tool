@@ -863,7 +863,9 @@ class SentencePipeline:
             self._update_row(no, status="generating", engine="render")
             ok = render_chart(r.get("chart_spec"), self.images_dir / f"{no}.png", theme=self.chart_theme)
             if ok:
-                self._update_row(no, status="ok", filename=f"{no}.png", engine="render")
+                # chart_spec を保存しておく（再生成で確実に同じグラフを描き直すため）
+                self._update_row(no, status="ok", filename=f"{no}.png", engine="render",
+                                 chart_spec=r.get("chart_spec"))
                 done += 1
             else:
                 r["route"] = "diagram"
@@ -891,7 +893,9 @@ class SentencePipeline:
             self._update_row(no, status="generating", engine="render")
             ok = render_map(r.get("map_spec"), self.images_dir / f"{no}.png", theme=self.chart_theme)
             if ok:
-                self._update_row(no, status="ok", filename=f"{no}.png", engine="render")
+                # map_spec を保存しておく（再生成で確実に同じ地図を描き直すため）
+                self._update_row(no, status="ok", filename=f"{no}.png", engine="render",
+                                 map_spec=r.get("map_spec"))
                 done += 1
             else:
                 r["route"] = "illustration"
