@@ -73,6 +73,75 @@ def _fmt_val(v, unit: str = "") -> str:
     return f"{s}{unit}" if unit else s
 
 
+def _fmt_num_jp(v) -> str:
+    """大きな数を 兆/億/万 で読みやすく短く整形（巨大数字の表示崩れ・桁見間違い防止）。
+
+    例: 300000000 → "3億" / 1200000 → "120万" / 1000000000000 → "1兆".
+    端数があり崩れる場合（10^4 の倍数でない等）はカンマ区切りにフォールバックして
+    正確さを保つ。小数もそのまま（_fmt_num）。
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f != int(f):
+        return _fmt_num(v)
+    n = int(f)
+    neg = n < 0
+    n = abs(n)
+    # 10^4 未満、または 10^4 の倍数でない（万未満の端数がある）→ カンマ表記で正確に
+    if n < 10000 or n % 10000 != 0:
+        return _fmt_num(v)
+    cho = n // 10**12
+    oku = (n % 10**12) // 10**8
+    man = (n % 10**8) // 10**4
+    parts = []
+    if cho:
+        parts.append(f"{cho:,}兆")  # 兆は桁が大きくなり得るのでカンマ可
+    if oku:
+        parts.append(f"{oku}億")    # 億・万は 0〜9999 なのでカンマ不要
+    if man:
+        parts.append(f"{man}万")
+    if not parts:
+        return _fmt_num(v)
+    s = "".join(parts)
+    return f"-{s}" if neg else s
+
+
+def _fmt_val_jp(v, unit: str = "") -> str:
+    s = _fmt_num_jp(v)
+    return f"{s}{unit}" if unit else s
+
+
+def _fit_fontsize(fig, s: str, max_w_frac: float, base_size: float,
+                  min_size: float, weight: str = "bold") -> float:
+    """文字列 s が図幅の max_w_frac 以内に収まる最大フォントサイズを返す（実寸計測）。
+
+    巨大数字（例: 300,000,000円）が固定サイズで隣や中央に食い込む崩れを防ぐ。
+    計測に失敗しても落ちないよう、文字数からの概算にフォールバックする。
+    """
+    if not s:
+        return base_size
+    fig_w_px = fig.get_size_inches()[0] * fig.dpi
+    target = max_w_frac * fig_w_px
+    w = None
+    try:
+        renderer = fig.canvas.get_renderer()
+        t = fig.text(0.5, 0.5, s, fontsize=base_size, fontweight=weight)
+        try:
+            w = t.get_window_extent(renderer=renderer).width
+        finally:
+            t.remove()
+    except Exception:
+        w = None
+    if not w or w <= 0:
+        # フォールバック: 全角想定で広めに概算（収めきれず崩れるより安全側）
+        w = len(s) * base_size * 0.7
+    if w <= target:
+        return base_size
+    return max(min_size, base_size * target / w)
+
+
 def _series(spec: dict):
     """series を [(label, value)] に正規化。value は数値化できるものだけ。"""
     out = []
@@ -209,18 +278,27 @@ def _draw_big_number(fig, spec: dict, theme: dict):
     if val is None:
         raise ValueError("big_number: 値がない")
     unit = spec.get("unit", "")
-    fig.text(0.5, 0.50, _fmt_num(val), ha="center", va="center",
-             fontsize=260, fontweight="bold", color=theme["main"])
+    # 巨大数字は 億/万 表記＋実寸で図幅90%に収める（桁あふれ・見間違い防止）
+    num_str = _fmt_num_jp(val)
+    nsize = _fit_fontsize(fig, num_str, 0.90, 260, 70)
+    fig.text(0.5, 0.50, num_str, ha="center", va="center",
+             fontsize=nsize, fontweight="bold", color=theme["main"])
     if unit:
+        usize = _fit_fontsize(fig, unit, 0.5, 64, 30)
         fig.text(0.5, 0.30, unit, ha="center", va="center",
-                 fontsize=64, fontweight="bold", color=theme["accent"])
+                 fontsize=usize, fontweight="bold", color=theme["accent"])
     if label:
+        lsize = _fit_fontsize(fig, label, 0.9, 46, 24, weight="normal")
         fig.text(0.5, 0.20, label, ha="center", va="center",
-                 fontsize=46, color=theme["text"])
+                 fontsize=lsize, color=theme["text"])
 
 
 def _draw_comparison(fig, spec: dict, theme: dict):
-    """2値（以上）を巨大数字で横並び比較（A vs B）。"""
+    """2値（以上）を巨大数字で横並び比較（A vs B）。
+
+    各値は 億/万 表記にし、自分のスロット幅に収まるようフォントを自動縮小する。
+    桁数の違う数字（例: 300円 と 3億円）が中央や隣に食い込む崩れを構造的に防ぐ。
+    """
     data = _series(spec)
     if len(data) < 2:
         raise ValueError("comparison: 2つ以上の値が必要")
@@ -229,16 +307,23 @@ def _draw_comparison(fig, spec: dict, theme: dict):
     hi = spec.get("highlight_index")
     n = len(data)
     slot = 1.0 / n
+    # 値テキスト（億/万）と、各スロット82%に収める共通フォントサイズ（統一感のため最小に合わせる）
+    val_texts = [_fmt_val_jp(val, unit) for (_, val) in data]
+    vsize = min(_fit_fontsize(fig, t, slot * 0.82, 150, 40) for t in val_texts)
+    # ラベルもスロット90%に収める
+    lsize = min(_fit_fontsize(fig, lab, slot * 0.9, 44, 22, weight="normal")
+                for (lab, _) in data)
     for i, (label, val) in enumerate(data):
         cx = slot * (i + 0.5)
         color = theme["accent"] if (isinstance(hi, int) and i == hi) else theme["main"]
-        fig.text(cx, 0.52, _fmt_val(val, unit), ha="center", va="center",
-                 fontsize=150, fontweight="bold", color=color)
+        fig.text(cx, 0.54, val_texts[i], ha="center", va="center",
+                 fontsize=vsize, fontweight="bold", color=color)
         fig.text(cx, 0.30, label, ha="center", va="center",
-                 fontsize=44, color=theme["text"])
-        if i < n - 1:
-            fig.text(slot * (i + 1), 0.50, "vs", ha="center", va="center",
-                     fontsize=56, color="#9CA3AF")
+                 fontsize=lsize, color=theme["text"])
+    # スロット境界に "vs"（数値とは別レイヤ・小さめ。値が82%なので境界に隙間が残る）
+    for i in range(n - 1):
+        fig.text(slot * (i + 1), 0.54, "vs", ha="center", va="center",
+                 fontsize=40, color="#9CA3AF", zorder=5)
 
 
 def _draw_timeline(fig, spec: dict, theme: dict):
