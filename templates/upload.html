@@ -69,6 +69,8 @@
               <option value="{{ c.id }}"
                 data-defaults='{{ c.defaults | tojson }}'
                 data-ready="{{ '1' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '0' }}"
+                data-has-gemini="{{ '1' if c._has_gemini else '0' }}"
+                data-has-openai="{{ '1' if c._has_openai else '0' }}"
                 data-keys="{{ '1' if c._has_openai or c._has_gemini else '0' }}">
                 {{ c.name }}{% if c.api_env_prefix %}（専用キー: {{ '設定済み' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '未設定' }}）{% else %}（共通キー: {{ '設定済み' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '未設定' }}）{% endif %}
               </option>
@@ -123,11 +125,7 @@
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2 mb-0.5">
                         <p class="text-sm font-semibold text-gray-900">nanobanana</p>
-                        {% if has_gemini %}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">利用可</span>
-                        {% else %}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">キー未設定</span>
-                        {% endif %}
+                        <span id="nbKeyBadge" class="text-[10px] px-1.5 py-0.5 rounded-full font-medium {{ 'bg-green-100 text-green-700' if has_gemini else 'bg-gray-100 text-gray-500' }}">{{ '利用可' if has_gemini else 'キー未設定' }}</span>
                       </div>
                       <p class="text-[11px] text-gray-500 leading-snug">Gemini Flash Image。<strong>高速・安価</strong></p>
                     </div>
@@ -142,11 +140,7 @@
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2 mb-0.5">
                         <p class="text-sm font-semibold text-gray-900">gpt-image-2</p>
-                        {% if has_openai %}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">利用可</span>
-                        {% else %}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">キー未設定</span>
-                        {% endif %}
+                        <span id="giKeyBadge" class="text-[10px] px-1.5 py-0.5 rounded-full font-medium {{ 'bg-green-100 text-green-700' if has_openai else 'bg-amber-100 text-amber-700' }}">{{ '利用可' if has_openai else 'キー未設定' }}</span>
                       </div>
                       <p class="text-[11px] text-gray-500 leading-snug">OpenAI ChatGPT-image。<strong>高品質</strong></p>
                     </div>
@@ -459,6 +453,17 @@
       // 選択中チャンネルのキー有無で警告を出し分け（バナーは全体ではなく選択ch基準）
       const warn = document.getElementById('keyWarning');
       if (warn) warn.classList.toggle('hidden', opt.getAttribute('data-ready') === '1');
+      // 画像モデルの「利用可/キー未設定」バッジも選択中チャンネル基準に更新
+      setKeyBadge('nbKeyBadge', opt.getAttribute('data-has-gemini') === '1');
+      setKeyBadge('giKeyBadge', opt.getAttribute('data-has-openai') === '1');
+    }
+
+    function setKeyBadge(id, has) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = has ? '利用可' : 'キー未設定';
+      el.className = 'text-[10px] px-1.5 py-0.5 rounded-full font-medium '
+        + (has ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500');
     }
     const channelSelect = document.getElementById('channelSelect');
     if (channelSelect) {
