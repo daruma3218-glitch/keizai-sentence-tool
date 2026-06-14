@@ -47,22 +47,16 @@
         <h1 class="text-3xl font-bold text-gray-900 mb-2">新しいセンテンス図解を作成</h1>
         <p class="text-sm text-gray-500 mb-6">原稿を章/ブロック/センテンスに分解して、各文に図解を割り当てます</p>
 
-        {% if not has_anthropic or (not has_gemini and not has_openai) %}
-        <div class="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+        <!-- 選択中チャンネルのキー有無で出し分け（JS が applyChannelDefaults で制御） -->
+        <div id="keyWarning" class="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-xl hidden">
           <div class="flex gap-3">
             <svg class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
             <div>
-              <p class="text-sm font-medium text-amber-800">API キーが未設定です</p>
-              <div class="text-xs text-amber-700 mt-1 space-y-0.5">
-                {% if not has_anthropic %}<p>ANTHROPIC_API_KEY（必須）</p>{% endif %}
-                {% if not has_gemini %}<p>GEMINI_API_KEY（nanobanana 用）</p>{% endif %}
-                {% if not has_openai %}<p>OPENAI_API_KEY（gpt-image-2 用）</p>{% endif %}
-              </div>
-              <p class="text-xs text-amber-600 mt-2"><code class="bg-amber-100 px-1.5 py-0.5 rounded">.env</code> に設定してください</p>
+              <p class="text-sm font-medium text-amber-800">このチャンネルの API キーが未設定です</p>
+              <p class="text-xs text-amber-700 mt-1">選択中のチャンネルに対応する API キー（そのチャンネルの専用キー、または共通キー）が Render に設定されていません。キーを設定するか、キー設定済みのチャンネルを選んでください。</p>
             </div>
           </div>
         </div>
-        {% endif %}
 
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
 
@@ -74,8 +68,9 @@
               {% for c in channels %}
               <option value="{{ c.id }}"
                 data-defaults='{{ c.defaults | tojson }}'
+                data-ready="{{ '1' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '0' }}"
                 data-keys="{{ '1' if c._has_openai or c._has_gemini else '0' }}">
-                {{ c.name }}{% if c.api_env_prefix %}（専用キー: {{ '設定済み' if (c._has_openai or c._has_gemini) else '未設定' }}）{% else %}（共通キー）{% endif %}
+                {{ c.name }}{% if c.api_env_prefix %}（専用キー: {{ '設定済み' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '未設定' }}）{% else %}（共通キー: {{ '設定済み' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '未設定' }}）{% endif %}
               </option>
               {% endfor %}
             </select>
@@ -461,6 +456,9 @@
       setRange('concurrency', 'concurrencyLabel', d.concurrency);
       setRange('maxDiagrams', 'maxDiagramsLabel', d.max_diagrams);
       setRange('webImageCount', 'webImageCountLabel', d.web_image_count);
+      // 選択中チャンネルのキー有無で警告を出し分け（バナーは全体ではなく選択ch基準）
+      const warn = document.getElementById('keyWarning');
+      if (warn) warn.classList.toggle('hidden', opt.getAttribute('data-ready') === '1');
     }
     const channelSelect = document.getElementById('channelSelect');
     if (channelSelect) {
