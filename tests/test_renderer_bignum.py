@@ -77,6 +77,38 @@ def test_comparison_huge_number_renders(tmp_path):
         assert im.size == (1920, 1080)
 
 
+def test_comparison_long_unit_three_values_does_not_overlap():
+    """長い単位の3列比較は、数値と単位を分けてスロット内に収める。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    spec = {
+        "chart_type": "comparison",
+        "title": "天然ガス価格の比較",
+        "unit": "ドル／1000立方メートル",
+        "highlight_index": 0,
+        "series": [
+            {"label": "ロシア供給価格", "value": 129},
+            {"label": "EU市場価格（下限）", "value": 350},
+            {"label": "EU市場価格（上限）", "value": 430},
+        ],
+    }
+    fig = plt.figure(figsize=(renderer._W_IN, renderer._H_IN), dpi=renderer._DPI)
+    try:
+        renderer._draw_comparison(fig, spec, THEME)
+        fig.canvas.draw()
+        rr = fig.canvas.get_renderer()
+        # 数値行と単位行の各テキストが隣スロットへ食い込まないことを確認する。
+        slot_w = fig.bbox.width / 3
+        for text in fig.texts:
+            y = text.get_position()[1]
+            if 0.44 <= y <= 0.60 and text.get_text() != "vs":
+                bb = text.get_window_extent(renderer=rr)
+                assert bb.width <= slot_w * 0.82
+    finally:
+        plt.close(fig)
+
+
 def test_big_number_huge_renders(tmp_path):
     spec = {"chart_type": "big_number", "title": "1等賞金", "unit": "円", "value": 300000000}
     out = tmp_path / "big.png"

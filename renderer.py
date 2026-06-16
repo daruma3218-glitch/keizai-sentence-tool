@@ -324,23 +324,37 @@ def _draw_comparison(fig, spec: dict, theme: dict):
     hi = spec.get("highlight_index")
     n = len(data)
     slot = 1.0 / n
-    # 値テキスト（億/万）と、各スロット82%に収める共通フォントサイズ（統一感のため最小に合わせる）
-    val_texts = [_fmt_val_jp(val, unit) for (_, val) in data]
-    vsize = min(_fit_fontsize(fig, t, slot * 0.82, 150, 40) for t in val_texts)
+    # 単位が長い（例: ドル/1000立方メートル）場合は、数値と単位を分ける。
+    # 1行で「350ドル/1000立方メートル」を3列並べると、隣の値と必ず衝突するため。
+    split_value_unit = bool(unit) and (n >= 3 or len(str(unit)) >= 5)
+    if split_value_unit:
+        val_texts = [_fmt_num_jp(val) for (_, val) in data]
+        unit_text = str(unit)
+        vsize = min(_fit_fontsize(fig, t, slot * 0.78, 132, 44) for t in val_texts)
+        usize = _fit_fontsize(fig, unit_text, slot * 0.78, 34, 16, weight="normal")
+    else:
+        val_texts = [_fmt_val_jp(val, unit) for (_, val) in data]
+        vsize = min(_fit_fontsize(fig, t, slot * 0.78, 150, 34) for t in val_texts)
+        unit_text = ""
+        usize = 0
     # ラベルもスロット90%に収める
     lsize = min(_fit_fontsize(fig, lab, slot * 0.9, 44, 22, weight="normal")
                 for (lab, _) in data)
     for i, (label, val) in enumerate(data):
         cx = slot * (i + 0.5)
         color = theme["accent"] if (isinstance(hi, int) and i == hi) else theme["main"]
-        fig.text(cx, 0.54, val_texts[i], ha="center", va="center",
+        fig.text(cx, 0.57 if split_value_unit else 0.54, val_texts[i], ha="center", va="center",
                  fontsize=vsize, fontweight="bold", color=color, zorder=Z_TEXT)
+        if split_value_unit and unit_text:
+            fig.text(cx, 0.47, unit_text, ha="center", va="center",
+                     fontsize=usize, color=theme["text"], zorder=Z_TEXT)
         fig.text(cx, 0.30, label, ha="center", va="center",
                  fontsize=lsize, color=theme["text"], zorder=Z_TEXT)
     # スロット境界に "vs"（数値とは別レイヤ・小さめ。値が82%なので境界に隙間が残る）
     for i in range(n - 1):
-        fig.text(slot * (i + 1), 0.54, "vs", ha="center", va="center",
-                 fontsize=40, color="#9CA3AF", zorder=Z_TEXT)
+        fig.text(slot * (i + 1), 0.57 if split_value_unit else 0.54, "vs",
+                 ha="center", va="center", fontsize=32 if split_value_unit else 40,
+                 color="#9CA3AF", zorder=Z_TEXT)
 
 
 def _draw_timeline(fig, spec: dict, theme: dict):
