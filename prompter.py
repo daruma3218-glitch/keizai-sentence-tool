@@ -86,6 +86,14 @@ def _build_user_block(user_instructions: str, style_preset: str) -> str:
             "- ラフな矢印・囲み・吹き出し\n"
             "- TED チャンネル・Sketchnoting のような図解"
         ),
+        "soviet_propaganda": (
+            "【スタイル: ソ連プロパガンダ風（歴史的スタイル再現）】\n"
+            "- 1920-1950年代の構成主義 + 社会主義リアリズム風の教育ポスター\n"
+            "- 深い赤・純黒・肌色オフホワイトの3色を中心に、フラット塗り・グラデなし\n"
+            "- 低視点、対角線構図、英雄的シルエット、リトグラフ印刷の紙質感\n"
+            "- 武器・ハンマー&鎌・赤い星・暴力表現は使わない\n"
+            "- 書物・地球儀・分析装置・建築など、教育/分析のシンボルで表現する"
+        ),
     }
     blocks.append(style_descriptions.get(style_preset, style_descriptions["flat_infographic"]))
     return "\n\n".join(blocks)

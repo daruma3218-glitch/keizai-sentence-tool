@@ -128,6 +128,24 @@ def login_required(f):
     return decorated
 
 
+@app.route("/version")
+def version():
+    """Render が実際にどの版を読んでいるか確認するための軽量診断。"""
+    upload_html = ""
+    try:
+        upload_html = (PROJECT_ROOT / "templates" / "upload.html").read_text(encoding="utf-8")
+    except Exception:
+        upload_html = ""
+    return jsonify({
+        "service": "keizai-sentence-tool",
+        "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
+        "service_name": os.environ.get("RENDER_SERVICE_NAME", ""),
+        "template_has_style_preset_input": 'name="style_preset"' in upload_html,
+        "template_has_diagram_style_text": "図解スタイル" in upload_html,
+        "checked_at": datetime.now().isoformat(),
+    })
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if not APP_PASSWORD:
@@ -331,7 +349,7 @@ def start_job():
     if openai_quality not in ("low", "medium", "high"):
         openai_quality = "medium"
     skip_decorative = request.form.get("skip_decorative", "off") == "on"
-    style_preset = request.form.get("style_preset", "flat_infographic")
+    style_preset = (channel.get("defaults", {}) or {}).get("style_preset", "flat_infographic")
     if style_preset not in VALID_STYLES:
         style_preset = "flat_infographic"
     route_mode = request.form.get("route_mode", "auto")

@@ -54,6 +54,13 @@ _W_IN, _H_IN, _DPI = 19.2, 10.8, 100
 
 VALID_CHART_TYPES = ("bar", "line", "pie", "big_number", "comparison", "timeline")
 
+# 描画レイヤー。図形・線・棒は低く、文字と文字背景は必ず前面に置く。
+Z_GRID = 0
+Z_SHAPE = 2
+Z_LINE = 3
+Z_TEXT = 20
+Z_TITLE = 30
+
 
 # ===== 数値フォーマット =====
 def _fmt_num(v) -> str:
@@ -168,11 +175,12 @@ def _draw_title_and_source(fig, spec: dict, theme: dict):
     title = (spec.get("title") or "").strip()
     if title:
         fig.text(0.5, 0.93, title, ha="center", va="top",
-                 fontsize=46, fontweight="bold", color=theme["text"])
+                 fontsize=46, fontweight="bold", color=theme["text"],
+                 zorder=Z_TITLE)
     src = (spec.get("source_note") or "").strip()
     if src:
         fig.text(0.98, 0.03, f"出典: {src}", ha="right", va="bottom",
-                 fontsize=20, color="#6B7280")
+                 fontsize=20, color="#6B7280", zorder=Z_TITLE)
 
 
 def _palette(theme: dict, n: int):
@@ -198,11 +206,11 @@ def _draw_bar(fig, spec: dict, theme: dict):
     colors = [theme["main"]] * len(values)
     if isinstance(hi, int) and 0 <= hi < len(values):
         colors[hi] = theme["accent"]
-    bars = ax.bar(range(len(values)), values, color=colors, width=0.62, zorder=3)
+    bars = ax.bar(range(len(values)), values, color=colors, width=0.62, zorder=Z_SHAPE)
     ax.set_xticks(range(len(values)))
     ax.set_xticklabels(labels, fontsize=28, color=theme["text"])
     ax.tick_params(axis="y", labelsize=22, colors="#6B7280")
-    ax.grid(axis="y", color=theme["grid"], linewidth=1, zorder=0)
+    ax.grid(axis="y", color=theme["grid"], linewidth=1, zorder=Z_GRID)
     for sp in ("top", "right", "left"):
         ax.spines[sp].set_visible(False)
     ax.spines["bottom"].set_color(theme["grid"])
@@ -211,7 +219,10 @@ def _draw_bar(fig, spec: dict, theme: dict):
     for i, b in enumerate(bars):
         ax.text(b.get_x() + b.get_width() / 2, b.get_height() + top * 0.02,
                 _fmt_val(values[i], unit), ha="center", va="bottom",
-                fontsize=28, fontweight="bold", color=theme["text"])
+                fontsize=28, fontweight="bold", color=theme["text"],
+                zorder=Z_TEXT,
+                bbox=dict(boxstyle="round,pad=0.10", facecolor=theme["bg"],
+                          edgecolor="none", alpha=0.82))
     ax.set_ylim(0, top * 1.18)
 
 
@@ -226,11 +237,11 @@ def _draw_line(fig, spec: dict, theme: dict):
     ax.set_facecolor(theme["bg"])
     ax.plot(range(len(values)), values, color=theme["main"], linewidth=4,
             marker="o", markersize=12, markerfacecolor=theme["accent"],
-            markeredgecolor="white", markeredgewidth=2, zorder=3)
+            markeredgecolor="white", markeredgewidth=2, zorder=Z_LINE)
     ax.set_xticks(range(len(values)))
     ax.set_xticklabels(labels, fontsize=26, color=theme["text"])
     ax.tick_params(axis="y", labelsize=22, colors="#6B7280")
-    ax.grid(axis="y", color=theme["grid"], linewidth=1, zorder=0)
+    ax.grid(axis="y", color=theme["grid"], linewidth=1, zorder=Z_GRID)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
     for sp in ("bottom", "left"):
@@ -238,7 +249,10 @@ def _draw_line(fig, spec: dict, theme: dict):
     rng = (max(values) - min(values)) or max(abs(max(values)), 1)
     for i, v in enumerate(values):
         ax.text(i, v + rng * 0.04, _fmt_val(v, unit), ha="center", va="bottom",
-                fontsize=24, fontweight="bold", color=theme["text"])
+                fontsize=24, fontweight="bold", color=theme["text"],
+                zorder=Z_TEXT,
+                bbox=dict(boxstyle="round,pad=0.10", facecolor=theme["bg"],
+                          edgecolor="none", alpha=0.82))
     ax.set_ylim(min(values) - rng * 0.12, max(values) + rng * 0.20)
 
 
@@ -255,13 +269,14 @@ def _draw_pie(fig, spec: dict, theme: dict):
     wedges, _txts, autotxts = ax.pie(
         values, labels=labels, explode=explode, colors=colors,
         autopct=lambda p: f"{p:.0f}%", startangle=90, counterclock=False,
-        textprops={"fontsize": 28, "color": theme["text"]},
+        textprops={"fontsize": 28, "color": theme["text"], "zorder": Z_TEXT},
         wedgeprops={"edgecolor": theme["bg"], "linewidth": 3},
     )
     for at in autotxts:
         at.set_color("white")
         at.set_fontsize(26)
         at.set_fontweight("bold")
+        at.set_zorder(Z_TEXT)
     ax.set_aspect("equal")
 
 
@@ -282,15 +297,17 @@ def _draw_big_number(fig, spec: dict, theme: dict):
     num_str = _fmt_num_jp(val)
     nsize = _fit_fontsize(fig, num_str, 0.90, 260, 70)
     fig.text(0.5, 0.50, num_str, ha="center", va="center",
-             fontsize=nsize, fontweight="bold", color=theme["main"])
+             fontsize=nsize, fontweight="bold", color=theme["main"],
+             zorder=Z_TEXT)
     if unit:
         usize = _fit_fontsize(fig, unit, 0.5, 64, 30)
         fig.text(0.5, 0.30, unit, ha="center", va="center",
-                 fontsize=usize, fontweight="bold", color=theme["accent"])
+                 fontsize=usize, fontweight="bold", color=theme["accent"],
+                 zorder=Z_TEXT)
     if label:
         lsize = _fit_fontsize(fig, label, 0.9, 46, 24, weight="normal")
         fig.text(0.5, 0.20, label, ha="center", va="center",
-                 fontsize=lsize, color=theme["text"])
+                 fontsize=lsize, color=theme["text"], zorder=Z_TEXT)
 
 
 def _draw_comparison(fig, spec: dict, theme: dict):
@@ -317,13 +334,13 @@ def _draw_comparison(fig, spec: dict, theme: dict):
         cx = slot * (i + 0.5)
         color = theme["accent"] if (isinstance(hi, int) and i == hi) else theme["main"]
         fig.text(cx, 0.54, val_texts[i], ha="center", va="center",
-                 fontsize=vsize, fontweight="bold", color=color)
+                 fontsize=vsize, fontweight="bold", color=color, zorder=Z_TEXT)
         fig.text(cx, 0.30, label, ha="center", va="center",
-                 fontsize=lsize, color=theme["text"])
+                 fontsize=lsize, color=theme["text"], zorder=Z_TEXT)
     # スロット境界に "vs"（数値とは別レイヤ・小さめ。値が82%なので境界に隙間が残る）
     for i in range(n - 1):
         fig.text(slot * (i + 1), 0.54, "vs", ha="center", va="center",
-                 fontsize=40, color="#9CA3AF", zorder=5)
+                 fontsize=40, color="#9CA3AF", zorder=Z_TEXT)
 
 
 def _draw_timeline(fig, spec: dict, theme: dict):
@@ -336,20 +353,20 @@ def _draw_timeline(fig, spec: dict, theme: dict):
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
-    ax.plot([0.04, 0.96], [0.5, 0.5], color=theme["grid"], linewidth=4, zorder=1)
+    ax.plot([0.04, 0.96], [0.5, 0.5], color=theme["grid"], linewidth=4, zorder=Z_GRID)
     n = len(data)
     xs = [0.08 + (0.84) * (i / max(1, n - 1)) for i in range(n)]
     for i, (label, val) in enumerate(data):
         x = xs[i]
-        ax.scatter([x], [0.5], s=420, color=theme["accent"], zorder=3,
+        ax.scatter([x], [0.5], s=420, color=theme["accent"], zorder=Z_SHAPE,
                    edgecolors="white", linewidths=3)
         up = (i % 2 == 0)
         ty = 0.72 if up else 0.28
         ax.text(x, 0.5 + (0.10 if up else -0.10), str(label), ha="center",
                 va=("bottom" if up else "top"), fontsize=30,
-                fontweight="bold", color=theme["main"])
+                fontweight="bold", color=theme["main"], zorder=Z_TEXT)
         ax.text(x, ty, str(val), ha="center", va=("bottom" if up else "top"),
-                fontsize=26, color=theme["text"], wrap=True)
+                fontsize=26, color=theme["text"], wrap=True, zorder=Z_TEXT)
 
 
 _DRAWERS = {
@@ -543,11 +560,46 @@ def _shift_text_px(ax, t, dx, dy):
     t.set_position((nd[0], nd[1]))
 
 
-def _deconflict_texts(fig, ax, texts, pad_px=10, max_iter=20):
-    """重なるラベルを縦にずらして衝突を解消（display座標で判定）。
+def _clamp_text_to_axes(fig, ax, t, renderer, pad_px=18):
+    """テキスト全体が地図の描画枠から大きくはみ出さないよう戻す。"""
+    try:
+        bb = t.get_window_extent(renderer=renderer)
+        ab = ax.get_window_extent(renderer=renderer)
+    except Exception:
+        return
+    dx = dy = 0
+    if bb.x0 < ab.x0 + pad_px:
+        dx = ab.x0 + pad_px - bb.x0
+    elif bb.x1 > ab.x1 - pad_px:
+        dx = ab.x1 - pad_px - bb.x1
+    if bb.y0 < ab.y0 + pad_px:
+        dy = ab.y0 + pad_px - bb.y0
+    elif bb.y1 > ab.y1 - pad_px:
+        dy = ab.y1 - pad_px - bb.y1
+    if dx or dy:
+        _shift_text_px(ax, t, dx, dy)
+
+
+def _route_label_position(ax, x1, y1, x2, y2, offset_px=52, side=1):
+    """ルート線ラベルを線の真上ではなく、線に直交する方向へ少し逃がす。"""
+    mid = ax.transData.transform(((x1 + x2) / 2, (y1 + y2) / 2))
+    p1 = ax.transData.transform((x1, y1))
+    p2 = ax.transData.transform((x2, y2))
+    vx, vy = p2[0] - p1[0], p2[1] - p1[1]
+    length = math.hypot(vx, vy) or 1.0
+    nx, ny = -vy / length * side, vx / length * side
+    if ny < 0:
+        nx, ny = -nx, -ny
+    pos = ax.transData.inverted().transform((mid[0] + nx * offset_px, mid[1] + ny * offset_px))
+    return pos[0], pos[1]
+
+
+def _deconflict_texts(fig, ax, texts, pad_px=24, max_iter=80):
+    """重なるラベルを上下左右にずらして衝突を解消（display座標で判定）。
 
     地図の国名ラベルとルート区間ラベルが密集地（例: ウクライナ/ベラルーシ周辺）で
-    重なって読めなくなる問題を防ぐ。決定論で動く軽量版。
+    重なって読めなくなる問題を防ぐ。縦方向だけでは左端・国境付近の密集に弱いため、
+    重なり量が小さい軸へ逃がし、各反復で地図枠内へ戻す。
     """
     texts = [t for t in texts if t is not None]
     if len(texts) < 2:
@@ -569,24 +621,31 @@ def _deconflict_texts(fig, ax, texts, pad_px=10, max_iter=20):
                 # 矩形が重なっているか（パディング込み）
                 if (bi.x0 < bj.x1 + pad_px and bj.x0 < bi.x1 + pad_px and
                         bi.y0 < bj.y1 + pad_px and bj.y0 < bi.y1 + pad_px):
+                    overlap_x = min(bi.x1, bj.x1) - max(bi.x0, bj.x0) + pad_px
                     overlap_y = min(bi.y1, bj.y1) - max(bi.y0, bj.y0) + pad_px
-                    if overlap_y <= 0:
+                    if overlap_x <= 0 or overlap_y <= 0:
                         continue
-                    shift = overlap_y / 2 + 1
-                    ci = (bi.y0 + bi.y1) / 2
-                    cj = (bj.y0 + bj.y1) / 2
-                    # 中心が上の方を上へ、下の方を下へ
-                    if ci >= cj:
-                        _shift_text_px(ax, texts[i], 0, shift)
-                        _shift_text_px(ax, texts[j], 0, -shift)
+                    cix, ciy = (bi.x0 + bi.x1) / 2, (bi.y0 + bi.y1) / 2
+                    cjx, cjy = (bj.x0 + bj.x1) / 2, (bj.y0 + bj.y1) / 2
+                    # 重なりが小さい軸に逃がす方が見た目の移動量が少ない。
+                    if overlap_x < overlap_y * 1.4:
+                        shift = overlap_x / 2 + 2
+                        direction = 1 if (cix >= cjx or (abs(cix - cjx) < 0.1 and i % 2 == 0)) else -1
+                        _shift_text_px(ax, texts[i], direction * shift, 0)
+                        _shift_text_px(ax, texts[j], -direction * shift, 0)
                     else:
-                        _shift_text_px(ax, texts[i], 0, -shift)
-                        _shift_text_px(ax, texts[j], 0, shift)
+                        shift = overlap_y / 2 + 2
+                        direction = 1 if (ciy >= cjy or (abs(ciy - cjy) < 0.1 and i % 2 == 0)) else -1
+                        _shift_text_px(ax, texts[i], 0, direction * shift)
+                        _shift_text_px(ax, texts[j], 0, -direction * shift)
                     moved = True
+        for t in texts:
+            _clamp_text_to_axes(fig, ax, t, renderer, pad_px=18)
         if not moved:
             break
         try:
             fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
         except Exception:
             return
 
@@ -633,7 +692,7 @@ def render_map(spec: dict, output_path, theme: dict = None) -> bool:
             for ring in info["rings"]:
                 xs = [p[0] for p in ring]
                 ys = [p[1] for p in ring]
-                ax.fill(xs, ys, facecolor=color, edgecolor="white", linewidth=0.4, zorder=2)
+                ax.fill(xs, ys, facecolor=color, edgecolor="white", linewidth=0.4, zorder=Z_SHAPE)
         # ラベル（spec.labels 指定があればそれを、無ければ focus に自動）
         import matplotlib.patheffects as pe
         stroke = [pe.withStroke(linewidth=4, foreground="white")]
@@ -652,12 +711,15 @@ def render_map(spec: dict, output_path, theme: dict = None) -> bool:
             px, py = _rep_point(geo[iso], extent=(x0, x1, y0, y1))
             if x0 <= px <= x1 and y0 <= py <= y1:
                 t = ax.text(px, py, txt, ha="center", va="center", fontsize=32,
-                            fontweight="bold", color=theme["text"], zorder=6,
-                            path_effects=stroke)
+                            fontweight="bold", color=theme["text"], zorder=Z_TEXT,
+                            path_effects=stroke,
+                            bbox=dict(boxstyle="round,pad=0.12",
+                                      facecolor=theme["bg"], edgecolor="none",
+                                      alpha=0.72))
                 map_labels.append(t)
         # 矢印（route 型）
         if mtype == "route":
-            for ar in (spec.get("arrows") or []):
+            for idx, ar in enumerate(spec.get("arrows") or []):
                 a, b = ar.get("from"), ar.get("to")
                 if a in geo and b in geo:
                     ax_, ay_ = _rep_point(geo[a], extent=(x0, x1, y0, y1))
@@ -665,12 +727,20 @@ def render_map(spec: dict, output_path, theme: dict = None) -> bool:
                     ax.annotate("", xy=(bx_, by_), xytext=(ax_, ay_),
                                 arrowprops=dict(arrowstyle="-|>", color=theme["main"],
                                                 lw=5, connectionstyle="arc3,rad=0.2",
-                                                shrinkA=8, shrinkB=8), zorder=7)
+                                                shrinkA=8, shrinkB=8), zorder=Z_LINE)
                     if ar.get("label"):
-                        t = ax.text((ax_ + bx_) / 2, (ay_ + by_) / 2 + 1.5, ar["label"],
+                        lx, ly = _route_label_position(
+                            ax, ax_, ay_, bx_, by_,
+                            offset_px=58,
+                            side=1 if idx % 2 == 0 else -1,
+                        )
+                        t = ax.text(lx, ly, ar["label"],
                                     ha="center", va="center", fontsize=24,
-                                    fontweight="bold", color=theme["main"], zorder=8,
-                                    path_effects=stroke)
+                                    fontweight="bold", color=theme["main"], zorder=Z_TEXT,
+                                    path_effects=stroke,
+                                    bbox=dict(boxstyle="round,pad=0.18",
+                                              facecolor=theme["bg"], edgecolor="none",
+                                              alpha=0.82))
                         map_labels.append(t)
         # ラベル同士の重なりを自動解消（密集地で読めなくなるのを防ぐ）
         _deconflict_texts(fig, ax, map_labels)

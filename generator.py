@@ -237,6 +237,35 @@ def _build_full_prompt(
         ),
     }
     style = style_hints.get(prompt_type, style_hints["illustration"])
+    preset_hints = {
+        "flat_infographic": (
+            "PRESET STYLE: flat educational infographic. Use simple icons, clean boxes, "
+            "arrows and a restrained palette. Make the message readable at a glance. "
+        ),
+        "pictogram": (
+            "PRESET STYLE: pictogram signage. Use the simplest possible silhouettes and "
+            "symbols, very few elements, strong contrast, no decorative detail. "
+        ),
+        "comic": (
+            "PRESET STYLE: clean comic strip illustration. Use crisp outlines, flat colors "
+            "and expressive but readable composition. Avoid dense manga detail. "
+        ),
+        "whiteboard": (
+            "PRESET STYLE: hand-drawn whiteboard explainer. Use black marker-like lines, "
+            "simple arrows, boxes and sketchnote structure on a white background. "
+        ),
+        "soviet_propaganda": (
+            "PRESET STYLE: historical Soviet-era educational poster style, 1920s-1950s "
+            "constructivism blended with socialist realism, suitable for a museum-quality "
+            "historical-style explainer. Strictly use deep muted red, near-black and warm "
+            "off-white as the core three-color palette; flat fills only, no gradients. "
+            "Use low angle, diagonal composition, heroic silhouettes, lithograph print "
+            "texture and aged paper. Use books, globes, analytical instruments and "
+            "architecture as symbols. Do NOT include weapons, hammer and sickle, red stars, "
+            "violence, cute anime styling, modern realism, smiles, or visible color codes. "
+        ),
+    }
+    preset = preset_hints.get(style_preset, "")
 
     # 画像内テキストのホワイトリスト指示（最重要）
     terms = [t for t in (allowed_terms or []) if isinstance(t, str) and t.strip()]
@@ -281,7 +310,7 @@ def _build_full_prompt(
         "- Center the main content with comfortable empty space around it.\n"
         "- Simple, clear, professional. Avoid clutter.\n"
     )
-    return f"{style}\n{text_policy}{common}\nContent to visualize:\n{user_prompt}"
+    return f"{style}\n{preset}\n{text_policy}{common}\nContent to visualize:\n{user_prompt}"
 
 
 # ===== Gemini (nanobanana) =====

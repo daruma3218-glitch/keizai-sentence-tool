@@ -64,7 +64,7 @@
         "concurrency": 4,
         "max_diagrams": 150,
         "verify_diagrams": true,
-        "character_ref": "references/roshia_character.png",
+        "character_ref": "",
         "chart_engine": "render",
         "map_engine": "render",
         "photo_source": "web",

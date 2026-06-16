@@ -101,9 +101,12 @@ def test_deconflict_texts_separates_overlap():
         r = fig.canvas.get_renderer()
         b1 = t1.get_window_extent(renderer=r)
         b2 = t2.get_window_extent(renderer=r)
-        # 縦の重なりが解消されている（どちらかが完全に上/下）
-        no_vertical_overlap = (b1.y0 >= b2.y1 - 1) or (b2.y0 >= b1.y1 - 1)
-        assert no_vertical_overlap, "重なったラベルが分離されていない"
+        # 上下左右どちらへ逃がしても、表示矩形が重ならなければよい。
+        no_overlap = (
+            b1.x0 >= b2.x1 - 1 or b2.x0 >= b1.x1 - 1 or
+            b1.y0 >= b2.y1 - 1 or b2.y0 >= b1.y1 - 1
+        )
+        assert no_overlap, "重なったラベルが分離されていない"
     finally:
         plt.close(fig)
 

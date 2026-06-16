@@ -29,7 +29,7 @@ from generator import (
 )
 
 
-VALID_STYLES = ("flat_infographic", "pictogram", "comic", "whiteboard")
+VALID_STYLES = ("flat_infographic", "pictogram", "comic", "whiteboard", "soviet_propaganda")
 VALID_ROUTE_MODES = ("auto", "all_ai")
 
 
@@ -262,11 +262,11 @@ class SentencePipeline:
         # v3 Step7: final.json の tentative_title があれば最優先（無ければ分解で推定）
         title = self.title_override or analysis.get("title", "無題")
 
-        # 上限を超えるなら警告して切り詰める
+        # 上限を超える場合は、v2 は全文均等配置、v3(beat_mode) は重要度配分で間引く。
         if total_sentences > self.max_diagrams:
             self._log("warn",
-                      f"センテンス {total_sentences} 個が上限 {self.max_diagrams} を超過。先頭 {self.max_diagrams} 件のみ生成します。",
-                      "それ以降のセンテンスはテーブルには出るが画像なし扱い")
+                      f"センテンス {total_sentences} 個が上限 {self.max_diagrams} を超過。全文から均等/重要度配分で {self.max_diagrams} 件を画像化します。",
+                      "先頭だけで打ち切らず、全文に画像が散るように配置します")
 
         self._log("splitter", f"分解完了: {title}", f"章 {len(chapters)} / センテンス {total_sentences}")
         save_json(self.output_dir / "split_result.json", split_result)
@@ -428,8 +428,14 @@ class SentencePipeline:
         for r in skip_rows:
             self._update_row(r["no"], status="skipped")
 
-        self._log("router",
-                  f"振り分け: AI生成 {len(ai_rows)} / Web写真 {len(web_photo_rows)} / skip {len(skip_rows)}")
+        rendered_rows = [r for r in rows if r.get("engine") == "render" and self._wants_image(r)]
+        hold_rows = [r for r in rows if r.get("display") == "hold"]
+        no_image_rows = [r for r in rows if r.get("display") == "none"]
+        self._log(
+            "router",
+            f"振り分け: AI生成 {len(ai_rows)} / render済み {len(rendered_rows)} / Web写真 {len(web_photo_rows)} / skip {len(skip_rows)}",
+            f"hold {len(hold_rows)} / none {len(no_image_rows)} / beat_mode={self.beat_mode}"
+        )
 
         # ===== Phase 2a: 英文プロンプト（AI 行のみ） =====
         self._progress(2, f"英文プロンプトを並列生成中（style={self.style_preset}）...", 22)
@@ -466,8 +472,7 @@ class SentencePipeline:
                 fname = f"{info['no']}.jpg"  # 数字だけのファイル名（№と一致）
                 if download_thumbnail(thumb_url, self.images_dir / fname):
                     local_file = fname
-            self._update_row(
-                info["no"],
+            update = dict(
                 web_source_url=info.get("source_url", ""),
                 web_thumb_url=info.get("thumb_url", ""),
                 web_local_file=local_file,
@@ -478,6 +483,12 @@ class SentencePipeline:
                 attribution=info.get("attribution", ""),
                 commons_page_url=info.get("commons_page_url", ""),
             )
+            if local_file:
+                # Web写真も「画像1枚」として扱う。これを入れないと画面上は画像が見えても
+                # 件数カウントでは pending のままになり、「50枚中8枚」のように見える。
+                update["status"] = "ok"
+                update["filename"] = local_file
+            self._update_row(info["no"], **update)
             try:
                 save_json(
                     self.output_dir / "web_results.json",
@@ -724,6 +735,110 @@ class SentencePipeline:
                           f"Web 画像取得が {wait_minutes} 分以内に完了しませんでした。"
                           f"部分結果（{len(web_results_accumulator)} 件）で続行します。")
 
+        # ===== Phase 3c: Web/Commons で拾えなかった画像を AI で穴埋め =====
+        # ルーターが web_photo に振った行は通常 AI 生成から外れるため、Commons/Web が0件だと
+        # 「待機」のまま画像枚数が大きく減る。画像化対象(display=image)なのにローカル画像が無い
+        # 行だけを realphoto に降格して、AI実写風で代替生成する。
+        web_fallback_results = []
+        if self.route_mode == "auto" and web_photo_rows:
+            missing_web_rows = []
+            with self._rows_lock:
+                state_by_no = {no: dict(st) for no, st in self._rows_state.items()}
+            for r in web_photo_rows:
+                if not self._wants_image(r):
+                    continue
+                st = state_by_no.get(r["no"], {})
+                has_local_web = bool(st.get("web_local_file"))
+                has_ai_file = bool(st.get("filename"))
+                if has_local_web or has_ai_file:
+                    continue
+                rr = dict(r)
+                rr["route"] = "realphoto"
+                rr["route_reason"] = "Web画像取得失敗→AI実写風で代替"
+                rr["engine"] = "ai"
+                missing_web_rows.append(rr)
+
+            if missing_web_rows:
+                self._progress(3, f"Web未取得分をAI代替生成中（0/{len(missing_web_rows)}）...", 93)
+                self._log(
+                    "websearch",
+                    f"Web/Commonsで取得できなかった {len(missing_web_rows)} 件をAI実写風で代替生成します",
+                    "50枚指定時にWeb取得失敗分が待機のまま残る問題を防ぎます",
+                )
+                for r in missing_web_rows:
+                    self._update_row(
+                        r["no"],
+                        route="realphoto",
+                        route_reason=r["route_reason"],
+                        engine="ai",
+                        status="pending",
+                        web_fallback=True,
+                    )
+                fallback_prompts = generate_all_prompts(
+                    client, missing_web_rows, title=title,
+                    user_instructions=self.user_instructions,
+                    style_preset=self.style_preset, worldview_desc=self.worldview_desc,
+                    max_workers=4, log=self._log,
+                )
+                fallback_targets = []
+                for r in fallback_prompts:
+                    self._update_row(
+                        r["no"],
+                        prompt=r.get("prompt", ""),
+                        allowed_terms=r.get("allowed_terms", []),
+                        type="realphoto",
+                    )
+                    fallback_targets.append({
+                        "index": r["no"],
+                        "prompt": r.get("prompt", ""),
+                        "type": "realphoto",
+                        "section": r.get("chapter_title", ""),
+                        "excerpt": r.get("sentence", ""),
+                        "block_text": r.get("block_text", ""),
+                        "keypoint": r.get("sentence", "")[:30],
+                        "allowed_terms": r.get("allowed_terms", []),
+                        "style": self.style_preset,
+                        "character": False,
+                    })
+
+                def on_web_fallback_event(info: dict):
+                    no = info.get("index", 0)
+                    status = info.get("status", "")
+                    update = {"status": status}
+                    if status == "ok":
+                        update["filename"] = info.get("filename")
+                    if info.get("error"):
+                        update["error"] = info["error"]
+                    self._update_row(no, **update)
+                    if status in ("ok", "failed"):
+                        gt = info.get("grand_total") or 0
+                        done = (info.get("completed_total") or 0) + (info.get("failed_total") or 0)
+                        if gt:
+                            pct = 93 + int(done / gt * 4)
+                            self._progress(3, f"Web未取得分をAI代替生成中（{done}/{gt}）...", min(97, pct))
+
+                if fallback_targets:
+                    fb_concurrency = min(eff_concurrency, 3)
+                    web_fallback_results = run_parallel_generation(
+                        prompts=fallback_targets,
+                        output_dir=self.images_dir,
+                        provider=self.provider,
+                        gemini_api_key=gemini_key,
+                        openai_api_key=openai_key,
+                        openai_quality=self.openai_quality,
+                        concurrency=fb_concurrency,
+                        style_preset=self.style_preset,
+                        progress_callback=on_web_fallback_event,
+                        reference_image_path=self.character_ref_path,
+                        realphoto_watermark=self.realphoto_watermark,
+                    )
+                    fb_success = sum(1 for r in web_fallback_results if r.get("success"))
+                    fb_fail = len(web_fallback_results) - fb_success
+                    success_count += fb_success
+                    fail_count += fb_fail
+                    results.extend(web_fallback_results)
+                    self._log("websearch", f"AI代替生成完了: 成功 {fb_success} / 失敗 {fb_fail}")
+
         # ===== マニフェスト =====
         with self._rows_lock:
             final_rows = sorted(self._rows_state.values(), key=lambda x: x.get("no", 0))
@@ -755,6 +870,7 @@ class SentencePipeline:
             "skip_route_count": len(skip_rows),
             "generated": success_count,
             "failed": fail_count,
+            "web_fallback_generated": sum(1 for r in web_fallback_results if r.get("success")),
             "skipped_decorative": skipped_decorative,
             "thinned": thinned_count,  # 均等配置のため間引かれた数
             "web_results_count": web_count_final,
