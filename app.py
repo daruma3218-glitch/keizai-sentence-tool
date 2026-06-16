@@ -33,12 +33,27 @@ from generator import PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS
 
 
 PROJECT_ROOT = Path(__file__).parent
-# 出力先は環境変数 DATA_DIR で永続ディスク(Render Disk 等)に向けられる。
-# 未設定ならプロジェクト直下（ローカル/ディスク無し運用）。
-# ※ Render は DATA_DIR=/data に Disk をマウントすると、デプロイをまたいで
-#   過去ジョブ（画像・manifest 等）が消えなくなる。
-_DATA_DIR = os.environ.get("DATA_DIR", "").strip()
-OUTPUT_DIR = (Path(_DATA_DIR) if _DATA_DIR else PROJECT_ROOT) / "output"
+
+
+def _resolve_output_root() -> tuple[Path, str, bool]:
+    """ジョブ出力の保存ルートを決める。
+
+    Render ではアプリ直下のファイルは再デプロイ/再起動で消えるため、
+    永続ディスク（通常 /data）を優先する。DATA_DIR を設定し忘れても
+    /data がマウントされていれば自動で使う。
+    """
+    data_dir = os.environ.get("DATA_DIR", "").strip()
+    if data_dir:
+        root = Path(data_dir)
+        return root, "DATA_DIR", root.exists()
+    render_disk = Path("/data")
+    if render_disk.exists() and os.access(str(render_disk), os.W_OK):
+        return render_disk, "auto:/data", True
+    return PROJECT_ROOT, "project", False
+
+
+OUTPUT_ROOT, OUTPUT_STORAGE_MODE, OUTPUT_IS_PERSISTENT = _resolve_output_root()
+OUTPUT_DIR = OUTPUT_ROOT / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 load_env(PROJECT_ROOT)
@@ -142,6 +157,10 @@ def version():
         "service_name": os.environ.get("RENDER_SERVICE_NAME", ""),
         "template_has_style_preset_input": 'name="style_preset"' in upload_html,
         "template_has_diagram_style_text": "図解スタイル" in upload_html,
+        "output_dir": str(OUTPUT_DIR),
+        "output_storage_mode": OUTPUT_STORAGE_MODE,
+        "output_is_persistent": OUTPUT_IS_PERSISTENT,
+        "data_dir_env": os.environ.get("DATA_DIR", ""),
         "checked_at": datetime.now().isoformat(),
     })
 
@@ -441,10 +460,10 @@ def start_job():
         return jsonify({"error": "原稿が短すぎます（100文字以上必要）"}), 400
 
     try:
-        concurrency = int(request.form.get("concurrency", "12"))
+        concurrency = int(request.form.get("concurrency", "4"))
     except ValueError:
-        concurrency = 12
-    concurrency = max(1, min(concurrency, 24))
+        concurrency = 4
+    concurrency = max(1, min(concurrency, 8))
 
     user_instructions = request.form.get("user_instructions", "").strip()
 
