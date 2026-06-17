@@ -12,7 +12,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from typing import Callable, Optional
 
 import anthropic
@@ -24,7 +24,14 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 SEARCH_BATCH_SIZE = 6  # 1 リクエストで複数センテンスをまとめて検索
 
 
-def _claude_research_call(client, query: str, system: str, max_tokens: int = 4096, max_uses: int = 5) -> tuple:
+def _claude_research_call(
+    client,
+    query: str,
+    system: str,
+    max_tokens: int = 4096,
+    max_uses: int = 5,
+    timeout: float = 60.0,
+) -> tuple:
     """Claude Web Search を実行して (text, real_urls) を返す"""
     real_urls = []
     text_parts = []
@@ -39,6 +46,7 @@ def _claude_research_call(client, query: str, system: str, max_tokens: int = 409
                 "max_uses": max_uses,
             }],
             messages=[{"role": "user", "content": query}],
+            timeout=timeout,
         )
         for block in response.content:
             block_type = getattr(block, "type", "")
@@ -218,6 +226,7 @@ def _select_chunk(
         max_tokens=min(needed_tokens, 16000),  # 上限 16k
         system=system,
         messages=[{"role": "user", "content": query}],
+        timeout=90.0,
     )
     text = ""
     for b in response.content:
@@ -410,7 +419,7 @@ def search_single_sentence(
 
 回答後に Web 検索結果のリストもそのまま記述してください。"""
 
-    text, urls = _claude_research_call(client, query, system, max_tokens=2000, max_uses=3)
+    text, urls = _claude_research_call(client, query, system, max_tokens=2000, max_uses=2, timeout=60.0)
 
     # 最良の URL を 1 件選ぶ
     best_url = ""
@@ -458,6 +467,55 @@ def search_single_sentence(
     }
 
 
+def _run_parallel_searches(
+    client: anthropic.Anthropic,
+    selections: list,
+    max_workers: int,
+    log: Callable,
+    item_callback: Callable,
+    profile: str = "",
+) -> list:
+    """Web検索を並列実行する。遅い検索が混ざっても全体を止めない。"""
+    results = []
+    completed = 0
+    # 1件60秒を上限にしているため、波数分 + 余裕で全体待ち時間を決める。
+    waves = max(1, (len(selections) + max_workers - 1) // max_workers)
+    overall_timeout = max(180, min(900, waves * 75))
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    future_to_sel = {
+        executor.submit(search_single_sentence, client, sel, profile): sel
+        for sel in selections
+    }
+    try:
+        try:
+            iterator = as_completed(future_to_sel, timeout=overall_timeout)
+            for future in iterator:
+                sel = future_to_sel[future]
+                try:
+                    r = future.result()
+                    results.append(r)
+                    completed += 1
+                    log("websearch", f"検索 {completed}/{len(selections)}: 「{r.get('topic', '')[:30]}」")
+                    item_callback(r)
+                except Exception as e:
+                    completed += 1
+                    log("error", f"検索エラー（no={sel.get('no')}）: {str(e)[:100]}")
+        except FuturesTimeout:
+            pending = [sel for fut, sel in future_to_sel.items() if not fut.done()]
+            log(
+                "warn",
+                f"Web検索がタイムアウト: 完了 {completed}/{len(selections)} / 未完了 {len(pending)} 件をスキップして続行"
+            )
+            for sel in pending[:10]:
+                log("warn", f"未完了検索をスキップ no={sel.get('no')} query={str(sel.get('query', ''))[:40]}")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    results.sort(key=lambda x: x.get("no", 0))
+    log("websearch", f"Web 検索完了: {len(results)} 件")
+    return results
+
+
 def run_web_search_for_selections(
     client: anthropic.Anthropic,
     selections: list,
@@ -479,27 +537,7 @@ def run_web_search_for_selections(
         return []
 
     log("websearch", f"{len(selections)} 件の Web 検索を並列実行中（同時 {max_workers}）...")
-    results = []
-    completed = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_sel = {
-            executor.submit(search_single_sentence, client, sel, profile): sel
-            for sel in selections
-        }
-        for future in as_completed(future_to_sel):
-            sel = future_to_sel[future]
-            try:
-                r = future.result()
-                results.append(r)
-                completed += 1
-                log("websearch", f"検索 {completed}/{len(selections)}: 「{r.get('topic', '')[:30]}」")
-                item_callback(r)
-            except Exception as e:
-                log("error", f"検索エラー（no={sel.get('no')}）: {str(e)[:100]}")
-
-    results.sort(key=lambda x: x.get("no", 0))
-    log("websearch", f"Web 検索完了: {len(results)} 件")
-    return results
+    return _run_parallel_searches(client, selections, max_workers, log, item_callback, profile)
 
 
 def run_web_search(
@@ -540,25 +578,4 @@ def run_web_search(
 
     # Step 2: 並列に Web 検索を実行
     log("websearch", f"{len(selections)} 件の Web 検索を並列実行中（同時 {max_workers}）...")
-    results = []
-    completed = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_sel = {
-            executor.submit(search_single_sentence, client, sel, profile): sel
-            for sel in selections
-        }
-        for future in as_completed(future_to_sel):
-            sel = future_to_sel[future]
-            try:
-                r = future.result()
-                results.append(r)
-                completed += 1
-                log("websearch", f"検索 {completed}/{len(selections)}: 「{r.get('topic', '')[:30]}」")
-                item_callback(r)
-            except Exception as e:
-                log("error", f"検索エラー（no={sel.get('no')}）: {str(e)[:100]}")
-
-    # no 順にソート
-    results.sort(key=lambda x: x.get("no", 0))
-    log("websearch", f"Web 検索完了: {len(results)} 件")
-    return results
+    return _run_parallel_searches(client, selections, max_workers, log, item_callback, profile)
