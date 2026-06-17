@@ -29,12 +29,21 @@ from PIL import Image
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-image-preview"
 DEFAULT_OPENAI_MODEL = "gpt-image-2"
 DEFAULT_CONCURRENCY = 12
-MAX_RETRIES = 2                # リトライ回数（多いとレート制限時に1枚が長時間スレッドを占有する）
-API_TIMEOUT_SEC = 120          # 1 回の画像生成 API 呼び出しの上限（応答停止対策）
-PER_IMAGE_HARD_TIMEOUT = 360   # 1 枚あたりの全体上限（リトライ込み・asyncio 側の最終防衛線）
-# 重要: MAX_RETRIES × API_TIMEOUT_SEC + リトライsleep合計 < PER_IMAGE_HARD_TIMEOUT を必ず満たす。
-# 満たさないと wait_for が先に発火し、実行中スレッドが残留（ゾンビ化）→ 実効並列が枯渇する。
-# 現状: 2×120 + (12+20) = 272s < 360s ✓
+
+
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+# 画像APIは稀に応答が返らずスレッドを占有する。長く待つより、詰まった1枚を
+# 失敗扱いにしてジョブ全体を完了させる方を優先する。
+MAX_RETRIES = _env_int("IMAGE_MAX_RETRIES", 1, 1, 3)
+API_TIMEOUT_SEC = _env_int("IMAGE_API_TIMEOUT_SEC", 60, 30, 180)
+PER_IMAGE_HARD_TIMEOUT = _env_int("IMAGE_HARD_TIMEOUT_SEC", 100, 60, 240)
 
 # 出力アスペクト比（16:9 に統一）
 TARGET_RATIO = 16 / 9
@@ -373,7 +382,7 @@ def _sync_generate_image_gemini(
             err = str(e)
             last_error = err[:200]
             if "429" in err or "RESOURCE_EXHAUSTED" in err:
-                time.sleep(30 * (attempt + 1))
+                time.sleep(min(10, 5 * (attempt + 1)))
                 continue
             if "safety" in err.lower() or "block" in err.lower():
                 return False, f"safety blocked: {err[:120]}"
@@ -744,10 +753,9 @@ class ParallelImageGenerator:
         # 固まったスレッドが居ても新しい画像生成が進められるよう余裕を持たせる
         self._executor = ThreadPoolExecutor(max_workers=self.concurrency + 4)
         # 全体の時間予算（安全網）: 超えたら未完了を打ち切り、必ず完了させる。
-        # 自然完了の理論上限（バッチ数 × 1枚ハード上限）＋余裕に設定するので、
-        # 正常な「遅いだけ」のジョブは切らず、真の暴走（無限ハング）だけを止める。最大4時間。
+        # 1枚が固まってもジョブ全体が数十分止まらないよう、画像数に応じて短めにする。
         batches = (len(prompts) + self.concurrency - 1) // max(1, self.concurrency)
-        overall_budget = min(14400, max(1800, batches * (PER_IMAGE_HARD_TIMEOUT + 90)))
+        overall_budget = min(3600, max(300, batches * (PER_IMAGE_HARD_TIMEOUT + 45)))
         try:
             tasks = [
                 asyncio.ensure_future(self._generate_one(p, output_dir, semaphore))

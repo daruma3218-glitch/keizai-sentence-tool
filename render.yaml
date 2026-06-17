@@ -36,6 +36,12 @@ services:
         value: "gpt-image-2"
       - key: GEMINI_IMAGE_MODEL
         value: "gemini-3.1-flash-image-preview"
+      - key: IMAGE_API_TIMEOUT_SEC
+        value: "60"
+      - key: IMAGE_HARD_TIMEOUT_SEC
+        value: "100"
+      - key: IMAGE_MAX_RETRIES
+        value: "1"
       - key: APP_PASSWORD
         sync: false
       - key: SECRET_KEY
