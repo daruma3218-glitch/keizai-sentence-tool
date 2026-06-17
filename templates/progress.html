@@ -267,6 +267,7 @@
       const thumb = row.web_thumb_url || '';        // リモートサムネ（フォールバック）
       const src = row.web_source_url || '';
       const topic = row.web_topic || '';
+      const sourceType = row.web_source_type || '';
       if (!src) return `<div class="text-gray-300 text-[10px] text-center">―</div>`;
       // ローカル DL 画像があればそれを優先（確実に表示・ZIP同梱）、なければリモートサムネ
       const imgSrc = local ? `/results/${JOB_ID}/images/${local}` : (thumb ? escapeHtml(thumb) : '');
@@ -276,6 +277,7 @@
       return `
         <a href="${escapeHtml(src)}" target="_blank" rel="noopener" class="block hover:opacity-80" title="${escapeHtml(topic)}: ${escapeHtml(src)}">
           ${thumbHtml}
+          ${sourceType ? `<div class="text-[9px] text-emerald-600 truncate mt-0.5">${escapeHtml(sourceType)}</div>` : ''}
           <div class="text-[10px] text-purple-600 truncate mt-0.5">${escapeHtml(topic.substring(0, 18))}</div>
         </a>`;
     }

@@ -92,6 +92,46 @@ def _wikipedia_image_url(article_url: str) -> str:
     return ""
 
 
+def _youtube_thumbnail_url(url: str) -> str:
+    """YouTube URL から標準サムネイルURLを推定する。"""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.netloc.lower()
+        vid = ""
+        if "youtu.be" in host:
+            vid = parsed.path.strip("/").split("/")[0]
+        elif "youtube.com" in host:
+            qs = urllib.parse.parse_qs(parsed.query)
+            vid = (qs.get("v") or [""])[0]
+            if not vid and parsed.path.startswith("/shorts/"):
+                vid = parsed.path.split("/")[2]
+        if vid:
+            return f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+    except Exception:
+        pass
+    return ""
+
+
+def _source_type(url: str, title: str = "") -> str:
+    u = (url or "").lower()
+    t = (title or "").lower()
+    if "youtube.com" in u or "youtu.be" in u:
+        return "youtube"
+    if any(x in u for x in ("ted.com", "vimeo.com", "coursera.org")):
+        return "video"
+    if any(x in u for x in (".gov", ".go.jp", ".go.", "who.int", "oecd.org", "worldbank.org", "imf.org")):
+        return "official"
+    if any(x in u for x in (".edu", ".ac.jp", "scholar.google", "researchgate", "ssrn.com", "arxiv.org", "doi.org")):
+        return "research"
+    if any(x in u for x in ("annualreport", "investor", "ir.", "/ir/", "press-release", "newsroom")):
+        return "company"
+    if "wikipedia.org" in u:
+        return "encyclopedia"
+    if any(x in t for x in ("interview", "keynote", "lecture", "登壇", "講演", "インタビュー")):
+        return "media"
+    return "article"
+
+
 def _select_chunk(
     client: anthropic.Anthropic,
     candidates: list,
@@ -302,23 +342,44 @@ def download_thumbnail(thumb_url: str, output_path) -> bool:
 def search_single_sentence(
     client: anthropic.Anthropic,
     selection: dict,
+    profile: str = "",
 ) -> dict:
     """1 センテンスに対する Web 画像 URL を取得"""
     no = selection["no"]
     query_text = selection.get("query", "")
     topic = selection.get("topic", "")
 
-    system = (
-        "あなたはリサーチャーです。Web 検索で指定トピックの参考画像が掲載されたページを探します。"
-        "Wikipedia や公的機関、報道機関のサイトを優先してください。"
-    )
-    query = f"""「{topic}」に関する参考画像が載っているページを Web 検索で探してください。
+    primary_media = profile == "primary_media"
+    if primary_media:
+        system = (
+            "あなたはYouTube動画制作向けの素材リサーチャーです。"
+            "記事、公式資料、一次情報、実在人物の写真、講演・登壇動画を探します。"
+            "公式サイト、大学・政府・企業IR、論文、プレスリリース、本人/公式YouTube、TED等を優先してください。"
+        )
+        priority = (
+            "- 公式サイト、企業IR、年次報告書、プレスリリース、政府/大学/研究機関、論文、統計など一次情報を最優先\n"
+            "- 実在人物が出る場合は、本人公式サイト・Wikipedia/Wikimedia・公式プロフィール・講演ページ・YouTube登壇動画を優先\n"
+            "- YouTubeは本人/企業/大学/TED/公式カンファレンス等の公式・準公式チャンネルを優先\n"
+            "- 記事だけでなく、動画・講演・インタビュー・登壇資料も候補に含める\n"
+            "- ゴシップ、まとめサイト、無断転載、出典不明サムネイルは避ける\n"
+        )
+    else:
+        system = (
+            "あなたはリサーチャーです。Web 検索で指定トピックの参考画像が掲載されたページを探します。"
+            "Wikipedia や公的機関、報道機関のサイトを優先してください。"
+        )
+        priority = (
+            "- 画像が含まれるページ（Wikipedia 等）を優先\n"
+            "- 公的機関・報道機関・百科事典のサイトを優先\n"
+        )
+
+    query = f"""「{topic}」に関する参考素材が載っているページを Web 検索で探してください。
 検索クエリ: {query_text}
 
 【最重要】
 - 必ず Web 検索を実行すること
-- 画像が含まれるページ（Wikipedia 等）を優先
-- 公的機関・報道機関・百科事典のサイトを優先
+- 画像・記事・一次資料・登壇動画・インタビュー動画のうち、動画素材制作に使いやすいものを優先
+{priority}
 - 数件で OK。最も信頼性の高い 1 件を選んで返す
 
 回答後に Web 検索結果のリストもそのまま記述してください。"""
@@ -328,20 +389,36 @@ def search_single_sentence(
     # 最良の URL を 1 件選ぶ
     best_url = ""
     best_title = ""
-    for u in urls:
-        # Wikipedia 優先
-        if "wikipedia.org" in u["url"]:
-            best_url = u["url"]
-            best_title = u["title"]
-            break
+    if primary_media:
+        # 一次情報・公式動画・研究/公式資料を優先
+        priority_types = ("youtube", "official", "research", "company", "video", "encyclopedia", "article")
+        for typ in priority_types:
+            for u in urls:
+                if _source_type(u.get("url", ""), u.get("title", "")) == typ:
+                    best_url = u["url"]
+                    best_title = u["title"]
+                    break
+            if best_url:
+                break
+    else:
+        for u in urls:
+            # Wikipedia 優先
+            if "wikipedia.org" in u["url"]:
+                best_url = u["url"]
+                best_title = u["title"]
+                break
     if not best_url and urls:
         best_url = urls[0]["url"]
         best_title = urls[0]["title"]
 
-    # サムネイル取得（Wikipedia の場合のみ）
+    source_type = _source_type(best_url, best_title)
+
+    # サムネイル取得（Wikipedia / YouTube）
     thumb_url = ""
     if "wikipedia.org/wiki/" in best_url:
         thumb_url = _wikipedia_image_url(best_url)
+    elif source_type == "youtube":
+        thumb_url = _youtube_thumbnail_url(best_url)
 
     return {
         "no": no,
@@ -349,6 +426,7 @@ def search_single_sentence(
         "query": query_text,
         "source_url": best_url,
         "source_title": best_title,
+        "source_type": source_type,
         "thumb_url": thumb_url,
         "all_urls": urls[:5],  # 候補も残す
     }
@@ -360,6 +438,7 @@ def run_web_search_for_selections(
     max_workers: int = 8,
     log: Optional[Callable] = None,
     item_callback: Optional[Callable] = None,
+    profile: str = "",
 ) -> list:
     """v2 用: ルーターが選んだ web_photo 文を検索する（選定ステップなし）。
 
@@ -378,7 +457,7 @@ def run_web_search_for_selections(
     completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_sel = {
-            executor.submit(search_single_sentence, client, sel): sel
+            executor.submit(search_single_sentence, client, sel, profile): sel
             for sel in selections
         }
         for future in as_completed(future_to_sel):
@@ -404,6 +483,7 @@ def run_web_search(
     max_workers: int = 4,
     log: Optional[Callable] = None,
     item_callback: Optional[Callable] = None,
+    profile: str = "",
 ) -> list:
     """エントリポイント: Web 画像 URL を取得して返す（v1 互換: 内部で選定する）
 
@@ -438,7 +518,7 @@ def run_web_search(
     completed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_sel = {
-            executor.submit(search_single_sentence, client, sel): sel
+            executor.submit(search_single_sentence, client, sel, profile): sel
             for sel in selections
         }
         for future in as_completed(future_to_sel):

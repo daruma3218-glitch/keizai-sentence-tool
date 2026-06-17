@@ -59,6 +59,7 @@ class SentencePipeline:
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
+        web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
         beat_mode: bool = False,           # v3: ビート単位で重要度加重配分（False=v2均等）
         chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
         realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
@@ -90,6 +91,7 @@ class SentencePipeline:
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
+        self.web_search_profile = (web_search_profile or "").strip()
         self.beat_mode = bool(beat_mode)                     # v3: ビート加重配分
         self.chars_per_sec = float(chars_per_sec or 5.5)
         self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
@@ -478,6 +480,7 @@ class SentencePipeline:
                 web_local_file=local_file,
                 web_topic=info.get("topic", ""),
                 web_source_title=info.get("source_title", ""),
+                web_source_type=info.get("source_type", ""),
                 # v3 Step3: Commons のライセンス・クレジット（CSV / credits.txt 用）
                 license=info.get("license", ""),
                 attribution=info.get("attribution", ""),
@@ -540,6 +543,7 @@ class SentencePipeline:
                         run_web_search_for_selections(
                             client, selections, max_workers=8,
                             log=self._log, item_callback=_web_on_item,
+                            profile=self.web_search_profile,
                         )
                 except Exception as e:
                     self._log("error", f"Web/Commons 画像取得失敗: {str(e)[:120]}")
@@ -558,6 +562,7 @@ class SentencePipeline:
                         client, rows_with_prompts,
                         target_count=self.web_image_count, max_workers=8,
                         log=self._log, item_callback=_web_on_item,
+                        profile=self.web_search_profile,
                     )
                 except Exception as e:
                     self._log("error", f"Web 画像取得失敗: {str(e)[:120]}")
@@ -1180,7 +1185,7 @@ class SentencePipeline:
             w = csv.writer(f)
             # v3: ビート/推定開始/エンジン/重要度/表示/ライセンス/クレジット 列を追加
             w.writerow(["章", "ブロック", "センテンス", "№", "ビート", "推定開始", "ソース",
-                        "エンジン", "重要度", "表示", "画像", "URL", "ライセンス", "クレジット"])
+                        "エンジン", "重要度", "表示", "画像", "URL", "URL種別", "ライセンス", "クレジット"])
             _disp = {"image": "画像", "hold": "継続", "none": "なし"}
             for r in rows:
                 block_text = ""
@@ -1207,6 +1212,7 @@ class SentencePipeline:
                     disp_label,
                     r.get("filename", "") or "",
                     r.get("web_source_url", "") or r.get("commons_page_url", "") or "",
+                    r.get("web_source_type", "") or "",
                     r.get("license", "") or "",
                     r.get("attribution", "") or "",
                 ])

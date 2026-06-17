@@ -259,6 +259,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
         def on_item(info):
             pass  # rows_progress.json 経由でフロントへ
 
+        defaults = get_channel(channel_id).get("defaults") or {}
         pipeline = SentencePipeline(
             manuscript_text=manuscript_text,
             output_dir=job_dir,
@@ -278,13 +279,14 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             web_image_count=web_image_count,
             max_diagrams=max_diagrams,
             route_mode=route_mode,
-            chart_engine=(get_channel(channel_id).get("defaults") or {}).get("chart_engine", "ai"),
-            map_engine=(get_channel(channel_id).get("defaults") or {}).get("map_engine", "ai"),
-            photo_source=(get_channel(channel_id).get("defaults") or {}).get("photo_source", "web"),
-            beat_mode=bool((get_channel(channel_id).get("defaults") or {}).get("beat_mode", False)),
-            chars_per_sec=(get_channel(channel_id).get("defaults") or {}).get("chars_per_sec", 5.5),
-            realphoto_watermark=bool((get_channel(channel_id).get("defaults") or {}).get("realphoto_watermark", False)),
-            chart_theme=(get_channel(channel_id).get("defaults") or {}).get("chart_theme"),
+            chart_engine=defaults.get("chart_engine", "ai"),
+            map_engine=defaults.get("map_engine", "ai"),
+            photo_source=defaults.get("photo_source", "web"),
+            web_search_profile=defaults.get("web_search_profile", ""),
+            beat_mode=bool(defaults.get("beat_mode", False)),
+            chars_per_sec=defaults.get("chars_per_sec", 5.5),
+            realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
+            chart_theme=defaults.get("chart_theme"),
             title_override=title_override,
             fact_context=fact_context,
             progress_callback=on_progress,

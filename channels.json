@@ -98,6 +98,7 @@
         "chart_engine": "render",
         "map_engine": "render",
         "photo_source": "web",
+        "web_search_profile": "primary_media",
         "beat_mode": true,
         "chars_per_sec": 5.5,
         "realphoto_watermark": true,
