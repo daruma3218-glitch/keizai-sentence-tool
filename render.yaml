@@ -19,7 +19,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       # チャンネル別キー（任意）: 設定すると該当チャンネルが優先使用。未設定なら上の共通キーにフォールバック。
-      # 経済探求ラボ = KEIZAI_*, ロシア解体新書 = ROSHIA_*
+      # 経済探求ラボ = KEIZAI_*, ロシア解体新書 = ROSHIA_*, 成功の法則 = SEIKOU_*
       - key: KEIZAI_ANTHROPIC_API_KEY
         sync: false
       - key: KEIZAI_GEMINI_API_KEY
@@ -31,6 +31,12 @@ services:
       - key: ROSHIA_GEMINI_API_KEY
         sync: false
       - key: ROSHIA_OPENAI_API_KEY
+        sync: false
+      - key: SEIKOU_ANTHROPIC_API_KEY
+        sync: false
+      - key: SEIKOU_GEMINI_API_KEY
+        sync: false
+      - key: SEIKOU_OPENAI_API_KEY
         sync: false
       - key: OPENAI_IMAGE_MODEL
         value: "gpt-image-2"

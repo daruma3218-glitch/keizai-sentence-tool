@@ -9,7 +9,7 @@ from generator import _build_full_prompt
 def test_soviet_propaganda_style_is_available_for_all_channels(tmp_path):
     assert "soviet_propaganda" in VALID_STYLES
 
-    for channel_id in ("keizai", "roshia"):
+    for channel_id in ("keizai", "roshia", "seikou"):
         pipe = SentencePipeline(
             manuscript_text="x" * 200,
             output_dir=tmp_path / channel_id,
@@ -35,7 +35,17 @@ def test_soviet_propaganda_reaches_prompt_layers():
 
 def test_channel_character_refs_point_to_existing_files_or_are_blank():
     root = Path(__file__).resolve().parents[1]
-    for channel_id in ("keizai", "roshia"):
+    for channel_id in ("keizai", "roshia", "seikou"):
         defaults = get_channel(channel_id).get("defaults", {})
         ref = defaults.get("character_ref", "")
         assert not ref or (root / ref).exists()
+
+
+def test_seikou_channel_uses_dedicated_api_prefix():
+    channel = get_channel("seikou")
+    assert channel["name"] == "成功の法則"
+    assert channel["api_env_prefix"] == "SEIKOU"
+    defaults = channel.get("defaults", {})
+    assert defaults["provider"] == "nanobanana"
+    assert defaults["chart_engine"] == "render"
+    assert defaults["map_engine"] == "render"

@@ -79,6 +79,36 @@
         "web_image_count": 30,
         "user_instructions": ""
       }
+    },
+    {
+      "id": "seikou",
+      "name": "成功の法則",
+      "api_env_prefix": "SEIKOU",
+      "defaults": {
+        "provider": "nanobanana",
+        "openai_quality": "medium",
+        "style_preset": "flat_infographic",
+        "route_mode": "auto",
+        "worldview_mode": true,
+        "worldview_desc": "ART STYLE / TONE (match this in EVERY illustration): a clean, practical, motivating educational explainer style for a business / self-improvement channel about habits, strategy, mindset, productivity and success principles. Use simple flat-vector diagrams, clear metaphors, structured frameworks, checklists, ladders, flywheels, roadmaps and before/after comparisons. Keep the mood confident, calm and useful rather than flashy or emotional. Avoid vague luxury imagery, money worship, gambling-like visuals, exaggerated charisma, fake screenshots or unrealistic promises. Palette: crisp white background, deep teal as the main color, warm amber as the accent, charcoal text, light gray structure. Keep every scene readable at a glance and grounded in the exact manuscript.",
+        "concurrency": 4,
+        "max_diagrams": 150,
+        "verify_diagrams": true,
+        "character_ref": "",
+        "chart_engine": "render",
+        "map_engine": "render",
+        "photo_source": "web",
+        "beat_mode": true,
+        "chars_per_sec": 5.5,
+        "realphoto_watermark": true,
+        "chart_theme": {
+          "bg": "#FFFFFF", "main": "#0F766E", "accent": "#D97706",
+          "grid": "#E5E7EB", "text": "#1F2937", "font": "NotoSansJP"
+        },
+        "skip_decorative": false,
+        "web_image_count": 30,
+        "user_instructions": ""
+      }
     }
   ]
 }
