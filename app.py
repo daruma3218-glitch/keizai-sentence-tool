@@ -466,6 +466,8 @@ def start_job():
     concurrency = max(1, min(concurrency, 8))
 
     user_instructions = request.form.get("user_instructions", "").strip()
+    if not user_instructions:
+        user_instructions = (channel.get("defaults", {}) or {}).get("user_instructions", "").strip()
 
     job_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     job_dir = OUTPUT_DIR / job_id

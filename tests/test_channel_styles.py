@@ -49,3 +49,6 @@ def test_seikou_channel_uses_dedicated_api_prefix():
     assert defaults["provider"] == "nanobanana"
     assert defaults["chart_engine"] == "render"
     assert defaults["map_engine"] == "render"
+    assert defaults["web_image_count"] == 60
+    assert "一次情報" in defaults["user_instructions"]
+    assert "realphoto" in defaults["user_instructions"]
