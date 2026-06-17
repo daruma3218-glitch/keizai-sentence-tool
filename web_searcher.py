@@ -138,6 +138,7 @@ def _select_chunk(
     target_count: int,
     exclude_nos: set,
     log: Callable,
+    profile: str = "",
 ) -> list:
     """1 回の Claude 呼び出しで指定数を選定（チャンク単位）"""
     if target_count <= 0:
@@ -150,18 +151,34 @@ def _select_chunk(
 
     inputs_json = json.dumps(chunk_candidates, ensure_ascii=False, indent=2)
 
-    system = (
-        "あなたは動画素材リサーチャーです。"
-        "原稿センテンスから Web 検索で参考画像が見つかりそうなものを選びます。"
-        "結果は必ず JSON 配列のみで返してください。前置きや説明は不要です。"
-    )
-    exclude_note = f"\n\n【除外: 以下の no はすでに選定済みなので絶対に選ばないこと】\n{sorted(exclude_nos)[:200]}" if exclude_nos else ""
-    query = f"""以下のセンテンスから、Web で参考画像（写真・絵画・歴史画像）が見つかりやすい候補を**{target_count}件**選んでください。
+    primary_media = profile == "primary_media"
+    if primary_media:
+        system = (
+            "あなたはYouTube動画制作向けの素材リサーチャーです。"
+            "原稿センテンスから、一次情報・記事・実在人物写真・登壇動画・講演動画・公式資料を"
+            "Web検索で探す価値が高いものを選びます。結果は必ず JSON 配列のみで返してください。"
+        )
+        criteria = """【選定基準（成功の法則向け・一次情報/実写素材を広く採用）】
+- 実在人物、著者、起業家、研究者、経営者、講演者、スポーツ選手、アーティスト
+- 企業名、商品名、サービス名、ブランド名、実在プロジェクト
+- 書籍、論文、研究、統計、調査、大学、研究機関、政府機関
+- 公式発表、プレスリリース、年次報告書、IR資料、講演資料
+- YouTube/TED/大学/企業イベント等の登壇・講演・インタビュー動画
+- 実際の職場、会議、店舗、製造現場、学校、スポーツ現場などリアル画像が効く文
+- 抽象概念でも、具体的な人物・事例・企業・本・研究に結びつけて素材化できる文
 
-候補センテンス:
-{inputs_json}{exclude_note}
-
-【選定基準（広めに採用）】
+【検索クエリ方針】
+- 可能なら「公式」「講演」「登壇」「インタビュー」「YouTube」「TED」「論文」「統計」
+  「年次報告書」「プレスリリース」「大学」「政府」「原典」を含める
+- 人物名・企業名・書籍名など固有名詞を優先
+"""
+    else:
+        system = (
+            "あなたは動画素材リサーチャーです。"
+            "原稿センテンスから Web 検索で参考画像が見つかりそうなものを選びます。"
+            "結果は必ず JSON 配列のみで返してください。前置きや説明は不要です。"
+        )
+        criteria = """【選定基準（広めに採用）】
 - 歴史人物名（スターリン、毛沢東、ニクソン、ゴルバチョフ など）
 - 固有歴史事件名（アイグン条約、朝鮮戦争、ニクソン訪中、シベリア抑留 など）
 - 具体的地名・建造物（ウラジオストク、満州、バイカル湖、紫禁城 など）
@@ -170,6 +187,14 @@ def _select_chunk(
 - 国名・国旗（アメリカ・中国・ロシア・ソ連 など固有の国名）
 - 地理的特徴（バイカル湖、シベリア、太平洋 など）
 - 統計データの背景となるもの（GDP、軍事費、原油生産 → 関連写真）
+"""
+    exclude_note = f"\n\n【除外: 以下の no はすでに選定済みなので絶対に選ばないこと】\n{sorted(exclude_nos)[:200]}" if exclude_nos else ""
+    query = f"""以下のセンテンスから、Web で参考画像（写真・絵画・歴史画像）が見つかりやすい候補を**{target_count}件**選んでください。
+
+候補センテンス:
+{inputs_json}{exclude_note}
+
+{criteria}
 
 【選定方針】
 - できるだけ多く選ぶ。{target_count}件に満たない場合は、候補センテンスから関連画像が見つかりそうなものを広く拾う
@@ -181,7 +206,7 @@ def _select_chunk(
 
 【出力 JSON（必ずこの形式のみ）】
 [
-  {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ(日本語30文字以内、固有名詞含む)"}}
+  {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ(日本語40文字以内、固有名詞含む)"}}
 ]
 
 必ず可能な限り {target_count} 件を出力。出力は JSON 配列のみ、前置き禁止。"""
@@ -218,6 +243,7 @@ def select_search_worthy_sentences(
     rows: list,
     target_count: int,
     log: Optional[Callable] = None,
+    profile: str = "",
 ) -> list:
     """Claude で「Web 画像が役立つセンテンス」を target_count 件選ぶ
 
@@ -259,7 +285,7 @@ def select_search_worthy_sentences(
         log("websearch", f"  チャンク {chunk_idx}: {request_n} 件要求（残り {remaining} 件）")
 
         try:
-            selected = _select_chunk(client, candidates, request_n, selected_nos, log)
+            selected = _select_chunk(client, candidates, request_n, selected_nos, log, profile=profile)
         except Exception as e:
             log("error", f"  チャンク {chunk_idx} 失敗: {str(e)[:120]}")
             break
@@ -507,7 +533,7 @@ def run_web_search(
         return []
 
     # Step 1: 検索対象センテンスを Claude が選定
-    selections = select_search_worthy_sentences(client, rows, target_count, log=log)
+    selections = select_search_worthy_sentences(client, rows, target_count, log=log, profile=profile)
     if not selections:
         log("websearch", "Web 検索対象センテンスが見つかりません")
         return []

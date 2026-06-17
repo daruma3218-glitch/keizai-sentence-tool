@@ -515,18 +515,36 @@ class SentencePipeline:
 
         web_thread = None
 
-        if self.route_mode == "auto" and web_photo_rows:
-            # ルーターが web_photo に振った文を検索（beat_mode 時は display=image のみ）
+        if self.route_mode == "auto" and (web_photo_rows or self.web_search_profile == "primary_media"):
+            # 通常はルーターが web_photo に振った文だけ検索。
+            # primary_media（成功の法則）は、記事・一次資料・登壇動画も拾うため、
+            # web_photo 以外の重要文も追加選定して最大 web_image_count 件まで検索する。
             selections = []
-            for r in web_photo_rows:
-                if not self._wants_image(r):
-                    continue
-                rt = routes.get(r["no"], {})
-                selections.append({
-                    "no": r["no"],
-                    "query": rt.get("search_query") or r.get("sentence", "")[:30],
-                    "topic": rt.get("topic") or r.get("sentence", "")[:20],
-                })
+            if self.web_search_profile == "primary_media":
+                material_rows = [
+                    r for r in rows
+                    if r.get("route") != "skip" and r.get("display") in ("image", "hold", None, "")
+                ]
+                target_count = min(max(self.web_image_count, len(web_photo_rows)), 120)
+                self._log(
+                    "websearch",
+                    f"一次情報/記事/登壇動画の素材検索を拡張: 目標 {target_count} 件（候補 {len(material_rows)}）"
+                )
+                from web_searcher import select_search_worthy_sentences
+                selections = select_search_worthy_sentences(
+                    client, material_rows, target_count=target_count,
+                    log=self._log, profile=self.web_search_profile,
+                )
+            else:
+                for r in web_photo_rows:
+                    if not self._wants_image(r):
+                        continue
+                    rt = routes.get(r["no"], {})
+                    selections.append({
+                        "no": r["no"],
+                        "query": rt.get("search_query") or r.get("sentence", "")[:30],
+                        "topic": rt.get("topic") or r.get("sentence", "")[:20],
+                    })
             self._log("websearch",
                       f"Web 画像取得を並列起動: {len(selections)} 件（ルーター選定・同時 8 並列）")
 
