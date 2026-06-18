@@ -23,6 +23,8 @@ from utils import claude_query, parse_json_object
 
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
+SPLITTER_TITLE_TIMEOUT_SECONDS = 45
+SPLITTER_ANALYSIS_TIMEOUT_SECONDS = 60
 
 # 文末記号
 SENTENCE_END_PATTERN = re.compile(r'(?<=[。！？])\s*')
@@ -183,8 +185,22 @@ def name_chapters_with_claude(
 JSON のみで返すこと。キーは元の章 index（文字列）。"""
 
     log("splitter", f"Claude で {len(unnamed_indices)} 章にタイトル付与中...")
-    result = claude_query(client, query, system, max_tokens=1500, model=CLAUDE_MODEL)
-    data = parse_json_object(result)
+    try:
+        result = claude_query(
+            client,
+            query,
+            system,
+            max_tokens=1500,
+            model=CLAUDE_MODEL,
+            max_retries=1,
+            timeout_seconds=SPLITTER_TITLE_TIMEOUT_SECONDS,
+        )
+        data = parse_json_object(result)
+        if not data:
+            log("warn", "章タイトル付与が空レスポンス。機械タイトルで続行します")
+    except Exception as e:
+        log("warn", f"章タイトル付与がタイムアウト/失敗。機械タイトルで続行します: {str(e)[:120]}")
+        data = {}
     titles_map = data.get("titles", {}) if isinstance(data, dict) else {}
     if not isinstance(titles_map, dict):
         titles_map = {}
@@ -240,6 +256,8 @@ def analyze_manuscript_summary(
 ) -> dict:
     """原稿の全体メタ情報（タイトル・要約・キーワード）を取得"""
     log = log or (lambda *a, **kw: None)
+    first_line = next((line.strip() for line in manuscript_text.splitlines() if line.strip()), "")
+    fallback_title = (first_line[:30] if first_line else "無題")
     system = (
         "あなたは編集者です。動画原稿の全体構造を JSON で返します。"
     )
@@ -257,10 +275,24 @@ def analyze_manuscript_summary(
 
 JSON のみで返すこと。"""
     log("splitter", "Claude で原稿全体を分析中...")
-    result = claude_query(client, query, system, max_tokens=800, model=CLAUDE_MODEL)
-    data = parse_json_object(result) or {}
+    try:
+        result = claude_query(
+            client,
+            query,
+            system,
+            max_tokens=800,
+            model=CLAUDE_MODEL,
+            max_retries=1,
+            timeout_seconds=SPLITTER_ANALYSIS_TIMEOUT_SECONDS,
+        )
+        data = parse_json_object(result) or {}
+        if not data:
+            log("warn", "原稿全体分析が空レスポンス。機械メタ情報で続行します")
+    except Exception as e:
+        log("warn", f"原稿全体分析がタイムアウト/失敗。機械メタ情報で続行します: {str(e)[:120]}")
+        data = {}
     return {
-        "title": data.get("title", "無題"),
+        "title": data.get("title") or fallback_title,
         "summary": data.get("summary", manuscript_text[:200]),
         "keywords": data.get("keywords", []),
     }
