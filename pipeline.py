@@ -60,6 +60,7 @@ class SentencePipeline:
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
+        max_web_image_reuse: int = 2,       # 同じWeb写真/サムネイルの採用上限
         beat_mode: bool = False,           # v3: ビート単位で重要度加重配分（False=v2均等）
         chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
         realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
@@ -93,6 +94,7 @@ class SentencePipeline:
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
+        self.max_web_image_reuse = max(1, min(int(max_web_image_reuse or 2), 10))
         self.beat_mode = bool(beat_mode)                     # v3: ビート加重配分
         self.chars_per_sec = float(chars_per_sec or 5.5)
         self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
@@ -235,6 +237,17 @@ class SentencePipeline:
         if current:
             chunks.append(current)
         return chunks
+
+    @staticmethod
+    def _web_image_dedupe_key(info: dict) -> str:
+        """Web写真の重複判定キー。サムネがあれば画像単位、無ければ出典単位で見る。"""
+        key = (
+            info.get("thumb_url")
+            or info.get("source_url")
+            or info.get("commons_page_url")
+            or ""
+        )
+        return key.strip().lower()
 
     def _load_route_feedback(self, limit: int = 12) -> list:
         """v3 Step5: 過去の「ルート違い」フィードバックを読み、ルーターに渡す few-shot を作る。
@@ -502,8 +515,33 @@ class SentencePipeline:
         # ===== Phase 2b: Web 画像 URL 取得（並列実行） =====
         # 部分結果を保持する list（タイムアウト時にも参照できる）
         web_results_accumulator: list = []
+        web_image_use_counts: dict = {}
+        web_image_use_lock = threading.Lock()
 
         def _web_on_item(info):
+            dedupe_key = self._web_image_dedupe_key(info)
+            if dedupe_key:
+                with web_image_use_lock:
+                    used = web_image_use_counts.get(dedupe_key, 0)
+                    if used >= self.max_web_image_reuse:
+                        self._log(
+                            "websearch",
+                            f"重複Web写真をスキップ: no={info.get('no')} / 既に {used} 回使用",
+                            (info.get("source_title") or info.get("source_url") or "")[:120],
+                        )
+                        self._update_row(
+                            info["no"],
+                            web_source_url=info.get("source_url", ""),
+                            web_thumb_url=info.get("thumb_url", ""),
+                            web_topic=info.get("topic", ""),
+                            web_source_title=info.get("source_title", ""),
+                            web_source_type=info.get("source_type", ""),
+                            web_duplicate_skipped=True,
+                            error=f"同じWeb写真が上限{self.max_web_image_reuse}回に達したためAI代替へ回します",
+                        )
+                        return
+                    web_image_use_counts[dedupe_key] = used + 1
+
             web_results_accumulator.append(info)
             # サムネをローカルに DL して実画像として表示・ZIP 同梱できるようにする
             from web_searcher import download_thumbnail

@@ -283,6 +283,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             map_engine=defaults.get("map_engine", "ai"),
             photo_source=defaults.get("photo_source", "web"),
             web_search_profile=defaults.get("web_search_profile", ""),
+            max_web_image_reuse=defaults.get("max_web_image_reuse", 2),
             beat_mode=bool(defaults.get("beat_mode", False)),
             chars_per_sec=defaults.get("chars_per_sec", 5.5),
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
