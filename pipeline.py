@@ -545,8 +545,9 @@ class SentencePipeline:
                         "query": rt.get("search_query") or r.get("sentence", "")[:30],
                         "topic": rt.get("topic") or r.get("sentence", "")[:20],
                     })
+            web_workers = 8 if self.web_search_profile == "primary_media" else 4
             self._log("websearch",
-                      f"Web 画像取得を並列起動: {len(selections)} 件（ルーター選定・同時 8 並列）")
+                      f"Web 画像取得を並列起動: {len(selections)} 件（ルーター選定・同時 {web_workers} 並列）")
 
             def web_task_auto():
                 try:
@@ -554,12 +555,12 @@ class SentencePipeline:
                         # v3 Step3: Wikimedia Commons 限定（許可ライセンスのみ・権利安全）
                         from commons_searcher import run_commons_search_for_selections
                         run_commons_search_for_selections(
-                            client, selections, max_workers=8,
+                            client, selections, max_workers=web_workers,
                             log=self._log, item_callback=_web_on_item,
                         )
                     else:
                         run_web_search_for_selections(
-                            client, selections, max_workers=8,
+                            client, selections, max_workers=web_workers,
                             log=self._log, item_callback=_web_on_item,
                             profile=self.web_search_profile,
                         )
@@ -743,16 +744,26 @@ class SentencePipeline:
             except Exception as e:
                 self._log("error", f"検証フェーズをスキップしました（{str(e)[:80]}）。生成画像はそのまま使えます。")
 
-        # Web 検索の完了を待つ（タイムアウト 20 分）
-        # Web 検索は I/O bound + Claude Web Search のレート制限により遅い:
-        # 1 件あたり 5〜15 秒 × 100 件 ÷ 並列 8 ≈ 1〜3 分が目安
-        # 余裕を見て 20 分に延長
+        # Web 検索の完了を待つ。
+        # 通常チャンネルで長く待ちすぎると「画像生成は終わったのに止まった」ように見える。
+        # 未取得分は下の AI 代替生成で穴埋めできるため、通常は短めに切り上げる。
+        # 成功の法則(primary_media)だけは記事/一次資料を大量に探すので長めに待つ。
         if web_thread:
             self._progress(3, "Web 画像取得の完了を待機中...", 92)
-            wait_minutes = 20
+            wait_minutes = 12 if self.web_search_profile == "primary_media" else 5
             self._log("websearch",
                       f"Web 画像取得の完了を最大 {wait_minutes} 分待機します...")
-            web_thread.join(timeout=wait_minutes * 60)
+            waited = 0
+            wait_seconds = wait_minutes * 60
+            while web_thread.is_alive() and waited < wait_seconds:
+                web_thread.join(timeout=30)
+                waited += 30
+                if web_thread.is_alive():
+                    self._log(
+                        "websearch",
+                        f"Web 画像取得待機中: {min(waited, wait_seconds)}/{wait_seconds}秒"
+                        f"（部分結果 {len(web_results_accumulator)} 件）"
+                    )
             if web_thread.is_alive():
                 self._log("warn",
                           f"Web 画像取得が {wait_minutes} 分以内に完了しませんでした。"
