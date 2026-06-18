@@ -15,7 +15,7 @@ route 種別:
 
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from typing import Callable, Optional
 
 import anthropic
@@ -26,6 +26,8 @@ from utils import claude_query, parse_json_array
 CLAUDE_MODEL = "claude-sonnet-4-6"
 CHUNK_SIZE = 40  # 1 リクエストで分類する文数
 ROUTER_CHUNK_TIMEOUT_SECONDS = 90
+ROUTER_OVERALL_TIMEOUT_SECONDS = 240
+SPEC_EXTRACTION_TIMEOUT_SECONDS = 60
 
 VALID_ROUTES = ("web_photo", "realphoto", "map", "diagram", "chart", "illustration", "skip")
 AI_ROUTES = ("realphoto", "map", "diagram", "chart", "illustration")  # AI生成班が担当
@@ -251,38 +253,51 @@ def route_all_sentences(
         }
         chunks_by_idx = {i: chunk for i, chunk in enumerate(chunks)}
         completed = 0
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                results = future.result()
-                if not results:
-                    raise RuntimeError("Claudeルーターが空レスポンス/JSON解析失敗")
-                for item in results:
-                    if not isinstance(item, dict):
-                        continue
-                    no = item.get("no")
-                    route = item.get("route", "")
-                    if no is None or route not in VALID_ROUTES:
-                        continue
-                    routes_by_no[no] = {
-                        "route": route,
-                        "reason": item.get("reason", ""),
-                        "search_query": item.get("search_query", ""),
-                        "topic": item.get("topic", ""),
-                        "propaganda": bool(item.get("propaganda", False)) if propaganda_mix else False,
-                        # v3 Step4
-                        "importance": _clamp_importance(item.get("importance")),
-                        "entities": _clean_entities(item.get("entities")),
-                        "beat": "new" if item.get("beat") == "new" else "continue",
-                    }
-                completed += 1
-                log("router", f"チャンク {completed}/{len(chunks)} 分類完了")
-            except Exception as e:
-                log("warn", f"ルーターチャンク {idx + 1}/{len(chunks)} が失敗/タイムアウト。機械分類で続行します: {str(e)[:120]}")
+        try:
+            iterator = as_completed(future_to_idx, timeout=max(ROUTER_OVERALL_TIMEOUT_SECONDS, len(chunks) * 30))
+            for future in iterator:
+                idx = future_to_idx[future]
+                try:
+                    results = future.result(timeout=1)
+                    if not results:
+                        raise RuntimeError("Claudeルーターが空レスポンス/JSON解析失敗")
+                    for item in results:
+                        if not isinstance(item, dict):
+                            continue
+                        no = item.get("no")
+                        route = item.get("route", "")
+                        if no is None or route not in VALID_ROUTES:
+                            continue
+                        routes_by_no[no] = {
+                            "route": route,
+                            "reason": item.get("reason", ""),
+                            "search_query": item.get("search_query", ""),
+                            "topic": item.get("topic", ""),
+                            "propaganda": bool(item.get("propaganda", False)) if propaganda_mix else False,
+                            # v3 Step4
+                            "importance": _clamp_importance(item.get("importance")),
+                            "entities": _clean_entities(item.get("entities")),
+                            "beat": "new" if item.get("beat") == "new" else "continue",
+                        }
+                    completed += 1
+                    log("router", f"チャンク {completed}/{len(chunks)} 分類完了")
+                except Exception as e:
+                    log("warn", f"ルーターチャンク {idx + 1}/{len(chunks)} が失敗/タイムアウト。機械分類で続行します: {str(e)[:120]}")
+                    for row in chunks_by_idx.get(idx, []):
+                        routes_by_no[row["no"]] = _fallback_route_for_row(row)
+                    completed += 1
+                    log("router", f"チャンク {completed}/{len(chunks)} 分類完了（フォールバック）")
+        except FuturesTimeout:
+            log("warn", "ルーター分類が全体時間上限に達しました。未完了チャンクは機械分類で続行します")
+        finally:
+            for future, idx in future_to_idx.items():
+                if future.done():
+                    continue
+                future.cancel()
                 for row in chunks_by_idx.get(idx, []):
-                    routes_by_no[row["no"]] = _fallback_route_for_row(row)
+                    routes_by_no[row["no"]] = _fallback_route_for_row(row, "ルーター全体タイムアウト時の機械分類")
                 completed += 1
-                log("router", f"チャンク {completed}/{len(chunks)} 分類完了（フォールバック）")
+                log("router", f"チャンク {completed}/{len(chunks)} 分類完了（全体タイムアウト）")
 
     # フォールバック: 未分類の文は illustration 扱い
     for r in rows:
@@ -403,7 +418,14 @@ def extract_chart_specs(client, chart_rows: list, log: Optional[Callable] = None
 - big_number: series に1要素 {{"label": ラベル, "value": 数値}} か "value": 数値
 - timeline: series=[{{"label": 時点, "value": 出来事(文字でも可)}}]
 JSON 配列のみ。"""
-        text = claude_query(client, query, system, max_tokens=6000)
+        text = claude_query(
+            client,
+            query,
+            system,
+            max_tokens=6000,
+            max_retries=1,
+            timeout_seconds=SPEC_EXTRACTION_TIMEOUT_SECONDS,
+        )
         specs = parse_json_array(text)
         by_no = {}
         for s in specs:
@@ -481,7 +503,14 @@ def extract_map_specs(client, map_rows: list, log: Optional[Callable] = None) ->
   {{"no": 8, "map_type": null}}
 ]
 JSON 配列のみ。"""
-        text = claude_query(client, query, system, max_tokens=5000)
+        text = claude_query(
+            client,
+            query,
+            system,
+            max_tokens=5000,
+            max_retries=1,
+            timeout_seconds=SPEC_EXTRACTION_TIMEOUT_SECONDS,
+        )
         specs = parse_json_array(text)
         by_no = {}
         for s in specs:

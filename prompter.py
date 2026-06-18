@@ -7,7 +7,7 @@
 
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from typing import Callable, Optional
 
 import anthropic
@@ -18,6 +18,7 @@ from utils import claude_query, parse_json_array
 CLAUDE_MODEL = "claude-sonnet-4-6"
 BATCH_SIZE = 8
 PROMPTER_BATCH_TIMEOUT_SECONDS = 90
+PROMPTER_OVERALL_TIMEOUT_SECONDS = 360
 
 
 # ===== 安全な自動抽出（Claude の遠慮を補完） =====
@@ -347,22 +348,36 @@ def generate_all_prompts(
             for i, batch in enumerate(batches)
         }
         batches_by_idx = {i: batch for i, batch in enumerate(batches)}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                results = future.result()
-                for p in results:
-                    if p.get("no") is not None:
-                        prompts_by_no[p["no"]] = p
-                completed += 1
-                log("prompter", f"バッチ {completed}/{len(batches)} 完了（{len(results)} 件）")
-            except Exception as e:
-                fallback = [_fallback_prompt_for_row(r) for r in batches_by_idx.get(idx, [])]
-                for p in fallback:
-                    prompts_by_no[p["no"]] = p
-                completed += 1
-                log("warn", f"プロンプトバッチ {idx + 1}/{len(batches)} が失敗/タイムアウト。機械プロンプトで続行します: {str(e)[:120]}")
-                log("prompter", f"バッチ {completed}/{len(batches)} 完了（フォールバック {len(fallback)} 件）")
+        def fallback_batch(idx: int, reason: str):
+            nonlocal completed
+            fallback = [_fallback_prompt_for_row(r) for r in batches_by_idx.get(idx, [])]
+            for p in fallback:
+                prompts_by_no[p["no"]] = p
+            completed += 1
+            log("warn", f"プロンプトバッチ {idx + 1}/{len(batches)} が失敗/タイムアウト。機械プロンプトで続行します: {reason[:120]}")
+            log("prompter", f"バッチ {completed}/{len(batches)} 完了（フォールバック {len(fallback)} 件）")
+
+        try:
+            iterator = as_completed(future_to_idx, timeout=max(PROMPTER_OVERALL_TIMEOUT_SECONDS, len(batches) * 25))
+            for future in iterator:
+                idx = future_to_idx[future]
+                try:
+                    results = future.result(timeout=1)
+                    for p in results:
+                        if p.get("no") is not None:
+                            prompts_by_no[p["no"]] = p
+                    completed += 1
+                    log("prompter", f"バッチ {completed}/{len(batches)} 完了（{len(results)} 件）")
+                except Exception as e:
+                    fallback_batch(idx, str(e))
+        except FuturesTimeout:
+            log("warn", "プロンプト生成が全体時間上限に達しました。未完了バッチは機械プロンプトで続行します")
+        finally:
+            for future, idx in future_to_idx.items():
+                if future.done():
+                    continue
+                future.cancel()
+                fallback_batch(idx, "全体タイムアウト")
 
     out_rows = []
     for r in rows:

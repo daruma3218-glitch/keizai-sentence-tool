@@ -315,6 +315,19 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
     except Exception as e:
         import traceback
         traceback.print_exc()
+        try:
+            rows_path = job_dir / "rows_progress.json"
+            snap = load_json(rows_path, {"rows": []})
+            dirty = False
+            for r in snap.get("rows", []):
+                if r.get("status") in ("generating", "pending") and r.get("display") == "image":
+                    r["status"] = "failed"
+                    r["error"] = f"ジョブ中断: {str(e)[:120]}"
+                    dirty = True
+            if dirty:
+                rows_path.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
         _set_job_state(job_id, status="error", message=str(e)[:200], percent=0)
         _add_log(job_id, "error", "パイプライン実行エラー", str(e)[:300])
 
