@@ -97,6 +97,14 @@
         </div>
       </div>
 
+      <div id="chapterProgressSection" class="hidden mt-5">
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <h2 class="text-sm font-semibold text-gray-900">章ごとの進捗</h2>
+          <button onclick="clearChapterFilter()" class="text-xs text-cyan-700 hover:text-cyan-900 hover:underline">全章表示</button>
+        </div>
+        <div id="chapterCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3"></div>
+      </div>
+
       <div id="actions" class="hidden mt-5 flex flex-wrap gap-3">
         <a id="galleryBtn" href="" target="_blank" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-purple-500 text-purple-700 font-medium rounded-xl hover:bg-purple-50 transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
@@ -129,6 +137,18 @@
               <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-green-500"></span>完了</span>
               <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-red-500"></span>失敗</span>
               <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-purple-400"></span>スキップ</span>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-3 px-2 pb-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <button data-row-filter="all" onclick="setRowFilter('all')" class="row-filter-btn px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-medium">全て</button>
+              <button data-row-filter="issues" onclick="setRowFilter('issues')" class="row-filter-btn px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200">失敗・要確認だけ</button>
+              <button data-row-filter="generating" onclick="setRowFilter('generating')" class="row-filter-btn px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200">生成中</button>
+              <button data-row-filter="ok" onclick="setRowFilter('ok')" class="row-filter-btn px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200">完了</button>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span id="activeFilterLabel" class="text-xs text-gray-400"></span>
+              <button id="regenIssuesBtn" onclick="regenerateVisibleIssues()" class="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-medium hover:bg-rose-100">表示中の失敗だけ再生成</button>
             </div>
           </div>
           <div class="overflow-x-auto max-h-[80vh] scroll-y border-t border-gray-100">
@@ -197,6 +217,10 @@
     const JOB_ID = "{{ job_id }}";
     let logsSince = 0;
     let stopped = false;
+    let lastRows = [];
+    let rowFilter = 'all';
+    let chapterFilter = null;
+    let lastJobStatus = 'running';
 
     const els = {
       jobTitle: document.getElementById('jobTitle'),
@@ -212,6 +236,10 @@
       completedCount: document.getElementById('completedCount'),
       failedCount: document.getElementById('failedCount'),
       rowsTbody: document.getElementById('rowsTbody'),
+      chapterProgressSection: document.getElementById('chapterProgressSection'),
+      chapterCards: document.getElementById('chapterCards'),
+      activeFilterLabel: document.getElementById('activeFilterLabel'),
+      regenIssuesBtn: document.getElementById('regenIssuesBtn'),
       logsContainer: document.getElementById('logsContainer'),
       actions: document.getElementById('actions'),
       downloadBtn: document.getElementById('downloadBtn'),
@@ -282,6 +310,161 @@
         </a>`;
     }
 
+    function isImageCandidate(row) {
+      const route = row.route || '';
+      return ['realphoto', 'diagram', 'illustration', 'chart', 'map', 'web_photo'].includes(route);
+    }
+
+    function rowHasIssue(row) {
+      const status = row.status || 'pending';
+      const route = row.route || '';
+      if (status === 'failed') return true;
+      if ((row.error || '').trim()) return true;
+      if (row.web_duplicate_skipped) return true;
+      if (status === 'ok' && isImageCandidate(row) && !row.filename && route !== 'web_photo') return true;
+      if (lastJobStatus === 'completed' && isImageCandidate(row) && !row.filename && route !== 'web_photo' && !['skipped', 'thinned', 'skipped_limit'].includes(status)) return true;
+      if (lastJobStatus === 'completed' && route === 'web_photo' && !row.web_source_url) return true;
+      return false;
+    }
+
+    function rowDataAttrs(row) {
+      return {
+        status: row.status || 'pending',
+        filename: row.filename || '',
+        error: row.error || '',
+        route: row.route || '',
+        webUrl: row.web_source_url || '',
+        chapterIndex: row.chapter_index ?? '',
+        display: row.display || '',
+        issue: rowHasIssue(row) ? '1' : '0',
+        terms: JSON.stringify(row.allowed_terms || []),
+      };
+    }
+
+    function applyRowAttrs(tr, row) {
+      const attrs = rowDataAttrs(row);
+      tr.setAttribute('data-status', attrs.status);
+      tr.setAttribute('data-filename', attrs.filename);
+      tr.setAttribute('data-error', attrs.error);
+      tr.setAttribute('data-route', attrs.route);
+      tr.setAttribute('data-web-url', attrs.webUrl);
+      tr.setAttribute('data-chapter-index', attrs.chapterIndex);
+      tr.setAttribute('data-display', attrs.display);
+      tr.setAttribute('data-issue', attrs.issue);
+      tr.setAttribute('data-terms', attrs.terms);
+    }
+
+    function chapterLabel(row) {
+      const raw = row.chapter_title || '';
+      return raw.trim() || `章 ${row.chapter_index || 1}`;
+    }
+
+    function chapterStats(rows) {
+      const map = new Map();
+      rows.forEach(row => {
+        const idx = String(row.chapter_index ?? 1);
+        if (!map.has(idx)) {
+          map.set(idx, { index: idx, title: chapterLabel(row), total: 0, ok: 0, generating: 0, failed: 0, issue: 0 });
+        }
+        const s = map.get(idx);
+        s.total += 1;
+        if (row.status === 'ok') s.ok += 1;
+        if (row.status === 'generating') s.generating += 1;
+        if (row.status === 'failed') s.failed += 1;
+        if (rowHasIssue(row)) s.issue += 1;
+      });
+      return Array.from(map.values()).sort((a, b) => parseInt(a.index || '0', 10) - parseInt(b.index || '0', 10));
+    }
+
+    function updateChapterCards(rows) {
+      if (!els.chapterCards || !els.chapterProgressSection) return;
+      const chapters = chapterStats(rows);
+      if (!chapters.length) {
+        els.chapterProgressSection.classList.add('hidden');
+        return;
+      }
+      els.chapterProgressSection.classList.remove('hidden');
+      els.chapterCards.innerHTML = chapters.map(ch => {
+        const pct = ch.total ? Math.round((ch.ok / ch.total) * 100) : 0;
+        const active = chapterFilter !== null && String(chapterFilter) === String(ch.index);
+        const state = ch.issue > 0 ? '要確認' : (ch.generating > 0 ? '生成中' : (pct >= 100 ? '完了' : '待機'));
+        const color = ch.issue > 0
+          ? 'border-rose-200 bg-rose-50'
+          : (ch.generating > 0 ? 'border-amber-200 bg-amber-50' : (pct >= 100 ? 'border-emerald-200 bg-emerald-50' : 'border-gray-200 bg-white'));
+        const bar = ch.issue > 0 ? 'bg-rose-500' : (ch.generating > 0 ? 'bg-amber-500' : 'bg-cyan-600');
+        return `
+          <button onclick="setChapterFilter('${escapeHtml(ch.index)}')" class="text-left rounded-xl border ${color} ${active ? 'ring-2 ring-cyan-500' : ''} p-3 hover:shadow-sm transition">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-xs font-semibold text-gray-900 truncate">${escapeHtml(ch.title)}</div>
+              <span class="text-[10px] font-medium ${ch.issue > 0 ? 'text-rose-700' : 'text-gray-500'}">${state}</span>
+            </div>
+            <div class="mt-2 h-1.5 bg-white/70 rounded-full overflow-hidden">
+              <div class="h-full ${bar}" style="width:${pct}%"></div>
+            </div>
+            <div class="mt-2 grid grid-cols-4 gap-1 text-center text-[10px] text-gray-500">
+              <span><b class="text-gray-900">${ch.total}</b><br>文</span>
+              <span><b class="text-emerald-700">${ch.ok}</b><br>完了</span>
+              <span><b class="text-amber-700">${ch.generating}</b><br>中</span>
+              <span><b class="text-rose-700">${ch.issue}</b><br>要確認</span>
+            </div>
+          </button>
+        `;
+      }).join('');
+    }
+
+    function setRowFilter(filter) {
+      rowFilter = filter;
+      document.querySelectorAll('.row-filter-btn').forEach(btn => {
+        const active = btn.getAttribute('data-row-filter') === rowFilter;
+        btn.className = active
+          ? 'row-filter-btn px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-medium'
+          : 'row-filter-btn px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200';
+      });
+      applyRowFilters();
+    }
+
+    function setChapterFilter(index) {
+      chapterFilter = String(index);
+      updateChapterCards(lastRows);
+      applyRowFilters();
+    }
+
+    function clearChapterFilter() {
+      chapterFilter = null;
+      updateChapterCards(lastRows);
+      applyRowFilters();
+    }
+
+    function rowMatchesFilter(tr) {
+      const status = tr.getAttribute('data-status') || 'pending';
+      const issue = tr.getAttribute('data-issue') === '1';
+      const ch = tr.getAttribute('data-chapter-index') || '';
+      if (chapterFilter !== null && ch !== String(chapterFilter)) return false;
+      if (rowFilter === 'issues') return issue;
+      if (rowFilter === 'generating') return status === 'generating';
+      if (rowFilter === 'ok') return status === 'ok';
+      return true;
+    }
+
+    function applyRowFilters() {
+      const rows = Array.from(els.rowsTbody.querySelectorAll('tr[data-no]'));
+      let visible = 0;
+      let issuesVisible = 0;
+      rows.forEach(tr => {
+        const show = rowMatchesFilter(tr);
+        tr.classList.toggle('hidden', !show);
+        if (show) {
+          visible += 1;
+          if (tr.getAttribute('data-issue') === '1') issuesVisible += 1;
+        }
+      });
+      const filterLabel = rowFilter === 'issues' ? '失敗・要確認' : (rowFilter === 'generating' ? '生成中' : (rowFilter === 'ok' ? '完了' : '全て'));
+      const chLabel = chapterFilter !== null ? ` / 章 ${chapterFilter}` : '';
+      if (els.activeFilterLabel) els.activeFilterLabel.textContent = `${filterLabel}${chLabel}: ${visible}件`;
+      if (els.regenIssuesBtn) els.regenIssuesBtn.disabled = issuesVisible === 0;
+      if (els.regenIssuesBtn) els.regenIssuesBtn.classList.toggle('opacity-40', issuesVisible === 0);
+    }
+
     function rebuildTable(rows) {
       rows.sort((a, b) => (a.no || 0) - (b.no || 0));
       const tbody = els.rowsTbody;
@@ -290,6 +473,7 @@
       // 初回 or 行数大きく変わった → 完全再構築
       if (existing.size === 0 || existing.size !== rows.length) {
         tbody.innerHTML = rows.map(rowHtml).join('');
+        applyRowFilters();
         return;
       }
 
@@ -305,6 +489,7 @@
         const newWebUrl = row.web_source_url || '';
         const prevRoute = tr.getAttribute('data-route') || '';
         const newRoute = row.route || '';
+        applyRowAttrs(tr, row);
 
         if (prevStatus !== row.status) {
           tr.setAttribute('data-status', row.status || 'pending');
@@ -327,6 +512,7 @@
           if (webCell) webCell.innerHTML = webCellHtml(row);
         }
       });
+      applyRowFilters();
     }
 
     function rowHtml(row) {
@@ -335,18 +521,22 @@
       const chapter = isFirstInChapter ? escapeHtml(row.chapter_title || '') : '';
       const block = isFirstInBlock ? escapeHtml(row.block_text || '').substring(0, 80) + (row.block_text && row.block_text.length > 80 ? '...' : '') : '';
       const borderClass = isFirstInChapter ? 'border-t-2 border-t-cyan-300' : (isFirstInBlock ? 'border-t border-t-gray-200' : '');
+      const attrs = rowDataAttrs(row);
       return `
         <tr class="table-row ${borderClass}"
             data-no="${row.no}"
-            data-status="${row.status || 'pending'}"
-            data-filename="${row.filename || ''}"
+            data-status="${escapeHtml(attrs.status)}"
+            data-filename="${escapeHtml(attrs.filename)}"
             data-sentence="${escapeHtml(row.sentence || '')}"
             data-chapter="${escapeHtml(row.chapter_title || '')}"
+            data-chapter-index="${escapeHtml(attrs.chapterIndex)}"
             data-block="${escapeHtml((row.block_text || '').substring(0, 200))}"
-            data-error="${escapeHtml(row.error || '')}"
-            data-web-url="${escapeHtml(row.web_source_url || '')}"
-            data-route="${escapeHtml(row.route || '')}"
-            data-terms='${JSON.stringify(row.allowed_terms || []).replace(/'/g, "&#039;")}'>
+            data-error="${escapeHtml(attrs.error)}"
+            data-web-url="${escapeHtml(attrs.webUrl)}"
+            data-route="${escapeHtml(attrs.route)}"
+            data-display="${escapeHtml(attrs.display)}"
+            data-issue="${attrs.issue}"
+            data-terms='${attrs.terms.replace(/'/g, "&#039;")}'>
           <td class="px-2 py-2 chapter-cell text-xs">${chapter}</td>
           <td class="px-2 py-2 block-cell text-xs text-gray-600">${block}</td>
           <td class="px-2 py-2 sentence-cell">${escapeHtml(row.sentence || '')}</td>
@@ -382,11 +572,12 @@
       const total = rows.length;
       const completed = rows.filter(r => r.status === 'ok').length;
       const generating = rows.filter(r => r.status === 'generating').length;
-      const failed = rows.filter(r => r.status === 'failed').length;
+      const failed = rows.filter(r => rowHasIssue(r)).length;
       els.totalCount.textContent = total;
       els.completedCount.textContent = completed;
       els.generatingCount.textContent = generating;
       els.failedCount.textContent = failed;
+      updateChapterCards(rows);
     }
 
     async function pollStatus() {
@@ -394,6 +585,7 @@
         const res = await fetch(`/api/status/${JOB_ID}`);
         if (!res.ok) return;
         const state = await res.json();
+        lastJobStatus = state.status || 'running';
         els.jobMessage.textContent = state.message || '...';
         els.phaseNum.textContent = state.phase || 0;
         els.overallBar.style.width = `${state.percent || 0}%`;
@@ -434,6 +626,7 @@
         const data = await res.json();
         const rows = data.rows || [];
         if (rows.length > 0) {
+          lastRows = rows;
           rebuildTable(rows);
           updateSummary(rows);
         }
@@ -500,9 +693,67 @@
         }
         tr.setAttribute('data-filename', data.filename);
         tr.setAttribute('data-status', 'ok');
+        tr.setAttribute('data-issue', '0');
+        applyRowFilters();
       } catch (e) {
         alert('通信エラー: ' + e.message);
       }
+    }
+
+    async function regenerateOneNoPrompt(no) {
+      const tr = document.querySelector(`tr[data-no="${no}"]`);
+      if (!tr) return { ok: false, error: '行が見つかりません' };
+      const cell = tr.querySelector('.thumb-cell');
+      if (cell) cell.innerHTML = `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto"><div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div></div>`;
+      const res = await fetch(`/api/regenerate/${JOB_ID}/${no}`, { method: 'POST', body: new FormData() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        if (cell) cell.innerHTML = `<div class="w-20 h-[45px] bg-red-50 rounded flex items-center justify-center mx-auto text-red-400 text-[10px]">失敗</div>` + `<button onclick='regenerateScene(${no}, event)' class="mt-1 text-[10px] text-cyan-600 hover:underline">🔄 再生成</button>`;
+        tr.setAttribute('data-status', 'failed');
+        tr.setAttribute('data-issue', '1');
+        tr.setAttribute('data-error', data.error || String(res.status));
+        return { ok: false, error: data.error || String(res.status) };
+      }
+      if (cell) {
+        cell.innerHTML = `<img src="/results/${JOB_ID}/images/${data.filename}?t=${data.ts}${Date.now()}" class="thumb-img pop-in" onclick='openModal(${no})' alt="" loading="lazy"><br><button onclick='regenerateScene(${no}, event)' class="mt-1 text-[10px] text-cyan-600 hover:underline">🔄 再生成</button>`;
+      }
+      tr.setAttribute('data-filename', data.filename);
+      tr.setAttribute('data-status', 'ok');
+      tr.setAttribute('data-issue', '0');
+      tr.setAttribute('data-error', '');
+      return { ok: true };
+    }
+
+    async function regenerateVisibleIssues() {
+      const targets = Array.from(els.rowsTbody.querySelectorAll('tr[data-no]'))
+        .filter(tr => !tr.classList.contains('hidden') && tr.getAttribute('data-issue') === '1')
+        .map(tr => parseInt(tr.getAttribute('data-no'), 10))
+        .filter(no => !isNaN(no));
+      if (!targets.length) {
+        alert('再生成対象の失敗・要確認行がありません。');
+        return;
+      }
+      const label = chapterFilter !== null ? `章 ${chapterFilter} の` : '表示中の';
+      if (!confirm(`${label}失敗・要確認 ${targets.length} 件を順番に再生成します。`)) return;
+      if (els.regenIssuesBtn) {
+        els.regenIssuesBtn.disabled = true;
+        els.regenIssuesBtn.textContent = `再生成中 0/${targets.length}`;
+      }
+      let ok = 0;
+      let ng = 0;
+      for (let i = 0; i < targets.length; i++) {
+        if (els.regenIssuesBtn) els.regenIssuesBtn.textContent = `再生成中 ${i + 1}/${targets.length}`;
+        const result = await regenerateOneNoPrompt(targets[i]);
+        if (result.ok) ok += 1;
+        else ng += 1;
+        applyRowFilters();
+      }
+      if (els.regenIssuesBtn) {
+        els.regenIssuesBtn.disabled = false;
+        els.regenIssuesBtn.textContent = '表示中の失敗だけ再生成';
+      }
+      await pollRows();
+      alert(`再生成完了: 成功 ${ok} 件 / 失敗 ${ng} 件`);
     }
 
     // ルート違いを記録 → 次回以降のルーターが few-shot として学習する
