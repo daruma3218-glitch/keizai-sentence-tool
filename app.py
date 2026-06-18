@@ -291,6 +291,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             chart_theme=defaults.get("chart_theme"),
             generation_batch_size=defaults.get("generation_batch_size", 0),
             generation_batch_mode=defaults.get("generation_batch_mode", "block"),
+            router_concurrency=defaults.get("router_concurrency", 2),
             title_override=title_override,
             fact_context=fact_context,
             progress_callback=on_progress,

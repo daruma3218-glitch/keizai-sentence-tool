@@ -68,6 +68,7 @@ class SentencePipeline:
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
         generation_batch_size: int = 0,       # 大量生成を章/ブロック単位で小分けにする
         generation_batch_mode: str = "block",  # block / chapter
+        router_concurrency: int = 2,          # Claudeルーター分類の同時数（長文は低めが安定）
         title_override: str = "",           # v3 Step7: final.json の tentative_title
         fact_context: str = "",             # v3 Step7: final.json の検証済み数値・出典
         progress_callback: Optional[Callable] = None,
@@ -107,6 +108,7 @@ class SentencePipeline:
         self.chart_theme = chart_theme or None
         self.generation_batch_size = max(0, min(int(generation_batch_size or 0), 120))
         self.generation_batch_mode = generation_batch_mode if generation_batch_mode in ("block", "chapter") else "block"
+        self.router_concurrency = max(1, min(int(router_concurrency or 2), 4))
         self.title_override = (title_override or "").strip()   # v3 Step7
         self.fact_context = (fact_context or "").strip()       # v3 Step7
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
@@ -414,7 +416,7 @@ class SentencePipeline:
             routes = route_all_sentences(
                 client, rows, title,
                 user_instructions=self.user_instructions,
-                max_workers=4, log=self._log,
+                max_workers=self.router_concurrency, log=self._log,
                 few_shot=few_shot,
             )
         else:  # all_ai: v1 互換（全文 AI 生成）

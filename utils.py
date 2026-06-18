@@ -5,6 +5,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
 import anthropic
 
@@ -48,6 +49,7 @@ def claude_query(
     max_tokens: int = 4096,
     model: str = "claude-sonnet-4-6",
     max_retries: int = 3,
+    timeout_seconds: Optional[float] = None,
 ) -> str:
     """Claude API（Web 検索なし）でクエリを実行"""
     for attempt in range(max_retries):
@@ -57,6 +59,7 @@ def claude_query(
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": query}],
+                timeout=timeout_seconds,
             )
             if not response or not response.content:
                 if attempt == max_retries - 1:

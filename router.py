@@ -14,6 +14,7 @@ route 種別:
 """
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
@@ -24,9 +25,47 @@ from utils import claude_query, parse_json_array
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
 CHUNK_SIZE = 40  # 1 リクエストで分類する文数
+ROUTER_CHUNK_TIMEOUT_SECONDS = 90
 
 VALID_ROUTES = ("web_photo", "realphoto", "map", "diagram", "chart", "illustration", "skip")
 AI_ROUTES = ("realphoto", "map", "diagram", "chart", "illustration")  # AI生成班が担当
+
+
+def _fallback_route_for_row(row: dict, reason: str = "ルーター失敗時の機械分類") -> dict:
+    """Claude分類が失敗した行を止めずに進めるための軽量フォールバック。
+
+    完璧な分類ではなく、ジョブ全体を止めないことを優先する。後段で
+    chart/map は spec 抽出に失敗すれば diagram/AI に降格される。
+    """
+    text = f"{row.get('chapter_title', '')} {row.get('block_text', '')} {row.get('sentence', '')}"
+    compact = text.replace(" ", "")
+
+    skip_words = ("では", "さて", "次に", "ここから", "見ていきましょう", "こんにちは", "というわけで")
+    if len(compact) <= 18 or any(w in compact for w in skip_words):
+        route = "skip"
+    elif re.search(r"\d|[0-9０-９]|%|％|倍|割|兆|億|万|ドル|円|ユーロ|年|人|社|件", compact):
+        route = "chart"
+    elif re.search(r"国境|領土|地図|経由|ルート|進軍|移動|海峡|半島|州|首都|都市|地域|欧州|ロシア|ベラルーシ|ウクライナ|中国|米国|日本|EU|NATO", compact):
+        route = "map"
+    elif re.search(r"大統領|首相|書記長|教授|研究者|CEO|創業者|企業|大学|政府|事件|演説|会議|写真|動画|YouTube|登壇|公式", compact):
+        route = "web_photo"
+    elif re.search(r"工場|施設|建物|街|現場|軍|兵士|住民|デモ|抗議|パイプライン|インフラ|生活|市場", compact):
+        route = "realphoto"
+    elif re.search(r"仕組み|構造|関係|理由|原因|結果|比較|対立|依存|影響|流れ|制度|システム", compact):
+        route = "diagram"
+    else:
+        route = "illustration"
+
+    return {
+        "route": route,
+        "reason": reason,
+        "search_query": (row.get("sentence", "") or "")[:30] if route == "web_photo" else "",
+        "topic": (row.get("sentence", "") or "")[:18] if route == "web_photo" else "",
+        "propaganda": False,
+        "importance": 3 if route != "skip" else 1,
+        "entities": [],
+        "beat": "new",
+    }
 
 
 # ===== v3 Step4: importance/entities/beat の正規化 =====
@@ -168,7 +207,15 @@ def _route_chunk(
 
 必ず {len(rows_chunk)} 件すべてに route / importance / entities / beat を付与すること。JSON 配列のみ返す。"""
 
-    result = claude_query(client, query, system, max_tokens=8000, model=CLAUDE_MODEL)
+    result = claude_query(
+        client,
+        query,
+        system,
+        max_tokens=8000,
+        model=CLAUDE_MODEL,
+        max_retries=1,
+        timeout_seconds=ROUTER_CHUNK_TIMEOUT_SECONDS,
+    )
     parsed = parse_json_array(result)
     return parsed
 
@@ -202,11 +249,14 @@ def route_all_sentences(
             executor.submit(_route_chunk, client, chunk, title, user_instructions, propaganda_mix, few_shot): i
             for i, chunk in enumerate(chunks)
         }
+        chunks_by_idx = {i: chunk for i, chunk in enumerate(chunks)}
         completed = 0
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
                 results = future.result()
+                if not results:
+                    raise RuntimeError("Claudeルーターが空レスポンス/JSON解析失敗")
                 for item in results:
                     if not isinstance(item, dict):
                         continue
@@ -228,20 +278,17 @@ def route_all_sentences(
                 completed += 1
                 log("router", f"チャンク {completed}/{len(chunks)} 分類完了")
             except Exception as e:
-                log("error", f"ルーターチャンク {idx} 失敗: {str(e)[:120]}")
+                log("warn", f"ルーターチャンク {idx + 1}/{len(chunks)} が失敗/タイムアウト。機械分類で続行します: {str(e)[:120]}")
+                for row in chunks_by_idx.get(idx, []):
+                    routes_by_no[row["no"]] = _fallback_route_for_row(row)
+                completed += 1
+                log("router", f"チャンク {completed}/{len(chunks)} 分類完了（フォールバック）")
 
     # フォールバック: 未分類の文は illustration 扱い
     for r in rows:
         no = r["no"]
         if no not in routes_by_no:
-            routes_by_no[no] = {
-                "route": "illustration",
-                "reason": "（自動フォールバック）",
-                "search_query": "",
-                "topic": "",
-                "propaganda": False,
-                "importance": 2, "entities": [], "beat": "new",
-            }
+            routes_by_no[no] = _fallback_route_for_row(r, "未分類行の自動フォールバック")
 
     # 集計ログ
     from collections import Counter
