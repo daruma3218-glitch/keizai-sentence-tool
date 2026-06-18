@@ -17,6 +17,7 @@ from utils import claude_query, parse_json_array
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
 BATCH_SIZE = 8
+PROMPTER_BATCH_TIMEOUT_SECONDS = 90
 
 
 # ===== 安全な自動抽出（Claude の遠慮を補完） =====
@@ -97,6 +98,38 @@ def _build_user_block(user_instructions: str, style_preset: str) -> str:
     }
     blocks.append(style_descriptions.get(style_preset, style_descriptions["flat_infographic"]))
     return "\n\n".join(blocks)
+
+
+def _fallback_prompt_for_row(row: dict) -> dict:
+    """Claudeプロンプト生成が失敗した行を止めずに進めるための機械プロンプト。"""
+    sent = row.get("sentence", "")
+    row_type = row.get("route") or row.get("type") or "illustration"
+    if row_type not in ("illustration", "realphoto", "map", "diagram", "chart", "decorative"):
+        row_type = "illustration"
+    auto_terms = _auto_extract_terms(sent)
+    text_rule = (
+        f"Allowed Japanese text only: {', '.join(auto_terms)}. Do not add any other text."
+        if auto_terms else
+        "No text in image, no labels, no numbers."
+    )
+    type_hint = {
+        "realphoto": "Photorealistic documentary photograph, natural lighting, realistic textures.",
+        "map": "Clear 16:9 map or terrain visualization, readable borders and route lines.",
+        "diagram": "Simple flat educational diagram with icons and arrows.",
+        "chart": "Simple clean chart based only on numbers from the sentence.",
+        "illustration": "Simple flat educational illustration.",
+        "decorative": "Minimal neutral educational background.",
+    }.get(row_type, "Simple flat educational illustration.")
+    return {
+        "no": row["no"],
+        "prompt": (
+            f"{type_hint} Explain this Japanese sentence visually: {sent[:160]}. "
+            f"{text_rule} 16:9 landscape composition, clean layout, no invented facts."
+        ),
+        "type": row_type,
+        "allowed_terms": auto_terms,
+        "character": False,
+    }
 
 
 def generate_prompts_batch(
@@ -220,7 +253,15 @@ def generate_prompts_batch(
 
 必ず {len(rows_batch)} 件返すこと（順序は入力と同じ）。JSON のみ。"""
 
-    result = claude_query(client, query, system, max_tokens=8000, model=CLAUDE_MODEL)
+    result = claude_query(
+        client,
+        query,
+        system,
+        max_tokens=8000,
+        model=CLAUDE_MODEL,
+        max_retries=1,
+        timeout_seconds=PROMPTER_BATCH_TIMEOUT_SECONDS,
+    )
     prompts = parse_json_array(result)
 
     # 入力情報をマージ + allowed_terms をセンテンス検証
@@ -305,6 +346,7 @@ def generate_all_prompts(
             executor.submit(generate_prompts_batch, client, batch, title, user_instructions, style_preset, worldview_desc): i
             for i, batch in enumerate(batches)
         }
+        batches_by_idx = {i: batch for i, batch in enumerate(batches)}
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
@@ -315,13 +357,20 @@ def generate_all_prompts(
                 completed += 1
                 log("prompter", f"バッチ {completed}/{len(batches)} 完了（{len(results)} 件）")
             except Exception as e:
-                log("error", f"バッチ {idx} 失敗: {str(e)[:120]}")
+                fallback = [_fallback_prompt_for_row(r) for r in batches_by_idx.get(idx, [])]
+                for p in fallback:
+                    prompts_by_no[p["no"]] = p
+                completed += 1
+                log("warn", f"プロンプトバッチ {idx + 1}/{len(batches)} が失敗/タイムアウト。機械プロンプトで続行します: {str(e)[:120]}")
+                log("prompter", f"バッチ {completed}/{len(batches)} 完了（フォールバック {len(fallback)} 件）")
 
     out_rows = []
     for r in rows:
         no = r["no"]
         p = prompts_by_no.get(no, {})
         merged_row = dict(r)
+        if not p.get("prompt"):
+            p = _fallback_prompt_for_row(r)
         merged_row["prompt"] = p.get("prompt", "")
         merged_row["type"] = p.get("type", "illustration")
         merged_row["allowed_terms"] = p.get("allowed_terms", [])
