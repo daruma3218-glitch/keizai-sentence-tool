@@ -25,6 +25,8 @@ from utils import claude_query, parse_json_object
 CLAUDE_MODEL = "claude-sonnet-4-6"
 SPLITTER_TITLE_TIMEOUT_SECONDS = 45
 SPLITTER_ANALYSIS_TIMEOUT_SECONDS = 60
+LONG_SINGLE_CHAPTER_MIN_SENTENCES = 80
+AUTO_CHAPTER_TARGET_SENTENCES = 40
 
 # 文末記号
 SENTENCE_END_PATTERN = re.compile(r'(?<=[。！？])\s*')
@@ -132,6 +134,81 @@ def mechanical_split(manuscript_text: str) -> list:
     return chapters
 
 
+def _sentence_count(chapter: dict) -> int:
+    return sum(len(block.get("sentences", [])) for block in chapter.get("blocks", []))
+
+
+def rebalance_long_single_chapter(chapters: list, log: Optional[Callable] = None) -> list:
+    """見出しの無い長文が1章に固まった場合、ブロック境界で章を自動分割する。
+
+    300文級の原稿が1章扱いになると、章ごとの進捗・再開・再生成が機能しにくい。
+    明示見出しが無い場合の保険として、約40文ごとに章を作る。
+    """
+    log = log or (lambda *a, **kw: None)
+    if len(chapters) != 1:
+        return chapters
+
+    chapter = chapters[0]
+    total = _sentence_count(chapter)
+    blocks = chapter.get("blocks", [])
+    if total < LONG_SINGLE_CHAPTER_MIN_SENTENCES or len(blocks) <= 1:
+        return chapters
+
+    new_chapters = []
+    current_blocks = []
+    current_count = 0
+    original_title = (chapter.get("title") or "").strip()
+
+    def flush():
+        nonlocal current_blocks, current_count
+        if not current_blocks:
+            return
+        idx = len(new_chapters)
+        title = original_title if idx == 0 and original_title else ""
+        new_chapters.append({"title": title, "blocks": current_blocks})
+        current_blocks = []
+        current_count = 0
+
+    for block in blocks:
+        block_count = len(block.get("sentences", []))
+        if block_count > AUTO_CHAPTER_TARGET_SENTENCES * 2:
+            flush()
+            sentences = block.get("sentences", [])
+            for start in range(0, len(sentences), AUTO_CHAPTER_TARGET_SENTENCES):
+                chunk_sents = sentences[start:start + AUTO_CHAPTER_TARGET_SENTENCES]
+                new_chapters.append({
+                    "title": original_title if not new_chapters and original_title else "",
+                    "blocks": [{"text": "".join(chunk_sents), "sentences": chunk_sents}],
+                })
+            continue
+        if current_blocks and current_count + block_count > AUTO_CHAPTER_TARGET_SENTENCES:
+            flush()
+        current_blocks.append(block)
+        current_count += block_count
+        if current_count >= AUTO_CHAPTER_TARGET_SENTENCES:
+            flush()
+    flush()
+
+    if len(new_chapters) > 1:
+        log(
+            "splitter",
+            f"長文が1章に固まったため {len(new_chapters)} 章へ自動再分割",
+            f"{total}センテンス / 目安{AUTO_CHAPTER_TARGET_SENTENCES}文ごと",
+        )
+        return new_chapters
+    return chapters
+
+
+def fallback_chapter_title(chapter: dict, index: int) -> str:
+    """Claude命名が使えないときの章タイトル。本文の先頭文から短く作る。"""
+    for block in chapter.get("blocks", []):
+        for sentence in block.get("sentences", []):
+            text = re.sub(r"[。！？\s]+$", "", sentence.strip())
+            if text:
+                return text[:18]
+    return f"章 {index + 1}"
+
+
 def name_chapters_with_claude(
     client: anthropic.Anthropic,
     chapters: list,
@@ -210,7 +287,7 @@ JSON のみで返すこと。キーは元の章 index（文字列）。"""
         if key in titles_map and isinstance(titles_map[key], str) and titles_map[key].strip():
             chapters[i]["title"] = titles_map[key].strip()
         else:
-            chapters[i]["title"] = f"章 {i + 1}"
+            chapters[i]["title"] = fallback_chapter_title(chapters[i], i)
 
     return chapters
 
@@ -380,6 +457,8 @@ def split_manuscript(
         log("splitter", f"原稿（{len(manuscript_text)}文字）を機械的に分割中...")
         chapters = mechanical_split(manuscript_text)
         log("splitter", f"章 {len(chapters)} 個 / ブロック {sum(len(c['blocks']) for c in chapters)} 個 検出")
+
+    chapters = rebalance_long_single_chapter(chapters, log=log)
 
     # 章タイトルを Claude が命名（タイトル未設定のものだけ補完される）
     chapters = name_chapters_with_claude(client, chapters, log=log)
