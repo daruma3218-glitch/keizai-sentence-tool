@@ -143,7 +143,7 @@ def _caption_font(size: int):
 
 
 def add_image_caption(path, text: str = "イメージ") -> bool:
-    """画像の右下に半透明の「イメージ」キャプションを焼き込む（realphoto 用）。"""
+    """画像の右上に半透明の「イメージ」キャプションを焼き込む（realphoto 用）。"""
     try:
         from PIL import Image, ImageDraw
         im = Image.open(path).convert("RGBA")
@@ -157,8 +157,9 @@ def add_image_caption(path, text: str = "イメージ") -> bool:
         pad = max(8, fsize // 3)
         m = max(10, H // 60)
         x1 = W - tw - pad * 2 - m
-        y1 = H - th - pad * 2 - m
-        d.rounded_rectangle([x1, y1, W - m, H - m], radius=pad, fill=(0, 0, 0, 130))
+        y1 = m
+        y2 = y1 + th + pad * 2
+        d.rounded_rectangle([x1, y1, W - m, y2], radius=pad, fill=(0, 0, 0, 130))
         d.text((x1 + pad - bbox[0], y1 + pad - bbox[1]), text, font=font,
                fill=(255, 255, 255, 230))
         Image.alpha_composite(im, overlay).convert("RGB").save(path)
