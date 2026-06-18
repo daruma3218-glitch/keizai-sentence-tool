@@ -64,6 +64,7 @@ class SentencePipeline:
         chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
         realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
+        generation_batch_size: int = 0,       # 大量生成を章/ブロック単位で小分けにする
         title_override: str = "",           # v3 Step7: final.json の tentative_title
         fact_context: str = "",             # v3 Step7: final.json の検証済み数値・出典
         progress_callback: Optional[Callable] = None,
@@ -96,6 +97,7 @@ class SentencePipeline:
         self.chars_per_sec = float(chars_per_sec or 5.5)
         self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
         self.chart_theme = chart_theme or None
+        self.generation_batch_size = max(0, min(int(generation_batch_size or 0), 120))
         self.title_override = (title_override or "").strip()   # v3 Step7
         self.fact_context = (fact_context or "").strip()       # v3 Step7
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
@@ -196,6 +198,43 @@ class SentencePipeline:
                         break
 
         return selected
+
+    @staticmethod
+    def _chunk_generation_targets(targets: list, batch_size: int) -> list:
+        """章/ブロック境界をなるべく保ちながら画像生成対象を小分けする。"""
+        if batch_size <= 0 or len(targets) <= batch_size:
+            return [targets]
+
+        chunks = []
+        current = []
+        current_chapter = None
+        current_block = None
+
+        for t in targets:
+            chapter = t.get("chapter_index")
+            block = t.get("block_index")
+            boundary_changed = (
+                current
+                and (chapter != current_chapter or block != current_block)
+            )
+            if current and len(current) >= batch_size and boundary_changed:
+                chunks.append(current)
+                current = []
+
+            current.append(t)
+            current_chapter = chapter
+            current_block = block
+
+            # 1つのブロック/章が大きすぎる場合でも、batch_size の約1.5倍で必ず切る。
+            if len(current) >= int(batch_size * 1.5):
+                chunks.append(current)
+                current = []
+                current_chapter = None
+                current_block = None
+
+        if current:
+            chunks.append(current)
+        return chunks
 
     def _load_route_feedback(self, limit: int = 12) -> list:
         """v3 Step5: 過去の「ルート違い」フィードバックを読み、ルーターに渡す few-shot を作る。
@@ -629,6 +668,8 @@ class SentencePipeline:
                     "prompt": r.get("prompt", ""),
                     "type": img_type,
                     "section": r.get("chapter_title", ""),
+                    "chapter_index": r.get("chapter_index"),
+                    "block_index": r.get("block_index"),
                     "excerpt": r.get("sentence", ""),
                     "block_text": r.get("block_text", ""),  # 検証の文脈用（前後段落）
                     "keypoint": r.get("sentence", "")[:30],
@@ -691,6 +732,8 @@ class SentencePipeline:
                   f"{provider_label} で {n_gen} 枚を並列生成します",
                   f"スタイル: {self.style_preset}")
 
+        batch_done_offset = 0
+
         def on_item_event(info: dict):
             no = info.get("index", 0)
             status = info.get("status", "")
@@ -703,27 +746,65 @@ class SentencePipeline:
             # 生成が1枚進むたびにプログレスバー(40→85%)とメッセージを更新し、
             # 長時間ジョブでも「止まって見えない」ようにする。
             if status in ("ok", "failed"):
-                gt = info.get("grand_total") or 0
-                done = (info.get("completed_total") or 0) + (info.get("failed_total") or 0)
+                gt = n_gen
+                done = batch_done_offset + (info.get("completed_total") or 0) + (info.get("failed_total") or 0)
                 if gt:
                     pct = 40 + int(done / gt * 45)
                     self._progress(3,
                                    f"画像を並列生成中（{done}/{gt} 枚 / {provider_label}）...",
                                    min(85, pct))
 
-        results = run_parallel_generation(
-            prompts=generation_targets,
-            output_dir=self.images_dir,
-            provider=self.provider,
-            gemini_api_key=gemini_key,
-            openai_api_key=openai_key,
-            openai_quality=self.openai_quality,
-            concurrency=eff_concurrency,
-            style_preset=self.style_preset,
-            progress_callback=on_item_event,
-            reference_image_path=self.character_ref_path,
-            realphoto_watermark=self.realphoto_watermark,
-        )
+        generation_batches = self._chunk_generation_targets(generation_targets, self.generation_batch_size)
+        if len(generation_batches) > 1:
+            self._log(
+                "generator",
+                f"章/ブロック単位の分割生成: {len(generation_batches)} バッチ",
+                f"batch_size={self.generation_batch_size}。各バッチ完了ごとに次へ進みます",
+            )
+
+        results = []
+        for batch_idx, batch_targets in enumerate(generation_batches, start=1):
+            if len(generation_batches) > 1:
+                first = batch_targets[0]
+                label = first.get("section") or f"バッチ {batch_idx}"
+                self._progress(
+                    3,
+                    f"画像生成バッチ {batch_idx}/{len(generation_batches)}: {label}（{len(batch_targets)}枚）...",
+                    min(84, 40 + int(batch_done_offset / max(1, n_gen) * 45)),
+                )
+                self._log(
+                    "generator",
+                    f"バッチ {batch_idx}/{len(generation_batches)} を生成中: {len(batch_targets)} 枚",
+                    label,
+                )
+
+            batch_results = run_parallel_generation(
+                prompts=batch_targets,
+                output_dir=self.images_dir,
+                provider=self.provider,
+                gemini_api_key=gemini_key,
+                openai_api_key=openai_key,
+                openai_quality=self.openai_quality,
+                concurrency=eff_concurrency,
+                style_preset=self.style_preset,
+                progress_callback=on_item_event,
+                reference_image_path=self.character_ref_path,
+                realphoto_watermark=self.realphoto_watermark,
+            )
+            results.extend(batch_results)
+            batch_done_offset += len(batch_targets)
+            if len(generation_batches) > 1:
+                b_success = sum(1 for r in batch_results if r.get("success"))
+                b_fail = len(batch_results) - b_success
+                self._log(
+                    "generator",
+                    f"バッチ {batch_idx}/{len(generation_batches)} 完了: 成功 {b_success} / 失敗 {b_fail}"
+                )
+                try:
+                    import gc
+                    gc.collect()
+                except Exception:
+                    pass
 
         success_count = sum(1 for r in results if r.get("success"))
         fail_count = len(results) - success_count

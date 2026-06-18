@@ -287,6 +287,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             chars_per_sec=defaults.get("chars_per_sec", 5.5),
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
             chart_theme=defaults.get("chart_theme"),
+            generation_batch_size=defaults.get("generation_batch_size", 0),
             title_override=title_override,
             fact_context=fact_context,
             progress_callback=on_progress,

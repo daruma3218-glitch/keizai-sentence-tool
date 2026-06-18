@@ -71,6 +71,7 @@
         "beat_mode": true,
         "chars_per_sec": 5.5,
         "realphoto_watermark": true,
+        "generation_batch_size": 40,
         "chart_theme": {
           "bg": "#FBFAF7", "main": "#1E3A5F", "accent": "#B22222",
           "grid": "#E5E7EB", "text": "#1F2937", "font": "NotoSansJP"
