@@ -67,6 +67,7 @@ class SentencePipeline:
         realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
         chart_theme: Optional[dict] = None,  # v3: チャンネル別チャート/地図配色
         generation_batch_size: int = 0,       # 大量生成を章/ブロック単位で小分けにする
+        generation_batch_mode: str = "block",  # block / chapter
         title_override: str = "",           # v3 Step7: final.json の tentative_title
         fact_context: str = "",             # v3 Step7: final.json の検証済み数値・出典
         progress_callback: Optional[Callable] = None,
@@ -105,6 +106,7 @@ class SentencePipeline:
         self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
         self.chart_theme = chart_theme or None
         self.generation_batch_size = max(0, min(int(generation_batch_size or 0), 120))
+        self.generation_batch_mode = generation_batch_mode if generation_batch_mode in ("block", "chapter") else "block"
         self.title_override = (title_override or "").strip()   # v3 Step7
         self.fact_context = (fact_context or "").strip()       # v3 Step7
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
@@ -206,9 +208,26 @@ class SentencePipeline:
 
         return selected
 
-    @staticmethod
-    def _chunk_generation_targets(targets: list, batch_size: int) -> list:
+    @classmethod
+    def _chunk_generation_targets(cls, targets: list, batch_size: int, mode: str = "block") -> list:
         """章/ブロック境界をなるべく保ちながら画像生成対象を小分けする。"""
+        if not targets:
+            return []
+        if mode == "chapter":
+            chapter_chunks = []
+            current = []
+            current_chapter = targets[0].get("chapter_index")
+            for t in targets:
+                chapter = t.get("chapter_index")
+                if current and chapter != current_chapter:
+                    chapter_chunks.extend(cls._chunk_generation_targets(current, batch_size, mode="block"))
+                    current = []
+                current.append(t)
+                current_chapter = chapter
+            if current:
+                chapter_chunks.extend(cls._chunk_generation_targets(current, batch_size, mode="block"))
+            return chapter_chunks
+
         if batch_size <= 0 or len(targets) <= batch_size:
             return [targets]
 
@@ -257,6 +276,27 @@ class SentencePipeline:
     def _provider_for_target(self, target: dict) -> str:
         """画像タイプ別 provider。未指定ならジョブ全体の provider を使う。"""
         return self.type_providers.get(target.get("type", ""), self.provider)
+
+    def _save_generation_checkpoint(self, batch_idx: int, total_batches: int, batch_targets: list, batch_results: list):
+        """章/ブロック単位の生成完了をディスクへ保存する。途中停止時の確認材料にする。"""
+        with self._rows_lock:
+            rows_snapshot = sorted(self._rows_state.values(), key=lambda x: x.get("no", 0))
+        chapter_title = batch_targets[0].get("section", "") if batch_targets else ""
+        payload = {
+            "batch_index": batch_idx,
+            "total_batches": total_batches,
+            "chapter_title": chapter_title,
+            "target_nos": [t.get("index") for t in batch_targets],
+            "success": sum(1 for r in batch_results if r.get("success")),
+            "failed": sum(1 for r in batch_results if not r.get("success")),
+            "results": batch_results,
+            "rows": rows_snapshot,
+            "saved_at": datetime.now().isoformat(),
+        }
+        checkpoint_dir = self.output_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        save_json(checkpoint_dir / f"generation_batch_{batch_idx:03d}.json", payload)
+        save_json(self.output_dir / "latest_generation_checkpoint.json", payload)
 
     @staticmethod
     def _provider_label(provider: str, openai_quality: str = "medium") -> str:
@@ -822,12 +862,17 @@ class SentencePipeline:
                                    f"画像を並列生成中（{done}/{gt} 枚 / {current_provider_label}）...",
                                    min(85, pct))
 
-        generation_batches = self._chunk_generation_targets(generation_targets, self.generation_batch_size)
+        generation_batches = self._chunk_generation_targets(
+            generation_targets,
+            self.generation_batch_size,
+            mode=self.generation_batch_mode,
+        )
         if len(generation_batches) > 1:
+            mode_label = "章ごと" if self.generation_batch_mode == "chapter" else "章/ブロック単位"
             self._log(
                 "generator",
-                f"章/ブロック単位の分割生成: {len(generation_batches)} バッチ",
-                f"batch_size={self.generation_batch_size}。各バッチ完了ごとに次へ進みます",
+                f"{mode_label}の分割生成: {len(generation_batches)} バッチ",
+                f"mode={self.generation_batch_mode} / batch_size={self.generation_batch_size}。各バッチ完了ごとに保存します",
             )
 
         results = []
@@ -837,12 +882,12 @@ class SentencePipeline:
                 label = first.get("section") or f"バッチ {batch_idx}"
                 self._progress(
                     3,
-                    f"画像生成バッチ {batch_idx}/{len(generation_batches)}: {label}（{len(batch_targets)}枚）...",
+                    f"画像生成 {batch_idx}/{len(generation_batches)}: {label}（{len(batch_targets)}枚）...",
                     min(84, 40 + int(generation_done_offset / max(1, n_gen) * 45)),
                 )
                 self._log(
                     "generator",
-                    f"バッチ {batch_idx}/{len(generation_batches)} を生成中: {len(batch_targets)} 枚",
+                    f"章/ブロック {batch_idx}/{len(generation_batches)} を生成中: {len(batch_targets)} 枚",
                     label,
                 )
 
@@ -887,9 +932,10 @@ class SentencePipeline:
             if len(generation_batches) > 1:
                 b_success = sum(1 for r in batch_results if r.get("success"))
                 b_fail = len(batch_results) - b_success
+                self._save_generation_checkpoint(batch_idx, len(generation_batches), batch_targets, batch_results)
                 self._log(
                     "generator",
-                    f"バッチ {batch_idx}/{len(generation_batches)} 完了: 成功 {b_success} / 失敗 {b_fail}"
+                    f"章/ブロック {batch_idx}/{len(generation_batches)} 完了・保存: 成功 {b_success} / 失敗 {b_fail}"
                 )
                 try:
                     import gc
@@ -1071,6 +1117,8 @@ class SentencePipeline:
             "concurrency": self.concurrency,
             "total_sentences": total_sentences,
             "max_diagrams": self.max_diagrams,
+            "generation_batch_size": self.generation_batch_size,
+            "generation_batch_mode": self.generation_batch_mode,
             "web_image_count": self.web_image_count,
             "ai_route_count": len(ai_rows),
             "web_photo_count": len(web_photo_rows),
