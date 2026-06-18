@@ -284,6 +284,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             photo_source=defaults.get("photo_source", "web"),
             web_search_profile=defaults.get("web_search_profile", ""),
             max_web_image_reuse=defaults.get("max_web_image_reuse", 2),
+            type_providers=defaults.get("type_providers", {}),
             beat_mode=bool(defaults.get("beat_mode", False)),
             chars_per_sec=defaults.get("chars_per_sec", 5.5),
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
@@ -410,9 +411,14 @@ def start_job():
     missing = []
     if not ch_keys["anthropic"]:
         missing.append("ANTHROPIC_API_KEY")
-    if provider == PROVIDER_NANOBANANA and not ch_keys["gemini"]:
+    defaults = channel.get("defaults", {}) or {}
+    required_providers = {provider}
+    for p in (defaults.get("type_providers", {}) or {}).values():
+        if p in VALID_PROVIDERS:
+            required_providers.add(p)
+    if PROVIDER_NANOBANANA in required_providers and not ch_keys["gemini"]:
         missing.append("GEMINI_API_KEY")
-    if provider == PROVIDER_GPT_IMAGE and not ch_keys["openai"]:
+    if PROVIDER_GPT_IMAGE in required_providers and not ch_keys["openai"]:
         missing.append("OPENAI_API_KEY")
     if missing:
         pfx = channel.get("api_env_prefix", "")
@@ -733,7 +739,10 @@ def api_regenerate(job_id, no):
     if extra:
         prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
 
-    provider = params.get("provider", PROVIDER_NANOBANANA)
+    type_providers = params.get("type_providers") or defaults.get("type_providers") or {}
+    provider = type_providers.get(route) or params.get("provider", PROVIDER_NANOBANANA)
+    if provider not in VALID_PROVIDERS:
+        provider = PROVIDER_NANOBANANA
     openai_quality = params.get("openai_quality") or "medium"
     style_preset = params.get("style_preset", "flat_infographic")
 

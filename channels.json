@@ -69,6 +69,11 @@
         "map_engine": "render",
         "photo_source": "web",
         "max_web_image_reuse": 2,
+        "type_providers": {
+          "diagram": "gpt-image",
+          "illustration": "gpt-image",
+          "realphoto": "nanobanana"
+        },
         "beat_mode": true,
         "chars_per_sec": 5.5,
         "realphoto_watermark": true,
@@ -102,6 +107,11 @@
         "photo_source": "web",
         "web_search_profile": "primary_media",
         "max_web_image_reuse": 2,
+        "type_providers": {
+          "diagram": "gpt-image",
+          "illustration": "gpt-image",
+          "realphoto": "nanobanana"
+        },
         "beat_mode": true,
         "chars_per_sec": 5.5,
         "realphoto_watermark": true,

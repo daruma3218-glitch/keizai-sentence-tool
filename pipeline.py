@@ -61,6 +61,7 @@ class SentencePipeline:
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
         max_web_image_reuse: int = 2,       # 同じWeb写真/サムネイルの採用上限
+        type_providers: Optional[dict] = None,  # route/type別の画像生成モデル上書き
         beat_mode: bool = False,           # v3: ビート単位で重要度加重配分（False=v2均等）
         chars_per_sec: float = 5.5,        # v3: 読み上げ速度（推定タイムコード用）
         realphoto_watermark: bool = False,  # v3: realphoto に「イメージ」焼き込み
@@ -95,6 +96,10 @@ class SentencePipeline:
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
         self.max_web_image_reuse = max(1, min(int(max_web_image_reuse or 2), 10))
+        self.type_providers = {
+            str(k): str(v) for k, v in (type_providers or {}).items()
+            if str(v) in VALID_PROVIDERS
+        }
         self.beat_mode = bool(beat_mode)                     # v3: ビート加重配分
         self.chars_per_sec = float(chars_per_sec or 5.5)
         self.realphoto_watermark = bool(realphoto_watermark)  # v3: 「イメージ」焼き込み
@@ -249,6 +254,18 @@ class SentencePipeline:
         )
         return key.strip().lower()
 
+    def _provider_for_target(self, target: dict) -> str:
+        """画像タイプ別 provider。未指定ならジョブ全体の provider を使う。"""
+        return self.type_providers.get(target.get("type", ""), self.provider)
+
+    @staticmethod
+    def _provider_label(provider: str, openai_quality: str = "medium") -> str:
+        if provider == PROVIDER_NANOBANANA:
+            return "nanobanana (Gemini)"
+        if provider == PROVIDER_GPT_IMAGE:
+            return f"gpt-image ({openai_quality})"
+        return provider
+
     def _load_route_feedback(self, limit: int = 12) -> list:
         """v3 Step5: 過去の「ルート違い」フィードバックを読み、ルーターに渡す few-shot を作る。
 
@@ -289,6 +306,10 @@ class SentencePipeline:
             raise RuntimeError("nanobanana を使うには GEMINI_API_KEY が必要です。")
         if self.provider == PROVIDER_GPT_IMAGE and not openai_key:
             raise RuntimeError("gpt-image を使うには OPENAI_API_KEY が必要です。")
+        if PROVIDER_NANOBANANA in self.type_providers.values() and not gemini_key:
+            raise RuntimeError("タイプ別生成で nanobanana を使うには GEMINI_API_KEY が必要です。")
+        if PROVIDER_GPT_IMAGE in self.type_providers.values() and not openai_key:
+            raise RuntimeError("タイプ別生成で gpt-image を使うには OPENAI_API_KEY が必要です。")
 
         # Phase 0
         self._progress(0, "原稿を保存中...", 1)
@@ -749,8 +770,16 @@ class SentencePipeline:
             except Exception as e:
                 self._log("generator", f"エンティティ参照の割当をスキップ（{str(e)[:80]}）")
 
-        provider_label = ("nanobanana (Gemini)" if self.provider == PROVIDER_NANOBANANA
-                          else f"gpt-image ({self.openai_quality})")
+        provider_label = self._provider_label(self.provider, self.openai_quality)
+        active_providers = {
+            self._provider_for_target(t) for t in generation_targets
+        } if generation_targets else {self.provider}
+        if len(active_providers) > 1:
+            self._log(
+                "generator",
+                "タイプ別モデル生成を有効化",
+                " / ".join(sorted(self._provider_label(p, self.openai_quality) for p in active_providers)),
+            )
         # メモリ安全: 大量枚数のジョブは並列を控えめにして 512MB 環境の OOM を避ける。
         # （同時に処理する画像が減るとピークメモリが下がる。安定優先で少し遅くなる。）
         n_gen = len(generation_targets)
@@ -770,7 +799,8 @@ class SentencePipeline:
                   f"{provider_label} で {n_gen} 枚を並列生成します",
                   f"スタイル: {self.style_preset}")
 
-        batch_done_offset = 0
+        generation_done_offset = 0
+        current_provider_label = provider_label
 
         def on_item_event(info: dict):
             no = info.get("index", 0)
@@ -785,11 +815,11 @@ class SentencePipeline:
             # 長時間ジョブでも「止まって見えない」ようにする。
             if status in ("ok", "failed"):
                 gt = n_gen
-                done = batch_done_offset + (info.get("completed_total") or 0) + (info.get("failed_total") or 0)
+                done = generation_done_offset + (info.get("completed_total") or 0) + (info.get("failed_total") or 0)
                 if gt:
                     pct = 40 + int(done / gt * 45)
                     self._progress(3,
-                                   f"画像を並列生成中（{done}/{gt} 枚 / {provider_label}）...",
+                                   f"画像を並列生成中（{done}/{gt} 枚 / {current_provider_label}）...",
                                    min(85, pct))
 
         generation_batches = self._chunk_generation_targets(generation_targets, self.generation_batch_size)
@@ -808,7 +838,7 @@ class SentencePipeline:
                 self._progress(
                     3,
                     f"画像生成バッチ {batch_idx}/{len(generation_batches)}: {label}（{len(batch_targets)}枚）...",
-                    min(84, 40 + int(batch_done_offset / max(1, n_gen) * 45)),
+                    min(84, 40 + int(generation_done_offset / max(1, n_gen) * 45)),
                 )
                 self._log(
                     "generator",
@@ -816,21 +846,44 @@ class SentencePipeline:
                     label,
                 )
 
-            batch_results = run_parallel_generation(
-                prompts=batch_targets,
-                output_dir=self.images_dir,
-                provider=self.provider,
-                gemini_api_key=gemini_key,
-                openai_api_key=openai_key,
-                openai_quality=self.openai_quality,
-                concurrency=eff_concurrency,
-                style_preset=self.style_preset,
-                progress_callback=on_item_event,
-                reference_image_path=self.character_ref_path,
-                realphoto_watermark=self.realphoto_watermark,
-            )
+            provider_groups = []
+            for target in batch_targets:
+                target_provider = self._provider_for_target(target)
+                if provider_groups and provider_groups[-1][0] == target_provider:
+                    provider_groups[-1][1].append(target)
+                else:
+                    provider_groups.append((target_provider, [target]))
+
+            batch_results = []
+            for target_provider, provider_targets in provider_groups:
+                current_provider_label = self._provider_label(target_provider, self.openai_quality)
+                if len(provider_groups) > 1 or len(active_providers) > 1:
+                    type_counts = {}
+                    for t in provider_targets:
+                        typ = t.get("type", "illustration")
+                        type_counts[typ] = type_counts.get(typ, 0) + 1
+                    self._log(
+                        "generator",
+                        f"{current_provider_label} で生成: {len(provider_targets)} 枚",
+                        " / ".join(f"{k}:{v}" for k, v in sorted(type_counts.items())),
+                    )
+
+                provider_results = run_parallel_generation(
+                    prompts=provider_targets,
+                    output_dir=self.images_dir,
+                    provider=target_provider,
+                    gemini_api_key=gemini_key,
+                    openai_api_key=openai_key,
+                    openai_quality=self.openai_quality,
+                    concurrency=eff_concurrency,
+                    style_preset=self.style_preset,
+                    progress_callback=on_item_event,
+                    reference_image_path=self.character_ref_path,
+                    realphoto_watermark=self.realphoto_watermark,
+                )
+                batch_results.extend(provider_results)
+                generation_done_offset += len(provider_targets)
             results.extend(batch_results)
-            batch_done_offset += len(batch_targets)
             if len(generation_batches) > 1:
                 b_success = sum(1 for r in batch_results if r.get("success"))
                 b_fail = len(batch_results) - b_success
@@ -1011,6 +1064,7 @@ class SentencePipeline:
             "user_instructions": self.user_instructions,
             "provider": self.provider,
             "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
+            "type_providers": self.type_providers,
             "style_preset": self.style_preset,
             "channel_id": self.channel_id,
             "route_mode": self.route_mode,
