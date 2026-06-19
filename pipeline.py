@@ -875,18 +875,18 @@ class SentencePipeline:
                 "タイプ別モデル生成を有効化",
                 " / ".join(sorted(self._provider_label(p, self.openai_quality) for p in active_providers)),
             )
-        # メモリ安全: 大量枚数のジョブは並列を控えめにして 512MB 環境の OOM を避ける。
+        # メモリ安全: 大量枚数のジョブは並列を控えめにして OOM/API失敗を避ける。
         # （同時に処理する画像が減るとピークメモリが下がる。安定優先で少し遅くなる。）
         n_gen = len(generation_targets)
         eff_concurrency = self.concurrency
         if n_gen > 120:
-            eff_concurrency = min(eff_concurrency, 2)
+            eff_concurrency = min(eff_concurrency, 3)
         elif n_gen > 60:
             eff_concurrency = min(eff_concurrency, 3)
         if eff_concurrency != self.concurrency:
             self._log("generator",
                       f"メモリ保護のため並列を {self.concurrency} → {eff_concurrency} に調整（{n_gen} 枚）",
-                      "512MB環境のOOM回避。安定優先で少し時間がかかります")
+                      "大量生成時のOOM/API失敗を避けるため、安定優先で調整します")
         self._progress(3,
                        f"画像を並列生成中（{provider_label} / 同時 {eff_concurrency} 枚 / {n_gen} 枚）...",
                        40)
