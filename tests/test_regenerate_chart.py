@@ -19,6 +19,8 @@ from PIL import Image  # noqa: E402
 import router  # noqa: E402
 import renderer  # noqa: E402
 import utils  # noqa: E402
+import generator  # noqa: E402
+import prompter  # noqa: E402
 import app as appmod  # noqa: E402
 
 
@@ -165,3 +167,61 @@ def test_regenerate_map_rerenders(tmp_path, monkeypatch):
     body = resp.get_json()
     assert body.get("ok") is True and body.get("filename") == "9.png"
     assert (job_dir / "images" / "9.png").exists()
+
+
+def test_regenerate_chart_can_force_diagram_ai(tmp_path, monkeypatch):
+    """chart(render) 行でも force_route=diagram ならAI図解として再生成できる。"""
+    out_root = tmp_path / "output"
+    job_dir = out_root / "job_force"
+    (job_dir / "images").mkdir(parents=True)
+    monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+
+    (job_dir / "job.json").write_text(
+        '{"channel_id":"default","provider":"nanobanana","style_preset":"flat_infographic"}',
+        encoding="utf-8",
+    )
+    (job_dir / "prompts.json").write_text('{"rows":[]}', encoding="utf-8")
+    (job_dir / "rows_progress.json").write_text(
+        '{"rows":[{"no":12,"sentence":"天然ガス価格は29ドルから430ドルです。",'
+        '"block_text":"価格比較","route":"chart","engine":"render","status":"ok",'
+        '"chart_spec":{"chart_type":"bar","series":[{"label":"A","value":29}]}}]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(utils, "get_anthropic_client", lambda key="": object())
+    monkeypatch.setattr(
+        prompter,
+        "generate_all_prompts",
+        lambda client, rows, **kwargs: [{
+            "no": rows[0]["no"],
+            "prompt": "Create a clear diagram with two boxes and arrows, no chart.",
+            "type": "diagram",
+            "route": "diagram",
+            "allowed_terms": ["29ドル", "430ドル"],
+            "character": False,
+            "sentence": rows[0]["sentence"],
+        }],
+    )
+
+    calls = {}
+    def fake_generate(prompts, output_dir, **kwargs):
+        calls["entry"] = prompts[0]
+        _png(Path(output_dir) / "12.png")
+        return [{"success": True, "filename": "12.png"}]
+    monkeypatch.setattr(generator, "run_parallel_generation", fake_generate)
+
+    with appmod.app.test_request_context(
+        "/api/regenerate/job_force/12",
+        method="POST",
+        data={"force_route": "diagram"},
+    ):
+        resp = appmod.api_regenerate("job_force", 12)
+
+    body = resp.get_json()
+    assert body.get("ok") is True
+    assert body.get("route") == "diagram"
+    assert calls["entry"]["type"] == "diagram"
+    snap = appmod.load_json(job_dir / "rows_progress.json", {"rows": []})["rows"][0]
+    assert snap["route"] == "diagram"
+    assert snap["engine"] == "ai"

@@ -582,7 +582,7 @@ def api_manifest(job_id):
     return jsonify(manifest)
 
 
-def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None):
+def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=None, route_reason=None):
     """再生成結果を rows_progress.json に反映（chart/map/AI 共通）。"""
     import json as _json
     snap_path = job_dir / "rows_progress.json"
@@ -594,9 +594,36 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None):
                 r["filename"] = filename
             if engine:
                 r["engine"] = engine
+            if route:
+                r["route"] = route
+            if route_reason:
+                r["route_reason"] = route_reason
             break
     try:
         snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _save_regen_prompt(job_dir, row):
+    """ルート変更再生成で作った prompt を prompts.json に保存して次回再生成でも使えるようにする。"""
+    import json as _json
+    prompts_path = job_dir / "prompts.json"
+    data = load_json(prompts_path, {"rows": []})
+    rows = data.get("rows", [])
+    replaced = False
+    for i, existing in enumerate(rows):
+        if existing.get("no") == row.get("no"):
+            merged = dict(existing)
+            merged.update(row)
+            rows[i] = merged
+            replaced = True
+            break
+    if not replaced:
+        rows.append(row)
+    data["rows"] = rows
+    try:
+        prompts_path.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
 
@@ -726,6 +753,10 @@ def api_regenerate(job_id, no):
     target = next((r for r in prompts if r.get("no") == no), None)
     snap_row = next((r for r in snap_all if r.get("no") == no), None)
     extra = (request.form.get("extra_instruction", "") or "").strip()
+    force_route = (request.form.get("force_route", "") or "").strip()
+    forceable_routes = {"realphoto", "diagram", "illustration"}
+    if force_route and force_route not in forceable_routes:
+        return jsonify({"error": f"この再生成で指定できないルートです: {force_route}"}), 400
 
     # チャンネル設定・キーを解決（再生成も該当チャンネルの設定で）
     channel_id = params.get("channel_id", "default")
@@ -736,20 +767,71 @@ def api_regenerate(job_id, no):
     # 対象行のルート/エンジン（snapshot 優先：chart/map は render エンジン）
     route = (snap_row or {}).get("route") or (target or {}).get("route") or (target or {}).get("type") or ""
     engine = (snap_row or {}).get("engine") or ""
+    original_route = route
+    if force_route:
+        route = force_route
+        engine = "ai"
 
     # ===== v3: chart / map は決定論レンダ（AIプロンプトを持たない）→ 抽出し直して描き直す =====
-    if route == "chart" and (engine == "render" or defaults.get("chart_engine") == "render"):
+    if not force_route and route == "chart" and (engine == "render" or defaults.get("chart_engine") == "render"):
         return _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra)
-    if route == "map" and (engine == "render" or defaults.get("map_engine") == "render"):
+    if not force_route and route == "map" and (engine == "render" or defaults.get("map_engine") == "render"):
         return _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra)
 
     # ===== AI 生成（illustration / realphoto / diagram など）=====
-    if not prompts:
-        return jsonify({"error": "プロンプト情報が見つかりません（まだ生成準備中か、データが消えています）"}), 404
-    if not target or not target.get("prompt"):
+    if (not target or not target.get("prompt")) and not force_route:
+        if not prompts:
+            return jsonify({"error": "プロンプト情報が見つかりません（まだ生成準備中か、データが消えています）"}), 404
         return jsonify({"error": f"№{no} のAI生成用プロンプトが見つかりません（chart/map は数値・地名のある文のみ再生成可）"}), 404
 
     route = route or "illustration"
+    if force_route and (not target or not target.get("prompt") or original_route != force_route):
+        from utils import get_anthropic_client
+        from prompter import generate_all_prompts
+        source_row = dict(snap_row or target or {})
+        sentence = (source_row.get("sentence") or "").strip()
+        if not sentence:
+            return jsonify({"error": "ルート変更再生成に必要な文が見つかりません"}), 404
+        source_row.update({
+            "no": no,
+            "route": force_route,
+            "type": force_route,
+            "sentence": sentence,
+            "block_text": source_row.get("block_text", ""),
+            "chapter_title": source_row.get("chapter_title", ""),
+        })
+        try:
+            client = get_anthropic_client(ch_keys.get("anthropic", ""))
+            generated_prompts = generate_all_prompts(
+                client,
+                [source_row],
+                title=params.get("title") or "センテンス図解",
+                user_instructions=(
+                    "Regenerate this item using the forced route/type. "
+                    "Do not make a chart or graph. Create a simple, clear diagram instead."
+                ),
+                style_preset=params.get("style_preset", "flat_infographic"),
+                worldview_desc="",
+                max_workers=1,
+                log=lambda *args, **kwargs: None,
+            )
+        except Exception as e:
+            generated_prompts = []
+            source_row["prompt"] = (
+                "Create a simple, clear educational diagram that explains the following Japanese sentence. "
+                "Use icons, arrows, and 2-4 labeled boxes. Do not create a chart or graph. "
+                "Keep it easy to understand at a glance. Sentence: " + sentence
+            )
+            source_row["allowed_terms"] = []
+            source_row["character"] = False
+            source_row["type"] = force_route
+            source_row["route"] = force_route
+            source_row["prompt_error"] = str(e)[:120]
+        target = (generated_prompts[0] if generated_prompts else source_row)
+        target["route"] = force_route
+        target["type"] = force_route
+        _save_regen_prompt(job_dir, target)
+
     prompt_text = target.get("prompt", "")
     if extra:
         prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
@@ -800,12 +882,23 @@ def api_regenerate(job_id, no):
     filename = results[0].get("filename") if ok else None
 
     # rows_progress.json を更新（AI 生成は engine=ai のまま）
-    _update_regen_snapshot(job_dir, no, ok, filename=filename)
+    route_reason = ""
+    if force_route:
+        route_reason = f"{original_route or 'unknown'} から {force_route} へルート変更して再生成"
+    _update_regen_snapshot(
+        job_dir,
+        no,
+        ok,
+        filename=filename,
+        engine="ai" if force_route else None,
+        route=force_route or None,
+        route_reason=route_reason or None,
+    )
 
     if not ok:
         return jsonify({"error": results[0].get("error", "生成失敗") if results else "生成失敗"}), 500
     # キャッシュ回避用にタイムスタンプ付き URL を返す
-    return jsonify({"ok": True, "no": no, "filename": filename, "ts": datetime.now().strftime("%H%M%S")})
+    return jsonify({"ok": True, "no": no, "filename": filename, "route": route, "ts": datetime.now().strftime("%H%M%S")})
 
 
 # v3 Step5: ルート違いフィードバック。編集者が「この文は別ルートが正しい」と教えると、
