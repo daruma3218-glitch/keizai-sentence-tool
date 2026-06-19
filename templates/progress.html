@@ -808,7 +808,9 @@
       if (!tr) return;
       const filename = tr.getAttribute('data-filename');
       if (!filename) return;
-      document.getElementById('modalImg').src = `/results/${JOB_ID}/images/${filename}`;
+      const modalImg = document.getElementById('modalImg');
+      modalImg.src = '';
+      modalImg.src = `/results/${JOB_ID}/images/${filename}?t=${Date.now()}`;
       document.getElementById('modalNo').textContent = `№ ${no}`;
       document.getElementById('modalSentence').textContent = tr.getAttribute('data-sentence') || '';
       document.getElementById('modalChapter').textContent = (tr.getAttribute('data-chapter') || '') + ' / ' + (tr.getAttribute('data-block') || '').substring(0, 100);
