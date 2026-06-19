@@ -173,6 +173,58 @@ class SentencePipeline:
             return r.get("display") == "image"
         return True
 
+    def _force_high_coverage_images(self, rows: list, routes: dict) -> int:
+        """大量生成指定では、beat/skip による減りすぎを補正する。
+
+        通常の50枚/150枚生成では「重要なビートだけ画像化」が自然だが、
+        250〜300枚指定ではユーザー期待は「ほぼ全文に画像を付ける」こと。
+        そのため display=hold/none や route=skip も、上限に届くまで画像対象へ戻す。
+        """
+        if not self.beat_mode or not rows:
+            return 0
+
+        total = len(rows)
+        high_coverage_requested = self.max_diagrams >= 250 or self.max_diagrams >= int(total * 0.85)
+        if not high_coverage_requested:
+            return 0
+
+        target = min(self.max_diagrams, total)
+        current = [r for r in rows if r.get("display") == "image"]
+        missing = target - len(current)
+        if missing <= 0:
+            return 0
+
+        candidates = [r for r in rows if r.get("display") != "image"]
+        chosen_nos = self._select_evenly_distributed(candidates, missing)
+        changed = 0
+        for r in rows:
+            no = r["no"]
+            if no not in chosen_nos:
+                continue
+            r["display"] = "image"
+            rt = routes.setdefault(no, {})
+            if rt.get("route") == "skip":
+                rt["route"] = "illustration"
+                rt["reason"] = "300枚級の大量生成指定のため、skipを画像化対象へ補正"
+                r["route"] = "illustration"
+                r["route_reason"] = rt["reason"]
+            self._update_row(
+                no,
+                display="image",
+                route=r.get("route", rt.get("route", "illustration")),
+                route_reason=r.get("route_reason", rt.get("reason", "")),
+                status="pending",
+            )
+            changed += 1
+
+        if changed:
+            self._log(
+                "allocator",
+                f"大量生成補正: {changed} 文を画像対象へ追加（目標 {target} 枚）",
+                "300枚指定時に skip/hold で画像数が減りすぎる問題を防ぎます",
+            )
+        return changed
+
     @staticmethod
     def _select_evenly_distributed(candidates: list, max_count: int) -> set:
         """候補センテンスから max_count 個を全文均等に間引いて選定する。
@@ -461,6 +513,7 @@ class SentencePipeline:
                 for r in rows:
                     if r.get("display") == "hold":
                         self._update_row(r["no"], status="hold")
+                self._force_high_coverage_images(rows, routes)
         except Exception as e:
             self._log("error", f"allocator をスキップ（{str(e)[:80]}）。v2 配分にフォールバック。")
             self.beat_mode = False

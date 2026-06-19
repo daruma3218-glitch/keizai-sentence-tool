@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from allocator import allocate  # noqa: E402
+from pipeline import SentencePipeline  # noqa: E402
 
 _ROUTES = ["chart", "map", "diagram", "illustration", "web_photo", "skip"]
 
@@ -85,3 +86,28 @@ def test_timecode_accumulates():
     a = allocate(rows, routes, max_diagrams=5, chars_per_sec=5.5, beat_mode=True)
     assert a[1]["est_start"] == "00:00"
     assert a[2]["est_start"] == "00:10"  # 55/5.5 = 10秒
+
+
+def test_high_coverage_300_fills_hold_and_skip(tmp_path):
+    rows, routes = _make(308)
+    alloc = allocate(rows, routes, max_diagrams=300, beat_mode=True)
+    for r in rows:
+        a = alloc[r["no"]]
+        r["display"] = a["display"]
+        r["route"] = routes[r["no"]]["route"]
+
+    before = sum(1 for r in rows if r["display"] == "image")
+    assert before < 300
+
+    p = SentencePipeline(
+        "dummy",
+        tmp_path,
+        max_diagrams=300,
+        beat_mode=True,
+        verify_diagrams=False,
+    )
+    changed = p._force_high_coverage_images(rows, routes)
+
+    assert changed > 0
+    assert sum(1 for r in rows if r["display"] == "image") == 300
+    assert any(routes[r["no"]]["route"] == "illustration" for r in rows if r["display"] == "image")
