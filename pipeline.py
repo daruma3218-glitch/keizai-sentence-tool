@@ -62,6 +62,7 @@ class SentencePipeline:
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         intro_visual_boost: int = 0,       # 冒頭N文は実写/地図を優先
         map_route_limit: int = 0,          # 0なら無制限。超過したmapはrealphotoへ寄せる
+        no_image_text: bool = False,       # True: AI図解/イラストの allowed_terms を空にする
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
         max_web_image_reuse: int = 2,       # 同じWeb写真/サムネイルの採用上限
@@ -102,6 +103,7 @@ class SentencePipeline:
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.intro_visual_boost = max(0, min(int(intro_visual_boost or 0), 30))
         self.map_route_limit = max(0, min(int(map_route_limit or 0), 60))
+        self.no_image_text = bool(no_image_text)
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
         self.max_web_image_reuse = max(1, min(int(max_web_image_reuse or 2), 10))
@@ -220,6 +222,19 @@ class SentencePipeline:
             f"地図比率調整: map {changed} 件を realphoto に変換",
             f"map_route_limit={self.map_route_limit}"
         )
+        return changed
+
+    def _remove_image_text_terms(self, rows_with_prompts: list) -> int:
+        """文字なし運用のチャンネルでは、画像内テキスト許可語を全部消す。"""
+        if not self.no_image_text:
+            return 0
+        changed = 0
+        for r in rows_with_prompts:
+            if r.get("allowed_terms"):
+                r["allowed_terms"] = []
+                changed += 1
+        if changed:
+            self._log("prompter", f"文字なし設定: allowed_terms {changed} 件を空にしました")
         return changed
 
     # ---- ヘルパ ----
@@ -729,6 +744,7 @@ class SentencePipeline:
             style_preset=self.style_preset, worldview_desc=self.worldview_desc,
             max_workers=6, log=self._log,
         )
+        self._remove_image_text_terms(rows_with_prompts)
         save_json(self.output_dir / "prompts.json", {"rows": rows_with_prompts})
         self._log("prompter", f"プロンプト生成完了: {len(rows_with_prompts)} 件")
 
@@ -1200,6 +1216,7 @@ class SentencePipeline:
                     style_preset=self.style_preset, worldview_desc=self.worldview_desc,
                     max_workers=4, log=self._log,
                 )
+                self._remove_image_text_terms(fallback_prompts)
                 fallback_targets = []
                 for r in fallback_prompts:
                     self._update_row(
@@ -1295,6 +1312,7 @@ class SentencePipeline:
             "map_engine": self.map_engine,
             "intro_visual_boost": self.intro_visual_boost,
             "map_route_limit": self.map_route_limit,
+            "no_image_text": self.no_image_text,
             "photo_source": self.photo_source,
             "web_search_profile": self.web_search_profile,
             "verify_diagrams": self.verify_diagrams,

@@ -60,12 +60,18 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert defaults["allow_charts"] is False
     assert defaults["intro_visual_boost"] == 10
     assert defaults["map_route_limit"] == 8
+    assert defaults["no_image_text"] is True
     assert "日本地図" in defaults["user_instructions"]
     assert "円マーク" in defaults["user_instructions"]
     assert "冒頭10文" in defaults["user_instructions"]
     assert "YouTubeの教養チャンネル" in defaults["user_instructions"]
     assert "地図は多用しない" in defaults["user_instructions"]
-    assert "#D9E1E8" in defaults["worldview_desc"]
+    assert "文字なしインフォグラフィック" in defaults["user_instructions"]
+    assert "可愛い" in defaults["user_instructions"]
+    assert "warm retro hand-drawn" not in defaults["worldview_desc"]
+    assert "symbolic flat infographics" in defaults["worldview_desc"]
+    assert "ライトグレイッシュ" in defaults["user_instructions"]
+    assert "Do not use black, dark navy" in defaults["worldview_desc"]
     assert defaults["chart_theme"]["bg"] == "#D9E1E8"
 
 
@@ -133,6 +139,23 @@ def test_map_route_limit_converts_extra_maps_to_realphoto(tmp_path):
     assert changed == 1
     assert sum(1 for rt in routes.values() if rt["route"] == "map") == 2
     assert routes[3]["route"] == "realphoto"
+
+
+def test_no_image_text_clears_allowed_terms(tmp_path):
+    pipe = SentencePipeline(
+        "dummy",
+        tmp_path,
+        no_image_text=True,
+        verify_diagrams=False,
+    )
+    rows = [
+        {"no": 1, "allowed_terms": ["ロシア", "NATO"]},
+        {"no": 2, "allowed_terms": []},
+    ]
+    changed = pipe._remove_image_text_terms(rows)
+    assert changed == 1
+    assert rows[0]["allowed_terms"] == []
+    assert rows[1]["allowed_terms"] == []
 
 
 def test_allowed_terms_are_limited_to_reduce_keyword_lists():
