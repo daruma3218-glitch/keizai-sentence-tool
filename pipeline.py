@@ -11,6 +11,7 @@ import csv
 import json
 import os
 import threading
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -1158,6 +1159,48 @@ class SentencePipeline:
         self._log("websearch",
                   f"Web 画像取得集計: accumulator={web_count_from_acc} / rows={web_count_from_rows}")
 
+        generated_results = [r for r in results if r.get("success")]
+        provider_counts = Counter(r.get("provider", "unknown") for r in generated_results)
+        provider_failed_counts = Counter(r.get("provider", "unknown") for r in results if not r.get("success"))
+        generated_type_counts = Counter(r.get("type", "unknown") for r in generated_results)
+        route_counts = Counter((r.get("route") or "unknown") for r in final_rows)
+        status_counts = Counter((r.get("status") or "pending") for r in final_rows)
+        engine_counts = Counter((r.get("engine") or "unknown") for r in final_rows)
+        rendered_ok_count = sum(
+            1 for r in final_rows
+            if r.get("engine") == "render" and r.get("status") == "ok" and r.get("filename")
+        )
+        web_local_count = sum(1 for r in final_rows if r.get("web_local_file"))
+        ai_image_count = len(generated_results)
+
+        cost_audit = {
+            "channel_id": self.channel_id,
+            "base_provider": self.provider,
+            "type_providers": self.type_providers,
+            "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
+            "chart_engine": self.chart_engine,
+            "map_engine": self.map_engine,
+            "photo_source": self.photo_source,
+            "web_search_profile": self.web_search_profile,
+            "verify_diagrams": self.verify_diagrams,
+            "provider_generated_counts": dict(provider_counts),
+            "provider_failed_counts": dict(provider_failed_counts),
+            "generated_type_counts": dict(generated_type_counts),
+            "route_counts": dict(route_counts),
+            "status_counts": dict(status_counts),
+            "engine_counts": dict(engine_counts),
+            "rendered_ok_count": rendered_ok_count,
+            "ai_image_count": ai_image_count,
+            "web_results_count": web_count_final,
+            "web_local_count": web_local_count,
+            "web_fallback_generated": sum(1 for r in web_fallback_results if r.get("success")),
+            "optimization_notes": {
+                "programmatic_render_saved_images": rendered_ok_count,
+                "commons_or_web_images_saved_ai": web_local_count,
+                "verify_model": "claude-haiku-4-5" if self.verify_diagrams else "",
+            },
+        }
+
         manifest = {
             "title": title,
             "summary": analysis.get("summary", ""),
@@ -1184,6 +1227,7 @@ class SentencePipeline:
             "skipped_decorative": skipped_decorative,
             "thinned": thinned_count,  # 均等配置のため間引かれた数
             "web_results_count": web_count_final,
+            "cost_audit": cost_audit,
             "rows": final_rows,
             "chapters": [{"title": c["title"], "block_count": len(c["blocks"])} for c in chapters],
             "completed_at": datetime.now().isoformat(),
