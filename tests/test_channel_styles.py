@@ -60,8 +60,8 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert defaults["allow_charts"] is False
     assert defaults["intro_visual_boost"] == 10
     assert defaults["map_route_limit"] == 8
-    assert defaults["realistic_route_min"] == 60
-    assert defaults["web_image_count"] == 60
+    assert defaults["realistic_route_min"] == 35
+    assert defaults["web_image_count"] == 45
     assert defaults["web_search_profile"] == "primary_media"
     assert defaults["no_image_text"] is False
     assert "日本地図" in defaults["user_instructions"]
