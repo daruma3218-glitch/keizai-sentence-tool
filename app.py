@@ -10,6 +10,7 @@ import io
 import json
 import os
 import secrets
+import shutil
 import threading
 import zipfile
 from datetime import datetime, timedelta
@@ -129,6 +130,18 @@ _job_logs: dict = {}
 _jobs_lock = threading.Lock()
 # route_feedback.jsonl への追記を直列化（同時フィードバックでも行が壊れないように）
 FEEDBACK_LOCK = threading.Lock()
+
+
+def _safe_job_dir(job_id: str):
+    """OUTPUT_DIR 直下のジョブディレクトリだけを返す。"""
+    if not job_id or "/" in job_id or "\\" in job_id or job_id in (".", ".."):
+        return None
+    job_dir = (OUTPUT_DIR / job_id).resolve()
+    try:
+        job_dir.relative_to(OUTPUT_DIR.resolve())
+    except ValueError:
+        return None
+    return job_dir
 
 
 # ====== 認証 ======
@@ -583,6 +596,29 @@ def api_logs(job_id):
 def api_manifest(job_id):
     manifest = load_json(OUTPUT_DIR / job_id / "manifest.json", {})
     return jsonify(manifest)
+
+
+@app.route("/api/jobs/<job_id>", methods=["DELETE", "POST"])
+@login_required
+def api_delete_job(job_id):
+    """過去ジョブの出力一式を削除する。"""
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists() or not job_dir.is_dir():
+        return jsonify({"ok": False, "error": "ジョブが見つかりません"}), 404
+
+    state = _get_job_state(job_id)
+    if state.get("status") == "running":
+        return jsonify({"ok": False, "error": "実行中のジョブは削除できません"}), 409
+
+    try:
+        shutil.rmtree(job_dir)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"削除に失敗しました: {str(e)[:150]}"}), 500
+
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
+        _job_logs.pop(job_id, None)
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=None, route_reason=None):
