@@ -61,6 +61,7 @@ class SentencePipeline:
         allow_charts: bool = True,         # False: chart route を diagram に変換する
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         intro_visual_boost: int = 0,       # 冒頭N文は実写/地図を優先
+        map_route_limit: int = 0,          # 0なら無制限。超過したmapはrealphotoへ寄せる
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
         max_web_image_reuse: int = 2,       # 同じWeb写真/サムネイルの採用上限
@@ -100,6 +101,7 @@ class SentencePipeline:
         self.allow_charts = bool(allow_charts)
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.intro_visual_boost = max(0, min(int(intro_visual_boost or 0), 30))
+        self.map_route_limit = max(0, min(int(map_route_limit or 0), 60))
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
         self.max_web_image_reuse = max(1, min(int(max_web_image_reuse or 2), 10))
@@ -143,7 +145,7 @@ class SentencePipeline:
             "パイプライン", "港", "鉄道", "デモ", "抗議", "会談", "大統領", "写真",
             "映像", "戦争", "侵攻", "歴史", "崩壊"
         )
-        map_words = ("国境", "地図", "経由", "ルート", "進軍", "領土", "欧州", "EU", "NATO")
+        map_words = ("地図", "地理", "国境線", "位置関係", "領土", "ルート図", "地政学")
         web_words = ("大統領", "首相", "会談", "演説", "写真", "映像", "崩壊", "デモ", "抗議")
 
         for r in rows[:self.intro_visual_boost]:
@@ -178,6 +180,46 @@ class SentencePipeline:
                 f"冒頭実写ブースト: {changed} 件を実写/Web写真/地図へ補正",
                 f"intro_visual_boost={self.intro_visual_boost}"
             )
+        return changed
+
+    def _limit_map_routes(self, rows: list, routes: dict) -> int:
+        """地図が多すぎる時は、位置関係の説明に必要なものだけ残す。"""
+        if self.map_route_limit <= 0:
+            return 0
+
+        row_by_no = {r["no"]: r for r in rows}
+        map_items = []
+        strong_terms = ("地図", "地理", "国境線", "位置関係", "領土", "ルート図", "地政学")
+        weak_terms = ("経由", "進軍", "EU", "NATO", "欧州", "ロシア", "ウクライナ", "ベラルーシ")
+        for no, rt in routes.items():
+            if rt.get("route") != "map":
+                continue
+            r = row_by_no.get(no, {})
+            text = f"{r.get('chapter_title','')} {r.get('block_text','')} {r.get('sentence','')}"
+            compact = text.replace(" ", "")
+            score = int(rt.get("importance", 3) or 3)
+            score += sum(3 for w in strong_terms if w in compact)
+            score += sum(1 for w in weak_terms if w in compact)
+            map_items.append((score, no))
+
+        if len(map_items) <= self.map_route_limit:
+            return 0
+
+        keep = {no for _, no in sorted(map_items, reverse=True)[:self.map_route_limit]}
+        changed = 0
+        for _, no in map_items:
+            if no in keep:
+                continue
+            rt = routes[no]
+            rt["route"] = "realphoto"
+            rt["reason"] = "地図枚数上限により実写風へ変換"
+            rt["engine"] = "ai"
+            changed += 1
+        self._log(
+            "router",
+            f"地図比率調整: map {changed} 件を realphoto に変換",
+            f"map_route_limit={self.map_route_limit}"
+        )
         return changed
 
     # ---- ヘルパ ----
@@ -537,6 +579,7 @@ class SentencePipeline:
             }
         # route を各行に反映（row dict 自体にも route を入れる＝prompter が type 判定に使う）
         self._apply_intro_visual_boost(rows, routes)
+        self._limit_map_routes(rows, routes)
 
         if not self.allow_charts:
             converted = 0
@@ -1251,6 +1294,7 @@ class SentencePipeline:
             "allow_charts": self.allow_charts,
             "map_engine": self.map_engine,
             "intro_visual_boost": self.intro_visual_boost,
+            "map_route_limit": self.map_route_limit,
             "photo_source": self.photo_source,
             "web_search_profile": self.web_search_profile,
             "verify_diagrams": self.verify_diagrams,

@@ -59,11 +59,12 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     defaults = get_channel("roshia").get("defaults", {})
     assert defaults["allow_charts"] is False
     assert defaults["intro_visual_boost"] == 10
+    assert defaults["map_route_limit"] == 8
     assert "日本地図" in defaults["user_instructions"]
     assert "円マーク" in defaults["user_instructions"]
     assert "冒頭10文" in defaults["user_instructions"]
     assert "YouTubeの教養チャンネル" in defaults["user_instructions"]
-    assert "実写風のAI画像／地図／インフォグラフィック" in defaults["user_instructions"]
+    assert "地図は多用しない" in defaults["user_instructions"]
     assert "#D9E1E8" in defaults["worldview_desc"]
     assert defaults["chart_theme"]["bg"] == "#D9E1E8"
 
@@ -90,9 +91,48 @@ def test_intro_visual_boost_prefers_realistic_opening(tmp_path):
     changed = pipe._apply_intro_visual_boost(rows, routes)
     assert changed == 3
     assert routes[1]["route"] == "realphoto"
-    assert routes[2]["route"] == "map"
+    assert routes[2]["route"] == "realphoto"
     assert routes[3]["route"] == "web_photo"
     assert routes[4]["route"] == "diagram"
+
+
+def test_intro_visual_boost_uses_map_only_for_explicit_geography(tmp_path):
+    pipe = SentencePipeline(
+        "dummy",
+        tmp_path,
+        intro_visual_boost=1,
+        verify_diagrams=False,
+    )
+    rows = [
+        {"no": 1, "sentence": "国境線と領土の位置関係を地図で確認します。", "block_text": ""},
+    ]
+    routes = {1: {"route": "diagram", "importance": 3}}
+    changed = pipe._apply_intro_visual_boost(rows, routes)
+    assert changed == 1
+    assert routes[1]["route"] == "map"
+
+
+def test_map_route_limit_converts_extra_maps_to_realphoto(tmp_path):
+    pipe = SentencePipeline(
+        "dummy",
+        tmp_path,
+        map_route_limit=2,
+        verify_diagrams=False,
+    )
+    rows = [
+        {"no": 1, "sentence": "国境線と領土の位置関係を地図で確認します。", "block_text": ""},
+        {"no": 2, "sentence": "ロシア軍はベラルーシ経由で進軍しました。", "block_text": ""},
+        {"no": 3, "sentence": "欧州とNATOの関係が変化しました。", "block_text": ""},
+    ]
+    routes = {
+        1: {"route": "map", "importance": 3},
+        2: {"route": "map", "importance": 3},
+        3: {"route": "map", "importance": 1},
+    }
+    changed = pipe._limit_map_routes(rows, routes)
+    assert changed == 1
+    assert sum(1 for rt in routes.values() if rt["route"] == "map") == 2
+    assert routes[3]["route"] == "realphoto"
 
 
 def test_allowed_terms_are_limited_to_reduce_keyword_lists():
