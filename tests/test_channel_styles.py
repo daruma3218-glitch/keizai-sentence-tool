@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app import get_channel
 from pipeline import SentencePipeline, VALID_STYLES
-from prompter import _build_user_block
+from prompter import _build_user_block, _limit_allowed_terms
 from generator import _build_full_prompt
 
 
@@ -53,3 +53,19 @@ def test_seikou_channel_uses_dedicated_api_prefix():
     assert defaults["web_search_profile"] == "primary_media"
     assert "一次情報" in defaults["user_instructions"]
     assert "realphoto" in defaults["user_instructions"]
+
+
+def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
+    defaults = get_channel("roshia").get("defaults", {})
+    assert defaults["allow_charts"] is False
+    assert "日本地図" in defaults["user_instructions"]
+    assert "円マーク" in defaults["user_instructions"]
+
+
+def test_allowed_terms_are_limited_to_reduce_keyword_lists():
+    sentence = "ロシアのGDPは2025年に6.3%低下し、輸出額は430ドル相当で、ベラルーシと中国にも影響した。"
+    terms = ["ロシア", "GDP", "2025年", "6.3%", "輸出額", "430ドル", "ベラルーシ", "中国"]
+    limited = _limit_allowed_terms(terms, sentence)
+    assert len(limited) <= 4
+    assert len(set(limited)) == len(limited)
+    assert any(t in limited for t in ("6.3%", "430ドル", "2025年"))

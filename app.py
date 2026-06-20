@@ -280,6 +280,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             max_diagrams=max_diagrams,
             route_mode=route_mode,
             chart_engine=defaults.get("chart_engine", "ai"),
+            allow_charts=defaults.get("allow_charts", True),
             map_engine=defaults.get("map_engine", "ai"),
             photo_source=defaults.get("photo_source", "web"),
             web_search_profile=defaults.get("web_search_profile", ""),

@@ -297,6 +297,7 @@ def _build_full_prompt(
             f"- The ONLY Japanese text/labels/numbers allowed in this image are EXACTLY these: {terms_str}\n"
             "- DO NOT invent or add ANY other text, labels, place names, numbers, captions, or annotations.\n"
             "- DO NOT translate or paraphrase the allowed terms; render them character-for-character.\n"
+            "- Render each allowed term AT MOST ONCE. Do not duplicate or repeat the same word/number.\n"
             "- DO NOT include English text of any kind.\n"
             "- If unsure whether a piece of text is in the allowed list, OMIT it.\n"
             "- DO NOT add any title text or heading at the top of the image.\n"
@@ -319,6 +320,8 @@ def _build_full_prompt(
         "  Zoom out / use a wider view so nothing is cropped or cut off.\n"
         "- Center the main content with comfortable empty space around it.\n"
         "- Simple, clear, professional. Avoid clutter.\n"
+        "- For diagrams, do NOT make a mere keyword list. Show one clear structure: cause -> effect, comparison, process flow, or relationship map.\n"
+        "- Avoid duplicate labels, overlapping text, and repeated words.\n"
     )
     return f"{style}\n{preset}\n{text_policy}{common}\nContent to visualize:\n{user_prompt}"
 

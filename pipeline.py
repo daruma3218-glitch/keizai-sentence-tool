@@ -58,6 +58,7 @@ class SentencePipeline:
         max_diagrams: int = 150,
         route_mode: str = "auto",
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
+        allow_charts: bool = True,         # False: chart route を diagram に変換する
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
@@ -95,6 +96,7 @@ class SentencePipeline:
         self.max_diagrams = max(1, min(max_diagrams, 300))
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
+        self.allow_charts = bool(allow_charts)
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
@@ -481,6 +483,16 @@ class SentencePipeline:
         save_json(self.output_dir / "routes.json", routes)
 
         # route を各行に反映（row dict 自体にも route を入れる＝prompter が type 判定に使う）
+        if not self.allow_charts:
+            converted = 0
+            for rt in routes.values():
+                if rt.get("route") == "chart":
+                    rt["route"] = "diagram"
+                    rt["reason"] = "チャンネル設定でグラフなし"
+                    converted += 1
+            if converted:
+                self._log("router", f"グラフなし設定: chart {converted} 件を diagram に変換")
+
         for r in rows:
             rt = routes.get(r["no"], {})
             r["route"] = rt.get("route", "illustration")
@@ -1179,6 +1191,7 @@ class SentencePipeline:
             "type_providers": self.type_providers,
             "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
             "chart_engine": self.chart_engine,
+            "allow_charts": self.allow_charts,
             "map_engine": self.map_engine,
             "photo_source": self.photo_source,
             "web_search_profile": self.web_search_profile,

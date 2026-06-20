@@ -55,6 +55,30 @@ def _auto_extract_terms(sentence: str) -> list:
     return terms
 
 
+def _limit_allowed_terms(terms: list, sentence: str, max_terms: int = 4) -> list:
+    """画像内テキストを増やしすぎないため、重要語だけに絞る。"""
+    scored = []
+    seen = set()
+    for t in terms:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()
+        if not t or t in seen or t not in sentence:
+            continue
+        seen.add(t)
+        score = 0
+        if re.search(r'\d', t):
+            score += 5
+        if len(t) <= 10:
+            score += 2
+        if any(k in t for k in ("年", "％", "%", "ドル", "円", "人", "国", "ロシア", "ソ連")):
+            score += 2
+        score += max(0, 12 - len(t))
+        scored.append((score, len(scored), t))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [t for _, _, t in scored[:max_terms]]
+
+
 def _build_user_block(user_instructions: str, style_preset: str) -> str:
     blocks = []
     if user_instructions.strip():
@@ -65,8 +89,9 @@ def _build_user_block(user_instructions: str, style_preset: str) -> str:
         "flat_infographic": (
             "【スタイル: フラットインフォグラフィック（最優先で守ること）】\n"
             "- 2〜3 色のフラットカラー（ナビーブルー #1E40AF / 白 / ライトグレー / 1色アクセント）\n"
-            "- アイコン・記号ベース（人型シルエット、国旗、矢印、円グラフ、棒グラフなど）\n"
-            "- 大きな数字・短い見出しを画面の主役にする（テロップ的に）\n"
+            "- アイコン・記号ベース（人型シルエット、国旗、矢印、囲み、比較パネルなど）\n"
+            "- キーワードの羅列は禁止。必ず「原因→結果」「比較」「流れ」「関係性」のどれか1つの構造にする\n"
+            "- 画像内テキストは最大4語まで。同じ語を重複表示しない\n"
             "- 写実画・寓意（動物の擬人化）・劇的演出は避ける\n"
             "- ニュース番組のテロップ・統計レポートのような「説明画面」を目指す"
         ),
@@ -220,6 +245,8 @@ def generate_prompts_batch(
   * 重要なキーワード (大陸帝国, 二正面作戦, アヘン戦争, 北京条約)
 - **auto_extracted_terms** はすでに抽出済みなので必ず取り込み、加えてセンテンスからも追加抽出する
 - 一般語（「国」「時」「これ」など）は除外
+- ただし allowed_terms は最大4語まで。多すぎる場合は、数字・国名・人名・地名を優先する
+- 同じ語・同じ数字を画像内に複数回表示してはいけない
 
 【画像内テキストの記述例】
 - allowed_terms = ["ロシア", "中国", "100年"] の場合:
@@ -236,8 +263,8 @@ def generate_prompts_batch(
   上空から見た本物の地球表面（青い海・緑の森林・茶色の山岳・白い雪原・リアルな海岸線）を描き、
   地形の起伏（レリーフシェーディング）も表現する。対象の国・地域は半透明の色で塗り分け、
   国境は細い線で示す。Google Earth / NASA衛星画像 / ナショナルジオグラフィック品質を目指す。
-- diagram: 概念図・フロー図（アイコン + 矢印 + ラベル）
-- chart: 数値比較（棒グラフ・円グラフ・大きな数字）
+- diagram: 概念図・フロー図（アイコン + 矢印 + ラベル）。キーワード羅列ではなく、因果・比較・流れ・関係性で見せる
+- chart: 数値比較（棒グラフ・円グラフ・大きな数字）。チャンネル指示でグラフ禁止の場合は diagram として扱う
 - decorative: 接続詞・挨拶・抽象表現（背景パターン）
 
 【出力 JSON】
@@ -289,7 +316,7 @@ def generate_prompts_batch(
                 if t and t in sent and t not in seen:
                     seen.add(t)
                     verified.append(t)
-            p["allowed_terms"] = verified
+            p["allowed_terms"] = _limit_allowed_terms(verified, sent)
             # type はルーターの route を最優先で固定（Claudeが勝手に変えても上書き）
             forced_type = r.get("route") or r.get("type")
             if forced_type in ("illustration", "realphoto", "map", "diagram", "chart", "decorative"):
@@ -313,7 +340,7 @@ def generate_prompts_batch(
                 "no": no,
                 "prompt": fallback_prompt,
                 "type": "decorative",
-                "allowed_terms": auto_terms,
+                "allowed_terms": _limit_allowed_terms(auto_terms, sent),
                 "character": False,
             })
     return merged

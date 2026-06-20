@@ -70,6 +70,7 @@
         "verify_diagrams": true,
         "character_ref": "",
         "chart_engine": "render",
+        "allow_charts": false,
         "map_engine": "render",
         "photo_source": "web",
         "max_web_image_reuse": 2,
@@ -89,7 +90,7 @@
         },
         "skip_decorative": false,
         "web_image_count": 30,
-        "user_instructions": ""
+        "user_instructions": "【ロシア解体新書 専用の品質指示】ロシア・旧ソ連・東欧・中央アジアの話題では、日本地図・日本列島・円マーク・日本円・東京の街並み・日本風の地名を出さない。通貨記号が必要な場合も、原稿に円が出ていない限り円マークは禁止。国や地域は原稿に出たものだけを使う。図解はキーワードの羅列にせず、必ず「原因→結果」「比較」「流れ」「関係性」のどれか1つの構造で表す。画像内テキストは最小限にし、同じ語を重複表示しない。グラフは使わず、数値比較もシンプルな図解として表す。"
       }
     },
     {
