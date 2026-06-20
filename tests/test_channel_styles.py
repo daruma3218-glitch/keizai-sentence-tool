@@ -62,6 +62,10 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert "日本地図" in defaults["user_instructions"]
     assert "円マーク" in defaults["user_instructions"]
     assert "冒頭10文" in defaults["user_instructions"]
+    assert "YouTubeの教養チャンネル" in defaults["user_instructions"]
+    assert "実写風のAI画像／地図／インフォグラフィック" in defaults["user_instructions"]
+    assert "#D9E1E8" in defaults["worldview_desc"]
+    assert defaults["chart_theme"]["bg"] == "#D9E1E8"
 
 
 def test_intro_visual_boost_prefers_realistic_opening(tmp_path):
