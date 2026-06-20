@@ -606,10 +606,6 @@ def api_delete_job(job_id):
     if not job_dir or not job_dir.exists() or not job_dir.is_dir():
         return jsonify({"ok": False, "error": "ジョブが見つかりません"}), 404
 
-    state = _get_job_state(job_id)
-    if state.get("status") == "running":
-        return jsonify({"ok": False, "error": "実行中のジョブは削除できません"}), 409
-
     try:
         shutil.rmtree(job_dir)
     except Exception as e:

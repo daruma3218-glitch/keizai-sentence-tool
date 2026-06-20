@@ -311,14 +311,13 @@
                       </span>
                     </div>
                   </a>
-                  {% if job.status != 'running' %}
-                    <button type="button"
-                            class="deleteJobBtn flex-shrink-0 px-3 text-xs text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-r-lg transition"
-                            data-job-id="{{ job.id }}"
-                            data-job-title="{{ job.title or job.id }}">
-                      削除
-                    </button>
-                  {% endif %}
+                  <button type="button"
+                          class="deleteJobBtn flex-shrink-0 px-3 text-xs text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-r-lg transition"
+                          data-job-id="{{ job.id }}"
+                          data-job-title="{{ job.title or job.id }}"
+                          data-job-status="{{ job.status }}">
+                    削除
+                  </button>
                 </div>
               {% endfor %}
             </div>
@@ -437,7 +436,11 @@
       btn.addEventListener('click', async () => {
         const jobId = btn.dataset.jobId;
         const title = btn.dataset.jobTitle || jobId;
-        if (!confirm(`このジョブを削除しますか？\n\n${title}\n${jobId}\n\n画像・CSV・ログも削除されます。`)) return;
+        const status = btn.dataset.jobStatus || '';
+        const runningNote = status === 'running'
+          ? '\n\n※ 実行中表示ですが、壊れて止まった履歴として強制削除します。'
+          : '';
+        if (!confirm(`このジョブを削除しますか？\n\n${title}\n${jobId}${runningNote}\n\n画像・CSV・ログも削除されます。`)) return;
         btn.disabled = true;
         btn.textContent = '削除中';
         try {

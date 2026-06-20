@@ -33,7 +33,7 @@ def test_delete_job_removes_output_directory(monkeypatch, tmp_path):
     assert not job_dir.exists()
 
 
-def test_delete_job_blocks_running_job(monkeypatch, tmp_path):
+def test_delete_job_can_force_remove_running_job(monkeypatch, tmp_path):
     client, output_dir = _configure_tmp_app(monkeypatch, tmp_path)
     job_dir = output_dir / "20260620_120001"
     job_dir.mkdir()
@@ -44,8 +44,8 @@ def test_delete_job_blocks_running_job(monkeypatch, tmp_path):
 
     res = client.delete("/api/jobs/20260620_120001")
 
-    assert res.status_code == 409
-    assert job_dir.exists()
+    assert res.status_code == 200
+    assert not job_dir.exists()
 
 
 def test_delete_job_rejects_path_traversal(monkeypatch, tmp_path):
