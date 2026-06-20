@@ -282,6 +282,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             chart_engine=defaults.get("chart_engine", "ai"),
             allow_charts=defaults.get("allow_charts", True),
             map_engine=defaults.get("map_engine", "ai"),
+            intro_visual_boost=defaults.get("intro_visual_boost", 0),
             photo_source=defaults.get("photo_source", "web"),
             web_search_profile=defaults.get("web_search_profile", ""),
             max_web_image_reuse=defaults.get("max_web_image_reuse", 2),

@@ -60,6 +60,7 @@ class SentencePipeline:
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
         allow_charts: bool = True,         # False: chart route を diagram に変換する
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
+        intro_visual_boost: int = 0,       # 冒頭N文は実写/地図を優先
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
         max_web_image_reuse: int = 2,       # 同じWeb写真/サムネイルの採用上限
@@ -98,6 +99,7 @@ class SentencePipeline:
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
         self.allow_charts = bool(allow_charts)
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
+        self.intro_visual_boost = max(0, min(int(intro_visual_boost or 0), 30))
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
         self.max_web_image_reuse = max(1, min(int(max_web_image_reuse or 2), 10))
@@ -124,6 +126,59 @@ class SentencePipeline:
 
         self._rows_state: dict = {}
         self._rows_lock = threading.Lock()
+
+    def _apply_intro_visual_boost(self, rows: list, routes: dict) -> int:
+        """冒頭だけ視聴維持優先で、実写/地図に寄せる。
+
+        図解で説明に入る前に、実写・Web写真・地図で「現実の話」感を出すための補正。
+        内容のない繋ぎも、冒頭では薄い実写背景として使えるようにする。
+        """
+        if self.intro_visual_boost <= 0:
+            return 0
+
+        changed = 0
+        physical_words = (
+            "ロシア", "ソ連", "ベラルーシ", "ウクライナ", "欧州", "EU", "NATO",
+            "国境", "地図", "経由", "ルート", "進軍", "軍", "都市", "街", "施設",
+            "パイプライン", "港", "鉄道", "デモ", "抗議", "会談", "大統領", "写真",
+            "映像", "戦争", "侵攻", "歴史", "崩壊"
+        )
+        map_words = ("国境", "地図", "経由", "ルート", "進軍", "領土", "欧州", "EU", "NATO")
+        web_words = ("大統領", "首相", "会談", "演説", "写真", "映像", "崩壊", "デモ", "抗議")
+
+        for r in rows[:self.intro_visual_boost]:
+            no = r["no"]
+            rt = routes.get(no, {})
+            current = rt.get("route", "")
+            if current in ("web_photo", "realphoto", "map"):
+                continue
+            text = f"{r.get('chapter_title','')} {r.get('block_text','')} {r.get('sentence','')}"
+            compact = text.replace(" ", "")
+            if any(w in compact for w in map_words):
+                new_route = "map"
+            elif any(w in compact for w in web_words):
+                new_route = "web_photo"
+            elif current in ("skip", "diagram", "illustration", "chart") or any(w in compact for w in physical_words):
+                new_route = "realphoto"
+            else:
+                continue
+            routes[no] = {
+                **rt,
+                "route": new_route,
+                "reason": f"冒頭{self.intro_visual_boost}文は実写/地図優先",
+                "search_query": (r.get("sentence", "") or "")[:30] if new_route == "web_photo" else "",
+                "topic": (r.get("sentence", "") or "")[:18] if new_route == "web_photo" else "",
+                "importance": max(3, int(rt.get("importance", 3) or 3)),
+                "beat": "new",
+            }
+            changed += 1
+        if changed:
+            self._log(
+                "router",
+                f"冒頭実写ブースト: {changed} 件を実写/Web写真/地図へ補正",
+                f"intro_visual_boost={self.intro_visual_boost}"
+            )
+        return changed
 
     # ---- ヘルパ ----
     def _log(self, category: str, message: str, detail: str = ""):
@@ -480,9 +535,9 @@ class SentencePipeline:
                 r["no"]: {"route": "illustration", "reason": "all_ai モード", "search_query": "", "topic": "", "propaganda": False}
                 for r in rows
             }
-        save_json(self.output_dir / "routes.json", routes)
-
         # route を各行に反映（row dict 自体にも route を入れる＝prompter が type 判定に使う）
+        self._apply_intro_visual_boost(rows, routes)
+
         if not self.allow_charts:
             converted = 0
             for rt in routes.values():
@@ -492,6 +547,8 @@ class SentencePipeline:
                     converted += 1
             if converted:
                 self._log("router", f"グラフなし設定: chart {converted} 件を diagram に変換")
+
+        save_json(self.output_dir / "routes.json", routes)
 
         for r in rows:
             rt = routes.get(r["no"], {})
@@ -1193,6 +1250,7 @@ class SentencePipeline:
             "chart_engine": self.chart_engine,
             "allow_charts": self.allow_charts,
             "map_engine": self.map_engine,
+            "intro_visual_boost": self.intro_visual_boost,
             "photo_source": self.photo_source,
             "web_search_profile": self.web_search_profile,
             "verify_diagrams": self.verify_diagrams,

@@ -58,8 +58,37 @@ def test_seikou_channel_uses_dedicated_api_prefix():
 def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     defaults = get_channel("roshia").get("defaults", {})
     assert defaults["allow_charts"] is False
+    assert defaults["intro_visual_boost"] == 10
     assert "日本地図" in defaults["user_instructions"]
     assert "円マーク" in defaults["user_instructions"]
+    assert "冒頭10文" in defaults["user_instructions"]
+
+
+def test_intro_visual_boost_prefers_realistic_opening(tmp_path):
+    pipe = SentencePipeline(
+        "dummy",
+        tmp_path,
+        intro_visual_boost=3,
+        verify_diagrams=False,
+    )
+    rows = [
+        {"no": 1, "sentence": "では、ベラルーシとロシアの関係を見ていきましょう。", "block_text": ""},
+        {"no": 2, "sentence": "ロシア軍はベラルーシ経由でウクライナへ進軍しました。", "block_text": ""},
+        {"no": 3, "sentence": "ルカシェンコ大統領は会談で支援を表明しました。", "block_text": ""},
+        {"no": 4, "sentence": "その背景には政治制度の問題があります。", "block_text": ""},
+    ]
+    routes = {
+        1: {"route": "skip", "importance": 1},
+        2: {"route": "diagram", "importance": 3},
+        3: {"route": "diagram", "importance": 3},
+        4: {"route": "diagram", "importance": 3},
+    }
+    changed = pipe._apply_intro_visual_boost(rows, routes)
+    assert changed == 3
+    assert routes[1]["route"] == "realphoto"
+    assert routes[2]["route"] == "map"
+    assert routes[3]["route"] == "web_photo"
+    assert routes[4]["route"] == "diagram"
 
 
 def test_allowed_terms_are_limited_to_reduce_keyword_lists():
