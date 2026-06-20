@@ -297,6 +297,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             map_engine=defaults.get("map_engine", "ai"),
             intro_visual_boost=defaults.get("intro_visual_boost", 0),
             map_route_limit=defaults.get("map_route_limit", 0),
+            realistic_route_min=defaults.get("realistic_route_min", 0),
             no_image_text=defaults.get("no_image_text", False),
             photo_source=defaults.get("photo_source", "web"),
             web_search_profile=defaults.get("web_search_profile", ""),

@@ -60,6 +60,9 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert defaults["allow_charts"] is False
     assert defaults["intro_visual_boost"] == 10
     assert defaults["map_route_limit"] == 8
+    assert defaults["realistic_route_min"] == 60
+    assert defaults["web_image_count"] == 60
+    assert defaults["web_search_profile"] == "primary_media"
     assert defaults["no_image_text"] is False
     assert "日本地図" in defaults["user_instructions"]
     assert "円マーク" in defaults["user_instructions"]
@@ -157,6 +160,33 @@ def test_no_image_text_clears_allowed_terms(tmp_path):
     assert changed == 1
     assert rows[0]["allowed_terms"] == []
     assert rows[1]["allowed_terms"] == []
+
+
+def test_realistic_route_boost_adds_web_and_realphoto(tmp_path):
+    pipe = SentencePipeline(
+        "dummy",
+        tmp_path,
+        realistic_route_min=3,
+        verify_diagrams=False,
+    )
+    rows = [
+        {"no": 1, "sentence": "ルカシェンコ大統領は会談で支援を表明しました。", "block_text": ""},
+        {"no": 2, "sentence": "パイプラインとエネルギー供給が経済を支えました。", "block_text": ""},
+        {"no": 3, "sentence": "都市の軍事施設が重要な意味を持ちました。", "block_text": ""},
+        {"no": 4, "sentence": "国境線と領土の位置関係を地図で確認します。", "block_text": ""},
+    ]
+    routes = {
+        1: {"route": "diagram", "importance": 3},
+        2: {"route": "diagram", "importance": 3},
+        3: {"route": "illustration", "importance": 3},
+        4: {"route": "map", "importance": 3},
+    }
+    changed = pipe._boost_realistic_routes(rows, routes)
+    assert changed == 3
+    assert routes[1]["route"] == "web_photo"
+    assert routes[2]["route"] == "realphoto"
+    assert routes[3]["route"] == "web_photo"
+    assert routes[4]["route"] == "map"
 
 
 def test_allowed_terms_are_limited_to_reduce_keyword_lists():

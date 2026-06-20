@@ -62,6 +62,7 @@ class SentencePipeline:
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         intro_visual_boost: int = 0,       # 冒頭N文は実写/地図を優先
         map_route_limit: int = 0,          # 0なら無制限。超過したmapはrealphotoへ寄せる
+        realistic_route_min: int = 0,      # web_photo + realphoto を最低何件まで増やすか
         no_image_text: bool = False,       # True: AI図解/イラストの allowed_terms を空にする
         photo_source: str = "web",         # v3: commons で Wikimedia Commons 限定（権利安全）
         web_search_profile: str = "",      # channel別: primary_media で一次情報/動画/記事を優先
@@ -103,6 +104,7 @@ class SentencePipeline:
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.intro_visual_boost = max(0, min(int(intro_visual_boost or 0), 30))
         self.map_route_limit = max(0, min(int(map_route_limit or 0), 60))
+        self.realistic_route_min = max(0, min(int(realistic_route_min or 0), 180))
         self.no_image_text = bool(no_image_text)
         self.photo_source = (photo_source or "web").strip()  # "commons" で Commons 限定
         self.web_search_profile = (web_search_profile or "").strip()
@@ -222,6 +224,66 @@ class SentencePipeline:
             f"地図比率調整: map {changed} 件を realphoto に変換",
             f"map_route_limit={self.map_route_limit}"
         )
+        return changed
+
+    def _boost_realistic_routes(self, rows: list, routes: dict) -> int:
+        """実写・Web写真比率を増やす。既存の地図/Web/実写は尊重する。"""
+        if self.realistic_route_min <= 0:
+            return 0
+
+        current = sum(1 for rt in routes.values() if rt.get("route") in ("web_photo", "realphoto"))
+        need = self.realistic_route_min - current
+        if need <= 0:
+            return 0
+
+        web_words = (
+            "大統領", "首相", "会談", "演説", "写真", "映像", "デモ", "抗議", "崩壊",
+            "選挙", "軍事施設", "歴史写真", "ニュース", "発表", "記者会見", "条約"
+        )
+        real_words = (
+            "ロシア", "ソ連", "ベラルーシ", "ウクライナ", "欧州", "EU", "NATO",
+            "軍", "都市", "街", "施設", "パイプライン", "港", "鉄道", "戦争",
+            "侵攻", "歴史", "経済", "エネルギー", "国境"
+        )
+        candidates = []
+        for r in rows:
+            no = r["no"]
+            rt = routes.get(no, {})
+            route = rt.get("route", "")
+            if route in ("web_photo", "realphoto", "map"):
+                continue
+            if route not in ("diagram", "illustration", "chart", "skip", ""):
+                continue
+            text = f"{r.get('chapter_title','')} {r.get('block_text','')} {r.get('sentence','')}"
+            compact = text.replace(" ", "")
+            web_score = sum(3 for w in web_words if w in compact)
+            real_score = sum(1 for w in real_words if w in compact)
+            score = web_score + real_score + int(rt.get("importance", 3) or 3)
+            if score <= 2:
+                continue
+            target = "web_photo" if web_score >= 3 else "realphoto"
+            candidates.append((score, no, target))
+
+        changed = 0
+        for _, no, target in sorted(candidates, reverse=True)[:need]:
+            r = next((row for row in rows if row["no"] == no), {})
+            rt = routes.get(no, {})
+            routes[no] = {
+                **rt,
+                "route": target,
+                "reason": f"実写/Web写真比率を増やす設定（最低{self.realistic_route_min}件）",
+                "search_query": (r.get("sentence", "") or "")[:30] if target == "web_photo" else rt.get("search_query", ""),
+                "topic": (r.get("sentence", "") or "")[:18] if target == "web_photo" else rt.get("topic", ""),
+                "importance": max(3, int(rt.get("importance", 3) or 3)),
+                "beat": "new",
+            }
+            changed += 1
+        if changed:
+            self._log(
+                "router",
+                f"実写/Web写真ブースト: {changed} 件を web_photo/realphoto へ補正",
+                f"realistic_route_min={self.realistic_route_min}"
+            )
         return changed
 
     def _remove_image_text_terms(self, rows_with_prompts: list) -> int:
@@ -595,6 +657,7 @@ class SentencePipeline:
         # route を各行に反映（row dict 自体にも route を入れる＝prompter が type 判定に使う）
         self._apply_intro_visual_boost(rows, routes)
         self._limit_map_routes(rows, routes)
+        self._boost_realistic_routes(rows, routes)
 
         if not self.allow_charts:
             converted = 0
@@ -1312,6 +1375,7 @@ class SentencePipeline:
             "map_engine": self.map_engine,
             "intro_visual_boost": self.intro_visual_boost,
             "map_route_limit": self.map_route_limit,
+            "realistic_route_min": self.realistic_route_min,
             "no_image_text": self.no_image_text,
             "photo_source": self.photo_source,
             "web_search_profile": self.web_search_profile,
