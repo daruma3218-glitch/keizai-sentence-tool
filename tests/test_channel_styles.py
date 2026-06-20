@@ -60,13 +60,14 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert defaults["allow_charts"] is False
     assert defaults["intro_visual_boost"] == 10
     assert defaults["map_route_limit"] == 8
-    assert defaults["no_image_text"] is True
+    assert defaults["no_image_text"] is False
     assert "日本地図" in defaults["user_instructions"]
     assert "円マーク" in defaults["user_instructions"]
     assert "冒頭10文" in defaults["user_instructions"]
     assert "YouTubeの教養チャンネル" in defaults["user_instructions"]
     assert "地図は多用しない" in defaults["user_instructions"]
-    assert "文字なしインフォグラフィック" in defaults["user_instructions"]
+    assert "短いラベル付きインフォグラフィック" in defaults["user_instructions"]
+    assert "1〜4語まで使用してよい" in defaults["user_instructions"]
     assert "可愛い" in defaults["user_instructions"]
     assert "warm retro hand-drawn" not in defaults["worldview_desc"]
     assert "symbolic flat infographics" in defaults["worldview_desc"]
