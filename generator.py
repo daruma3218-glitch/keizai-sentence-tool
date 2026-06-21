@@ -241,6 +241,9 @@ def _build_full_prompt(
         "diagram": (
             "Style: clean conceptual diagram with arrows and 3-5 boxes. "
             "Minimal lines, clear structure, easy to understand at a glance. "
+            "The diagram must have one explicit visual goal and one clear reading path "
+            "(left-to-right, top-to-bottom, or center-out). Each box/icon must have a role, "
+            "and arrows/lines must explain the relationship between elements. "
         ),
         "chart": (
             "Style: clean chart (bar / pie / line graph) with 3-5 data elements. "
@@ -321,6 +324,8 @@ def _build_full_prompt(
         "- Center the main content with comfortable empty space around it.\n"
         "- Simple, clear, professional. Avoid clutter.\n"
         "- For diagrams, do NOT make a mere keyword list. Show one clear structure: cause -> effect, comparison, process flow, or relationship map.\n"
+        "- For diagrams, the viewer must understand the message by following the labels and arrows in order. Use 3-5 connected elements, not scattered isolated cards.\n"
+        "- For diagrams, every label must support the visual argument; omit decorative or redundant labels.\n"
         "- Avoid duplicate labels, overlapping text, and repeated words.\n"
     )
     return f"{style}\n{preset}\n{text_policy}{common}\nContent to visualize:\n{user_prompt}"

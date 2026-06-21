@@ -40,6 +40,24 @@ SAFE_PATTERNS = [
 ]
 
 
+DIAGRAM_DESIGN_RULES_JA = """【図解品質ルール（diagram / 図解として描く illustration では最重要）】
+- まず「この図で何を理解させるか」を1つに絞る。雰囲気や単語の羅列ではなく、主張が伝わる図にする
+- 読む順番を必ず決める（左→右、上→下、中心→周辺のいずれか）。視線誘導がない散らばった構図は禁止
+- 3〜5個の要素を、因果・比較・時系列・対立・依存関係のどれか1つの構造で接続する
+- ラベルは allowed_terms から選び、各ラベルが「役割」を持つように置く。ラベルだけを追っても内容の流れが分かる状態にする
+- 矢印・線・囲み・位置関係で、なぜその要素同士がつながるのかを表現する
+- 孤立したキーワードカード、意味のないアイコン集合、長文説明、重複文字、見出しだけの図は禁止"""
+
+
+DIAGRAM_PROMPT_REQUIREMENTS_EN = (
+    "For any diagram-like image, the prompt MUST specify: the single visual goal, "
+    "one clear reading path (left-to-right, top-to-bottom, or center-out), 3 to 5 "
+    "connected elements, the relationship between those elements, and where the "
+    "allowed labels go. The viewer should understand the argument by following "
+    "the labels and arrows, not by guessing from isolated keywords."
+)
+
+
 def _auto_extract_terms(sentence: str) -> list:
     """センテンスから安全な語句を自動抽出（Claude の補完用）"""
     terms = []
@@ -91,6 +109,7 @@ def _build_user_block(user_instructions: str, style_preset: str) -> str:
             "- 2〜3 色のフラットカラー（ナビーブルー #1E40AF / 白 / ライトグレー / 1色アクセント）\n"
             "- アイコン・記号ベース（人型シルエット、国旗、矢印、囲み、比較パネルなど）\n"
             "- キーワードの羅列は禁止。必ず「原因→結果」「比較」「流れ」「関係性」のどれか1つの構造にする\n"
+            "- 図解は読む順番を明確にし、ラベルと矢印を追えば内容が入ってくる構成にする\n"
             "- 画像内テキストは最大4語まで。同じ語を重複表示しない\n"
             "- 写実画・寓意（動物の擬人化）・劇的演出は避ける\n"
             "- ニュース番組のテロップ・統計レポートのような「説明画面」を目指す"
@@ -141,7 +160,10 @@ def _fallback_prompt_for_row(row: dict) -> dict:
     type_hint = {
         "realphoto": "Photorealistic documentary photograph, natural lighting, realistic textures.",
         "map": "Clear 16:9 map or terrain visualization, readable borders and route lines.",
-        "diagram": "Simple flat educational diagram with icons and arrows.",
+        "diagram": (
+            "Clear flat educational diagram with one visual goal, a left-to-right reading path, "
+            "3 connected labeled nodes, and arrows that explain the cause-effect or comparison."
+        ),
         "chart": "Simple clean chart based only on numbers from the sentence.",
         "illustration": "Simple flat educational illustration.",
         "decorative": "Minimal neutral educational background.",
@@ -150,6 +172,7 @@ def _fallback_prompt_for_row(row: dict) -> dict:
         "no": row["no"],
         "prompt": (
             f"{type_hint} Explain this Japanese sentence visually: {sent[:160]}. "
+            f"{DIAGRAM_PROMPT_REQUIREMENTS_EN if row_type == 'diagram' else ''} "
             f"{text_rule} 16:9 landscape composition, clean layout, no invented facts."
         ),
         "type": row_type,
@@ -215,6 +238,8 @@ def generate_prompts_batch(
 
 {user_block}{worldview_block}
 
+{DIAGRAM_DESIGN_RULES_JA}
+
 【最重要: type 別の描き方】
 - **realphoto**: 実写写真。"photorealistic documentary photograph, real photo, natural lighting,
   realistic textures, cinematic" を必ず含める。**フラット/アイコン/イラストには絶対しない**。
@@ -263,7 +288,8 @@ def generate_prompts_batch(
   上空から見た本物の地球表面（青い海・緑の森林・茶色の山岳・白い雪原・リアルな海岸線）を描き、
   地形の起伏（レリーフシェーディング）も表現する。対象の国・地域は半透明の色で塗り分け、
   国境は細い線で示す。Google Earth / NASA衛星画像 / ナショナルジオグラフィック品質を目指す。
-- diagram: 概念図・フロー図（アイコン + 矢印 + ラベル）。キーワード羅列ではなく、因果・比較・流れ・関係性で見せる
+- diagram: 概念図・フロー図（アイコン + 矢印 + ラベル）。キーワード羅列ではなく、因果・比較・流れ・関係性で見せる。
+  prompt 内に必ず「visual goal」「reading path」「3-5 connected elements」「relationship between elements」「allowed label placement」を英語で具体的に書く
 - chart: 数値比較（棒グラフ・円グラフ・大きな数字）。チャンネル指示でグラフ禁止の場合は diagram として扱う
 - decorative: 接続詞・挨拶・抽象表現（背景パターン）
 

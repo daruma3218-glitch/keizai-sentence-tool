@@ -2,7 +2,7 @@ from pathlib import Path
 
 from app import get_channel
 from pipeline import SentencePipeline, VALID_STYLES
-from prompter import _build_user_block, _limit_allowed_terms
+from prompter import _build_user_block, _fallback_prompt_for_row, _limit_allowed_terms
 from generator import _build_full_prompt
 
 
@@ -196,3 +196,24 @@ def test_allowed_terms_are_limited_to_reduce_keyword_lists():
     assert len(limited) <= 4
     assert len(set(limited)) == len(limited)
     assert any(t in limited for t in ("6.3%", "430ドル", "2025年"))
+
+
+def test_diagram_prompts_require_readable_visual_argument():
+    user_block = _build_user_block("", "flat_infographic")
+    final_prompt = _build_full_prompt(
+        "Visual goal: explain why Belarus depends on Russia. Reading path: left to right, three connected elements with arrows.",
+        "diagram",
+        allowed_terms=["ベラルーシ", "ロシア"],
+        style_preset="flat_infographic",
+    )
+    fallback = _fallback_prompt_for_row({
+        "no": 1,
+        "route": "diagram",
+        "sentence": "ベラルーシはロシアへの経済依存を深めました。",
+    })
+
+    assert "読む順番" in user_block
+    assert "labels and arrows in order" in final_prompt
+    assert "3-5 connected elements" in final_prompt
+    assert "one visual goal" in fallback["prompt"]
+    assert "reading path" in fallback["prompt"]
