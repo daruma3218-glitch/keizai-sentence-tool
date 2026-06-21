@@ -619,14 +619,14 @@ def api_delete_job(job_id):
     return jsonify({"ok": True, "job_id": job_id})
 
 
-def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=None, route_reason=None):
+def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=None, route_reason=None, status=None, extra=None):
     """再生成結果を rows_progress.json に反映（chart/map/AI 共通）。"""
     import json as _json
     snap_path = job_dir / "rows_progress.json"
     snap = load_json(snap_path, {"rows": []})
     for r in snap.get("rows", []):
         if r.get("no") == no:
-            r["status"] = "ok" if ok else "failed"
+            r["status"] = status or ("ok" if ok else "failed")
             if filename:
                 r["filename"] = filename
             if engine:
@@ -635,6 +635,8 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=No
                 r["route"] = route
             if route_reason:
                 r["route_reason"] = route_reason
+            if extra:
+                r.update(extra)
             break
     try:
         snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
@@ -665,7 +667,7 @@ def _save_regen_prompt(job_dir, row):
         pass
 
 
-def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra=""):
+def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="", force_route=None, route_reason=None):
     """v3: chart 行（決定論レンダ）を再生成。
 
     1) 保存済み chart_spec があり追加指示が無ければ、その spec をそのまま描き直す
@@ -683,7 +685,8 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="")
     if saved_spec and not extra:
         try:
             if render_chart(saved_spec, out, theme=chart_theme):
-                _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+                _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
+                                      route=force_route, route_reason=route_reason)
                 return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
                                 "ts": datetime.now().strftime("%H%M%S")})
         except Exception:
@@ -716,11 +719,12 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="")
         return jsonify({"error": f"グラフ描画に失敗: {str(e)[:140]}"}), 500
     if not ok:
         return jsonify({"error": "グラフ描画に失敗しました"}), 500
-    _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+    _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
+                          route=force_route, route_reason=route_reason)
     return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "ts": datetime.now().strftime("%H%M%S")})
 
 
-def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra=""):
+def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra="", force_route=None, route_reason=None):
     """v3: map 行（決定論レンダ）を再生成。保存 map_spec を優先、無ければ抽出し直す。"""
     from renderer import render_map
     row = snap_row or {}
@@ -731,7 +735,8 @@ def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra=""):
     if saved_spec and not extra:
         try:
             if render_map(saved_spec, out, theme=chart_theme):
-                _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+                _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
+                                      route=force_route, route_reason=route_reason)
                 return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
                                 "ts": datetime.now().strftime("%H%M%S")})
         except Exception:
@@ -763,8 +768,53 @@ def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra=""):
         return jsonify({"error": f"地図描画に失敗: {str(e)[:140]}"}), 500
     if not ok:
         return jsonify({"error": "地図描画に失敗しました（対象の国/地域を特定できませんでした）"}), 500
-    _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render")
+    _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
+                          route=force_route, route_reason=route_reason)
     return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "ts": datetime.now().strftime("%H%M%S")})
+
+
+def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
+    """force_route=web_photo 用: 1件だけWeb画像検索してサムネイルを保存する。"""
+    from utils import get_anthropic_client
+    from web_searcher import run_web_search_for_selections, download_thumbnail
+    row = snap_row or {}
+    sentence = (row.get("sentence") or "").strip()
+    if not sentence:
+        return jsonify({"error": "Web写真検索に必要な文が見つかりません"}), 404
+    client = get_anthropic_client(ch_keys.get("anthropic", ""))
+    selections = [{"no": no, "query": sentence[:40], "topic": sentence[:24]}]
+    results = run_web_search_for_selections(
+        client,
+        selections,
+        max_workers=1,
+        log=lambda *args, **kwargs: None,
+        profile=defaults.get("web_search_profile", ""),
+    )
+    info = results[0] if results else {}
+    thumb_url = info.get("thumb_url", "")
+    if not thumb_url:
+        return jsonify({"error": "Web写真候補は見つかりましたが、表示用サムネイルを取得できませんでした"}), 422
+    fname = f"{no}.jpg"
+    if not download_thumbnail(thumb_url, job_dir / "images" / fname):
+        return jsonify({"error": "Web写真サムネイルの保存に失敗しました"}), 500
+    _update_regen_snapshot(
+        job_dir,
+        no,
+        True,
+        filename=fname,
+        engine="web",
+        route="web_photo",
+        route_reason="ルート違いから Web写真へ変更して再取得",
+        extra={
+            "web_source_url": info.get("source_url", ""),
+            "web_thumb_url": thumb_url,
+            "web_local_file": fname,
+            "web_topic": info.get("topic", ""),
+            "web_source_title": info.get("source_title", ""),
+            "web_source_type": info.get("source_type", ""),
+        },
+    )
+    return jsonify({"ok": True, "no": no, "filename": fname, "route": "web_photo", "ts": datetime.now().strftime("%H%M%S")})
 
 
 @app.route("/api/regenerate/<job_id>/<int:no>", methods=["POST"])
@@ -791,7 +841,7 @@ def api_regenerate(job_id, no):
     snap_row = next((r for r in snap_all if r.get("no") == no), None)
     extra = (request.form.get("extra_instruction", "") or "").strip()
     force_route = (request.form.get("force_route", "") or "").strip()
-    forceable_routes = {"realphoto", "diagram", "illustration"}
+    forceable_routes = {"web_photo", "realphoto", "map", "diagram", "chart", "illustration", "skip"}
     if force_route and force_route not in forceable_routes:
         return jsonify({"error": f"この再生成で指定できないルートです: {force_route}"}), 400
 
@@ -808,6 +858,30 @@ def api_regenerate(job_id, no):
     if force_route:
         route = force_route
         engine = "ai"
+
+    route_reason = ""
+    if force_route:
+        route_reason = f"{original_route or 'unknown'} から {force_route} へルート変更して再生成"
+
+    if force_route == "skip":
+        _update_regen_snapshot(
+            job_dir,
+            no,
+            True,
+            engine="none",
+            route="skip",
+            route_reason=route_reason,
+            status="skipped",
+        )
+        return jsonify({"ok": True, "no": no, "route": "skip", "skipped": True, "ts": datetime.now().strftime("%H%M%S")})
+    if force_route == "web_photo":
+        return _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults)
+    if force_route == "chart":
+        return _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra,
+                                        force_route="chart", route_reason=route_reason)
+    if force_route == "map":
+        return _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra,
+                                      force_route="map", route_reason=route_reason)
 
     # ===== v3: chart / map は決定論レンダ（AIプロンプトを持たない）→ 抽出し直して描き直す =====
     if not force_route and route == "chart" and (engine == "render" or defaults.get("chart_engine") == "render"):
@@ -919,9 +993,6 @@ def api_regenerate(job_id, no):
     filename = results[0].get("filename") if ok else None
 
     # rows_progress.json を更新（AI 生成は engine=ai のまま）
-    route_reason = ""
-    if force_route:
-        route_reason = f"{original_route or 'unknown'} から {force_route} へルート変更して再生成"
     _update_regen_snapshot(
         job_dir,
         no,

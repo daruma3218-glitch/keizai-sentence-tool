@@ -225,3 +225,36 @@ def test_regenerate_chart_can_force_diagram_ai(tmp_path, monkeypatch):
     snap = appmod.load_json(job_dir / "rows_progress.json", {"rows": []})["rows"][0]
     assert snap["route"] == "diagram"
     assert snap["engine"] == "ai"
+
+
+def test_regenerate_can_force_skip_without_generation(tmp_path, monkeypatch):
+    out_root = tmp_path / "output"
+    job_dir = out_root / "job_skip"
+    (job_dir / "images").mkdir(parents=True)
+    monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+
+    (job_dir / "job.json").write_text(
+        '{"channel_id":"default","provider":"nanobanana","style_preset":"flat_infographic"}',
+        encoding="utf-8",
+    )
+    (job_dir / "prompts.json").write_text('{"rows":[]}', encoding="utf-8")
+    (job_dir / "rows_progress.json").write_text(
+        '{"rows":[{"no":13,"sentence":"つなぎの一文です。","route":"diagram","engine":"ai","status":"ok"}]}',
+        encoding="utf-8",
+    )
+
+    with appmod.app.test_request_context(
+        "/api/regenerate/job_skip/13",
+        method="POST",
+        data={"force_route": "skip"},
+    ):
+        resp = appmod.api_regenerate("job_skip", 13)
+
+    body = resp.get_json()
+    assert body.get("ok") is True
+    assert body.get("skipped") is True
+    snap = appmod.load_json(job_dir / "rows_progress.json", {"rows": []})["rows"][0]
+    assert snap["route"] == "skip"
+    assert snap["status"] == "skipped"
+    assert snap["engine"] == "none"

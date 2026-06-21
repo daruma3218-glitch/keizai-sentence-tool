@@ -680,13 +680,16 @@
       return regenerateSceneWithRoute(no, route, ev);
     }
 
-    async function regenerateSceneWithRoute(no, forceRoute, ev) {
+    async function regenerateSceneWithRoute(no, forceRoute, ev, options = {}) {
       if (ev) ev.stopPropagation();
       const tr = document.querySelector(`tr[data-no="${no}"]`);
       if (!tr) return;
       const routeLabel = forceRoute === 'diagram' ? '図解として' : '';
-      const extra = prompt(`№${no} を${routeLabel}再生成します。\n変えたい点があれば指示を入力（空欄ならそのまま作り直し）:`, "");
-      if (extra === null) return;  // キャンセル
+      let extra = '';
+      if (!options.skipPrompt) {
+        extra = prompt(`№${no} を${routeLabel}再生成します。\n変えたい点があれば指示を入力（空欄ならそのまま作り直し）:`, "");
+        if (extra === null) return;  // キャンセル
+      }
       const cell = tr.querySelector('.thumb-cell');
       if (cell) cell.innerHTML = `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto"><div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div></div>`;
       try {
@@ -701,6 +704,15 @@
           return;
         }
         // 成功 → 画像をキャッシュ回避で再表示
+        if (data.skipped) {
+          if (cell) cell.innerHTML = `<div class="w-20 h-[45px] bg-gray-50 rounded flex items-center justify-center mx-auto text-gray-400 text-[10px]">スキップ</div>`;
+          tr.setAttribute('data-status', 'skipped');
+          tr.setAttribute('data-route', 'skip');
+          const routeCell = tr.querySelector('.route-cell');
+          if (routeCell) routeCell.innerHTML = routeBadgeHtml({ route: 'skip', route_reason: 'ルート変更' });
+          applyRowFilters();
+          return data;
+        }
         if (cell) {
           const newRoute = data.route || forceRoute || tr.getAttribute('data-route') || '';
           cell.innerHTML = `<img src="/results/${JOB_ID}/images/${data.filename}?t=${data.ts}${Date.now()}" class="thumb-img pop-in" onclick='openModal(${no})' alt="" loading="lazy"><br>${regenBtn(no, newRoute)}`;
@@ -714,6 +726,7 @@
           if (routeCell) routeCell.innerHTML = routeBadgeHtml({ route: data.route, route_reason: 'ルート変更再生成' });
         }
         applyRowFilters();
+        return data;
       } catch (e) {
         alert('通信エラー: ' + e.message);
       }
@@ -797,7 +810,8 @@
         const res = await fetch(`/api/feedback/${JOB_ID}/${no}`, { method: 'POST', body: fd });
         const data = await res.json();
         if (!res.ok || data.error) { alert('記録に失敗: ' + (data.error || res.status)); return; }
-        alert(`記録しました（${data.given_route} → ${data.correct_route}）。次回以降のルーターが学習します。`);
+        alert(`記録しました（${data.given_route} → ${data.correct_route}）。このルートで再生成します。`);
+        await regenerateSceneWithRoute(no, correct, ev, { skipPrompt: true });
       } catch (e) {
         alert('通信エラー: ' + e.message);
       }
