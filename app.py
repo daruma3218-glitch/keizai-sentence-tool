@@ -688,6 +688,7 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
                 _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                                       route=force_route, route_reason=route_reason)
                 return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
+                                "route": force_route,
                                 "ts": datetime.now().strftime("%H%M%S")})
         except Exception:
             pass  # 失敗したら抽出し直しへフォールバック
@@ -721,7 +722,8 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
         return jsonify({"error": "グラフ描画に失敗しました"}), 500
     _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                           route=force_route, route_reason=route_reason)
-    return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "ts": datetime.now().strftime("%H%M%S")})
+    return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
+                    "route": force_route, "ts": datetime.now().strftime("%H%M%S")})
 
 
 def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra="", force_route=None, route_reason=None):
@@ -738,6 +740,7 @@ def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra="", f
                 _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                                       route=force_route, route_reason=route_reason)
                 return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
+                                "route": force_route,
                                 "ts": datetime.now().strftime("%H%M%S")})
         except Exception:
             pass
@@ -770,7 +773,8 @@ def _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra="", f
         return jsonify({"error": "地図描画に失敗しました（対象の国/地域を特定できませんでした）"}), 500
     _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                           route=force_route, route_reason=route_reason)
-    return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "ts": datetime.now().strftime("%H%M%S")})
+    return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
+                    "route": force_route, "ts": datetime.now().strftime("%H%M%S")})
 
 
 def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
