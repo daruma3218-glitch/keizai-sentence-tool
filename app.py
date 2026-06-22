@@ -667,6 +667,34 @@ def _save_regen_prompt(job_dir, row):
         pass
 
 
+def _forced_route_user_instructions(force_route: str, base_instructions: str = "") -> str:
+    """ルート変更再生成でも通常生成のチャンネル指示を維持し、必要な差分だけ足す。"""
+    base = (base_instructions or "").strip()
+    common = "Regenerate this item using the forced route/type. "
+    if force_route == "realphoto":
+        route_note = (
+            common +
+            "Create a photorealistic documentary-style image. "
+            "Do not make an illustration, diagram, chart, graph, map, or icon layout. "
+            "Do not add Japanese labels inside the image."
+        )
+    elif force_route == "illustration":
+        route_note = (
+            common +
+            "Create a clear educational illustration. "
+            "Do not make a chart, graph, map, or realistic photo."
+        )
+    elif force_route == "diagram":
+        route_note = (
+            common +
+            "Create a simple, clear diagram. Do not make a chart, graph, map, realistic photo, "
+            "or generic illustration. Keep the channel's normal visual style and quality rules."
+        )
+    else:
+        route_note = common
+    return f"{base}\n\n{route_note}".strip() if base else route_note
+
+
 def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="", force_route=None, route_reason=None):
     """v3: chart 行（決定論レンダ）を再生成。
 
@@ -917,16 +945,23 @@ def api_regenerate(job_id, no):
         })
         try:
             client = get_anthropic_client(ch_keys.get("anthropic", ""))
+            base_user_instructions = (
+                params.get("user_instructions")
+                or defaults.get("user_instructions", "")
+                or ""
+            )
+            regen_worldview_desc = (
+                params.get("worldview_desc")
+                or defaults.get("worldview_desc", "")
+                or ""
+            )
             generated_prompts = generate_all_prompts(
                 client,
                 [source_row],
                 title=params.get("title") or "センテンス図解",
-                user_instructions=(
-                    "Regenerate this item using the forced route/type. "
-                    "Do not make a chart or graph. Create a simple, clear diagram instead."
-                ),
+                user_instructions=_forced_route_user_instructions(force_route, base_user_instructions),
                 style_preset=params.get("style_preset", "flat_infographic"),
-                worldview_desc="",
+                worldview_desc=regen_worldview_desc,
                 max_workers=1,
                 log=lambda *args, **kwargs: None,
             )

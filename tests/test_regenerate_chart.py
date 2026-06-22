@@ -176,6 +176,15 @@ def test_regenerate_chart_can_force_diagram_ai(tmp_path, monkeypatch):
     (job_dir / "images").mkdir(parents=True)
     monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
     monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+    monkeypatch.setattr(
+        appmod,
+        "get_channel",
+        lambda channel_id: {"defaults": {
+            "user_instructions": "CHANNEL BASE STYLE: serious educational infographic.",
+            "worldview_desc": "CHANNEL WORLDVIEW: muted geopolitics explainer.",
+        }},
+    )
+    monkeypatch.setattr(appmod, "resolve_channel_keys", lambda channel: {"anthropic": "k", "gemini": "g", "openai": ""})
 
     (job_dir / "job.json").write_text(
         '{"channel_id":"default","provider":"nanobanana","style_preset":"flat_infographic"}',
@@ -190,10 +199,11 @@ def test_regenerate_chart_can_force_diagram_ai(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(utils, "get_anthropic_client", lambda key="": object())
-    monkeypatch.setattr(
-        prompter,
-        "generate_all_prompts",
-        lambda client, rows, **kwargs: [{
+    seen = {}
+
+    def fake_prompts(client, rows, **kwargs):
+        seen["kwargs"] = kwargs
+        return [{
             "no": rows[0]["no"],
             "prompt": "Create a clear diagram with two boxes and arrows, no chart.",
             "type": "diagram",
@@ -201,7 +211,12 @@ def test_regenerate_chart_can_force_diagram_ai(tmp_path, monkeypatch):
             "allowed_terms": ["29ドル", "430ドル"],
             "character": False,
             "sentence": rows[0]["sentence"],
-        }],
+        }]
+
+    monkeypatch.setattr(
+        prompter,
+        "generate_all_prompts",
+        fake_prompts,
     )
 
     calls = {}
@@ -222,6 +237,9 @@ def test_regenerate_chart_can_force_diagram_ai(tmp_path, monkeypatch):
     assert body.get("ok") is True
     assert body.get("route") == "diagram"
     assert calls["entry"]["type"] == "diagram"
+    assert "CHANNEL BASE STYLE" in seen["kwargs"]["user_instructions"]
+    assert "forced route/type" in seen["kwargs"]["user_instructions"]
+    assert seen["kwargs"]["worldview_desc"] == "CHANNEL WORLDVIEW: muted geopolitics explainer."
     snap = appmod.load_json(job_dir / "rows_progress.json", {"rows": []})["rows"][0]
     assert snap["route"] == "diagram"
     assert snap["engine"] == "ai"
