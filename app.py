@@ -1024,6 +1024,7 @@ def api_regenerate(job_id, no):
             openai_quality=openai_quality,
             concurrency=1,
             reference_image_path=character_ref_path,
+            realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
         )
     except Exception as e:
         return jsonify({"error": f"再生成に失敗: {str(e)[:150]}"}), 500
