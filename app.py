@@ -102,7 +102,7 @@ def _resolve_secret_key() -> str:
     env_key = os.environ.get("SECRET_KEY", "").strip()
     if env_key:
         return env_key
-    key_file = PROJECT_ROOT / ".secret_key"
+    key_file = (OUTPUT_ROOT if OUTPUT_IS_PERSISTENT else PROJECT_ROOT) / ".secret_key"
     try:
         if key_file.exists():
             saved = key_file.read_text(encoding="utf-8").strip()
@@ -644,6 +644,29 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=No
         pass
 
 
+def _find_existing_scene_image(job_dir, no, snap_row=None, target=None):
+    """個別再生成の元画像を探す。見つからなければ None（従来の新規生成へ）。"""
+    image_dir = job_dir / "images"
+    candidates = []
+    for row in (snap_row or {}, target or {}):
+        fname = row.get("filename") or row.get("web_local_file")
+        if fname:
+            candidates.append(image_dir / Path(str(fname)).name)
+    candidates.extend([
+        image_dir / f"{no}.png",
+        image_dir / f"{no}.jpg",
+        image_dir / f"{no}.jpeg",
+        image_dir / f"{no}.webp",
+    ])
+    for p in candidates:
+        try:
+            if p.exists() and p.stat().st_size > 50:
+                return p
+        except Exception:
+            continue
+    return None
+
+
 def _save_regen_prompt(job_dir, row):
     """ルート変更再生成で作った prompt を prompts.json に保存して次回再生成でも使えるようにする。"""
     import json as _json
@@ -985,6 +1008,15 @@ def api_regenerate(job_id, no):
     prompt_text = target.get("prompt", "")
     if extra:
         prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
+    edit_image_path = _find_existing_scene_image(job_dir, no, snap_row=snap_row, target=target)
+    if edit_image_path:
+        prompt_text = (
+            "Refine the attached existing image instead of generating a completely new one. "
+            "Keep the same composition, style, main objects, and overall idea. "
+            "Only make minimal improvements requested by the prompt, especially fixing "
+            "Japanese text mistakes, text overlap, readability, and small layout defects.\n\n"
+            + prompt_text
+        )
 
     type_providers = params.get("type_providers") or defaults.get("type_providers") or {}
     provider = type_providers.get(route) or params.get("provider", PROVIDER_NANOBANANA)
@@ -1010,6 +1042,7 @@ def api_regenerate(job_id, no):
         "keypoint": (target.get("sentence", "") or "")[:30],
         "allowed_terms": target.get("allowed_terms", []),
         "style": style_preset,
+        "edit_source": bool(edit_image_path),
         # 元の行が先生シーン(character)なら、再生成でもキャラ固定
         "character": bool(target.get("character", False)) and route == "illustration",
     }
@@ -1024,6 +1057,7 @@ def api_regenerate(job_id, no):
             openai_quality=openai_quality,
             concurrency=1,
             reference_image_path=character_ref_path,
+            edit_image_path=str(edit_image_path) if edit_image_path else None,
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
         )
     except Exception as e:

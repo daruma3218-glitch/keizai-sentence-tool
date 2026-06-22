@@ -200,6 +200,15 @@ _ENTITY_LOCK_TEXT_ONLY = (
     "series style, so repeated appearances of the same subject feel coherent."
 )
 
+_EDIT_SOURCE_INSTRUCTION = (
+    "IMAGE EDIT MODE: Use the attached image as the source image to refine, not as a loose "
+    "style reference. Preserve the same overall composition, camera angle, layout, main objects, "
+    "color mood, and visual style as much as possible. Make only minimal corrections requested "
+    "by the prompt: improve readability, fix text/label mistakes if labels are present, reduce "
+    "overlap, and clean up small visual defects. Do NOT redesign the image from scratch, do NOT "
+    "change the core idea, and do NOT introduce new facts."
+)
+
 
 def _build_full_prompt(
     user_prompt: str,
@@ -499,6 +508,7 @@ class ParallelImageGenerator:
         style_preset: str = "",
         progress_callback: Optional[Callable[[dict], None]] = None,
         reference_image_path: Optional[str] = None,  # キャラ固定の参照画像パス
+        edit_image_path: Optional[str] = None,       # 個別再生成: 元画像を微調整する参照
         realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
     ):
         if provider not in VALID_PROVIDERS:
@@ -521,6 +531,17 @@ class ParallelImageGenerator:
                     self.reference_mime = "image/jpeg" if rp.suffix.lower() in (".jpg", ".jpeg") else "image/png"
             except Exception:
                 self.reference_bytes = None
+
+        self.edit_reference_bytes = None
+        self.edit_reference_mime = "image/png"
+        if edit_image_path:
+            try:
+                ep = Path(edit_image_path)
+                if ep.exists() and ep.stat().st_size > 50:
+                    self.edit_reference_bytes = ep.read_bytes()
+                    self.edit_reference_mime = "image/jpeg" if ep.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+            except Exception:
+                self.edit_reference_bytes = None
 
         # クライアント初期化（必要な分だけ）
         self.gemini_client = None
@@ -643,9 +664,16 @@ class ParallelImageGenerator:
             # v3 Step6: エンティティ follower の一貫性ロック（キャラ固定シーンとは排他）。
             # nanobanana は canonical 画像を参照に渡す。gpt-image は文言のみ（v3.0）。
             ref_override = None
+            ref_mime_override = None
+            if prompt_entry.get("edit_source") and self.edit_reference_bytes:
+                ref_override = self.edit_reference_bytes
+                ref_mime_override = self.edit_reference_mime
+                full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
+
             if entity_role == "follower" and not use_reference:
                 if self.provider == PROVIDER_NANOBANANA and entity_ref_bytes:
                     ref_override = entity_ref_bytes
+                    ref_mime_override = "image/png"
                     full_prompt = _ENTITY_LOCK_INSTRUCTION + "\n\n" + full_prompt
                 else:
                     full_prompt = _ENTITY_LOCK_TEXT_ONLY + "\n\n" + full_prompt
@@ -663,6 +691,7 @@ class ParallelImageGenerator:
                         output_path,
                         use_reference,
                         ref_override,
+                        ref_mime_override,
                     ),
                     timeout=PER_IMAGE_HARD_TIMEOUT,
                 )
@@ -817,6 +846,7 @@ def run_parallel_generation(
     style_preset: str = "",
     progress_callback: Optional[Callable[[dict], None]] = None,
     reference_image_path: Optional[str] = None,  # キャラ固定の参照画像
+    edit_image_path: Optional[str] = None,       # 個別再生成: 元画像を微調整する参照
     realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
 ) -> list:
     """同期エントリポイント: pipeline から呼び出す"""
@@ -842,6 +872,7 @@ def run_parallel_generation(
         style_preset=style_preset,
         progress_callback=progress_callback,
         reference_image_path=reference_image_path,
+        edit_image_path=edit_image_path,
         realphoto_watermark=realphoto_watermark,
     )
     return asyncio.run(generator.generate_all(prompts, output_dir))

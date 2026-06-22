@@ -272,6 +272,7 @@ def test_regenerate_realphoto_passes_watermark_flag(tmp_path, monkeypatch):
         '{"rows":[{"no":14,"sentence":"会談の場面です。","route":"realphoto","engine":"ai","status":"ok"}]}',
         encoding="utf-8",
     )
+    _png(job_dir / "images" / "14.png")
 
     seen = {}
 
@@ -293,6 +294,8 @@ def test_regenerate_realphoto_passes_watermark_flag(tmp_path, monkeypatch):
     body = resp.get_json()
     assert body.get("ok") is True
     assert seen["entry"]["type"] == "realphoto"
+    assert seen["entry"]["edit_source"] is True
+    assert seen["kwargs"]["edit_image_path"] == str(job_dir / "images" / "14.png")
     assert seen["kwargs"]["realphoto_watermark"] is True
 
 
