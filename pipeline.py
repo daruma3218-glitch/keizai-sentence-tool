@@ -335,6 +335,36 @@ class SentencePipeline:
             self._log("prompter", f"文字なし設定: allowed_terms {changed} 件を空にしました")
         return changed
 
+    def _attach_diagram_context(self, prompt_rows: list, all_rows: list, window: int = 2) -> list:
+        """図解設計だけに使う前後文脈を付与する。画像内ラベルは sentence 側で制限する。"""
+        if not prompt_rows or not all_rows:
+            return prompt_rows
+        ordered = sorted(all_rows, key=lambda r: int(r.get("no", 0) or 0))
+        index_by_no = {int(r.get("no", 0) or 0): i for i, r in enumerate(ordered)}
+        out = []
+        changed = 0
+        for r in prompt_rows:
+            rr = dict(r)
+            route = rr.get("route") or rr.get("type")
+            no = int(rr.get("no", 0) or 0)
+            if route == "diagram" and no in index_by_no:
+                i = index_by_no[no]
+                start = max(0, i - window)
+                end = min(len(ordered), i + window + 1)
+                lines = []
+                for ctx in ordered[start:end]:
+                    marker = "対象" if int(ctx.get("no", 0) or 0) == no else "前後"
+                    sent = (ctx.get("sentence") or "").strip()
+                    if sent:
+                        lines.append(f"{marker}#{ctx.get('no')}: {sent}")
+                if lines:
+                    rr["diagram_context"] = "\n".join(lines)
+                    changed += 1
+            out.append(rr)
+        if changed:
+            self._log("prompter", f"図解設計用の前後文脈を付与: {changed} 件", "前後2文を構造理解に使用")
+        return out
+
     # ---- ヘルパ ----
     def _log(self, category: str, message: str, detail: str = ""):
         print(f"  [{category}] {message}" + (f" - {detail}" if detail else ""), flush=True)
@@ -838,8 +868,9 @@ class SentencePipeline:
         # ===== Phase 2a: 英文プロンプト（AI 行のみ） =====
         self._progress(2, f"英文プロンプトを並列生成中（style={self.style_preset}）...", 22)
         self._log("prompter", f"{len(ai_rows)} 件（AI生成対象）のプロンプトを生成します")
+        ai_rows_for_prompts = self._attach_diagram_context(ai_rows, rows)
         rows_with_prompts = generate_all_prompts(
-            client, ai_rows, title=title,
+            client, ai_rows_for_prompts, title=title,
             user_instructions=self.user_instructions,
             style_preset=self.style_preset, worldview_desc=self.worldview_desc,
             max_workers=6, log=self._log,
@@ -1312,8 +1343,9 @@ class SentencePipeline:
                         status="pending",
                         web_fallback=True,
                     )
+                fallback_rows_for_prompts = self._attach_diagram_context(missing_web_rows, rows)
                 fallback_prompts = generate_all_prompts(
-                    client, missing_web_rows, title=title,
+                    client, fallback_rows_for_prompts, title=title,
                     user_instructions=self.user_instructions,
                     style_preset=self.style_preset, worldview_desc=self.worldview_desc,
                     max_workers=4, log=self._log,
@@ -1682,6 +1714,7 @@ class SentencePipeline:
                 block_context=t.get("block_text", ""),
                 chapter=t.get("section", ""),
                 theme=theme,
+                diagram_blueprint=t.get("diagram_blueprint", {}),
             )
             return (t, v)
 
@@ -1706,6 +1739,12 @@ class SentencePipeline:
                             self._progress(3, f"図解の意味を検証中（{checked}/{len(verify_list)} 枚）...", 90)
                         if not v.get("ok"):
                             ng.append((t, v))
+                            self._update_row(
+                                t["index"],
+                                verify_issue=True,
+                                verify_reason=v.get("reason", ""),
+                                verify_issue_tags=v.get("issue_tags", []),
+                            )
                             self._log("verify", f"№{t['index']} 要修正: {v.get('reason','')}")
                     except _FutTimeout:
                         timed_out = True
@@ -1738,7 +1777,7 @@ class SentencePipeline:
             hint = v.get("fix_hint", "")
             if hint:
                 entry["prompt"] = f"{t.get('prompt','')}\n\nIMPROVE: {hint}"
-            self._update_row(t["index"], status="generating")
+            self._update_row(t["index"], status="generating", verify_issue=True)
             fix_targets.append(entry)
 
         def on_fix_event(info):
@@ -1747,6 +1786,8 @@ class SentencePipeline:
             upd = {"status": st}
             if st == "ok":
                 upd["filename"] = info.get("filename")
+                upd["verify_fixed"] = True
+                upd["verify_issue"] = False
             self._update_row(no, **upd)
 
         run_parallel_generation(

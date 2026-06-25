@@ -323,6 +323,7 @@
       const route = row.route || '';
       if (status === 'failed') return true;
       if ((row.error || '').trim()) return true;
+      if (row.verify_issue) return true;
       if (row.web_duplicate_skipped) return true;
       if (status === 'ok' && isImageCandidate(row) && !row.filename && route !== 'web_photo') return true;
       if (lastJobStatus === 'completed' && isImageCandidate(row) && !row.filename && route !== 'web_photo' && !['skipped', 'thinned', 'skipped_limit'].includes(status)) return true;
@@ -566,9 +567,15 @@
       if (!v) return `<span class="text-gray-300 text-[10px]">—</span>`;
       const reason = escapeHtml(row.route_reason || '');
       const badge = `<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${v.cls}" title="${reason}">${v.icon} ${v.label}</span>`;
+      const verifyTags = Array.isArray(row.verify_issue_tags) ? row.verify_issue_tags : [];
+      const verifyHtml = row.verify_issue
+        ? `<div class="mt-0.5 text-[9px] text-rose-600 leading-tight" title="${escapeHtml(row.verify_reason || '')}">要確認${verifyTags.length ? ': ' + escapeHtml(verifyTags.slice(0, 2).join(', ')) : ''}</div>`
+        : row.verify_fixed
+          ? `<div class="mt-0.5 text-[9px] text-emerald-600 leading-tight">検証修正済み</div>`
+        : '';
       // ルート違いフィードバック（次回以降のルーター学習に反映）
       const fb = `<br><button onclick='reportRouteError(${row.no}, event)' class="mt-0.5 text-[9px] text-gray-400 hover:text-rose-500 hover:underline" title="このルート判定が違う場合に正しいルートを教えると、次回以降のルーターが学習します">✎ ルート違い</button>`;
-      return badge + fb;
+      return badge + verifyHtml + fb;
     }
 
     function updateSummary(rows) {

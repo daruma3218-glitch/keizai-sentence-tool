@@ -276,6 +276,22 @@ def test_diagram_blueprint_filters_labels_to_source_sentence():
     )
     assert bp["structure"] == "dependency"
     assert bp["reading_path"] == "left-to-right"
+    assert "Template:" in bp["template"]
     assert "ベラルーシ" in bp["labels"]
     assert "ロシア" in bp["labels"]
     assert "NATO" not in bp["labels"]
+
+
+def test_diagram_context_is_attached_only_to_diagram_rows(tmp_path):
+    pipe = SentencePipeline("dummy", tmp_path, verify_diagrams=False)
+    all_rows = [
+        {"no": 1, "sentence": "前の文です。", "route": "realphoto"},
+        {"no": 2, "sentence": "ベラルーシはロシアへの依存を深めました。", "route": "diagram"},
+        {"no": 3, "sentence": "次の文です。", "route": "diagram"},
+    ]
+    prompt_rows = [all_rows[0], all_rows[1]]
+    enriched = pipe._attach_diagram_context(prompt_rows, all_rows, window=1)
+    assert "diagram_context" not in enriched[0]
+    assert "前後#1" in enriched[1]["diagram_context"]
+    assert "対象#2" in enriched[1]["diagram_context"]
+    assert "前後#3" in enriched[1]["diagram_context"]

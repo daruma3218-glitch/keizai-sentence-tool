@@ -7,6 +7,7 @@
 """
 
 import base64
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,7 @@ def verify_image(
     block_context: str = "",
     chapter: str = "",
     theme: str = "",
+    diagram_blueprint: Optional[dict] = None,
 ) -> dict:
     """1 枚の画像が、原稿の文脈の中で文の意味を正しく表しているか検証する。
 
@@ -89,12 +91,23 @@ def verify_image(
     if context_block:
         context_block = "===== 原稿の文脈 =====\n" + context_block + "\n=====================\n\n"
 
+    blueprint_block = ""
+    if isinstance(diagram_blueprint, dict) and diagram_blueprint:
+        try:
+            blueprint_block = (
+                "\n===== 図解設計JSON =====\n"
+                + json.dumps(diagram_blueprint, ensure_ascii=False)[:1000]
+                + "\n========================\n"
+            )
+        except Exception:
+            blueprint_block = ""
+
     system = (
         "あなたは厳しい図解レビュアーです。動画原稿の文脈を踏まえて、画像がその文の"
         "意味を正しく・分かりやすく表現できているかを評価します。"
         "結果は JSON オブジェクトのみで返してください。"
     )
-    query = f"""{context_block}この画像は、上の文脈の中の次の1文の図解（type={img_type}）として生成されました:
+    query = f"""{context_block}{blueprint_block}この画像は、上の文脈の中の次の1文の図解（type={img_type}）として生成されました:
 「{sentence}」{terms_note}
 
 **文脈を踏まえて**、次の観点で厳しくチェックしてください:
@@ -105,9 +118,12 @@ def verify_image(
 3. 画像内の文字に文字化け・誤字・読めない崩れた文字がないか
 4. 重要な要素（数値・関係・対比・フロー・主体）が抜けていないか
 5. ぱっと見て内容が伝わるか
+6. 図解設計JSONがある場合、visual_goal / structure / reading_path / relationships に沿っているか
+7. ラベルと矢印を順に追うだけで意味が入ってくるか。孤立したキーワード羅列になっていないか
+8. 文字が重なっていないか、ラベルが多すぎないか、線や棒が文字の前に出ていないか
 
 以下の JSON のみで返答:
-{{"ok": true または false, "reason": "判定理由を40字以内の日本語で", "fix_hint": "再生成時の改善指示を英語で80字以内（okがfalseのとき必須・文脈の正しい内容を反映）"}}
+{{"ok": true または false, "reason": "判定理由を40字以内の日本語で", "issue_tags": ["meaning_mismatch | unreadable_text | weak_structure | keyword_list | overcrowded | label_overlap | missing_key_element | factual_risk"], "fix_hint": "再生成時の改善指示を英語で80字以内（okがfalseのとき必須・文脈の正しい内容を反映）"}}
 
 文脈と図がズレている／文字が崩れている場合は ok=false にしてください。"""
 
@@ -137,5 +153,6 @@ def verify_image(
     return {
         "ok": bool(data.get("ok", True)),
         "reason": str(data.get("reason", ""))[:60],
+        "issue_tags": [str(x)[:40] for x in data.get("issue_tags", []) if isinstance(x, str)][:5],
         "fix_hint": str(data.get("fix_hint", ""))[:200],
     }

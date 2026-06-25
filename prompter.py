@@ -58,6 +58,17 @@ DIAGRAM_PROMPT_REQUIREMENTS_EN = (
 )
 
 
+DIAGRAM_STRUCTURE_TEMPLATES = {
+    "cause_effect": "Template: left cause -> center mechanism/change -> right result, with one arrow chain.",
+    "comparison": "Template: two balanced columns with the same 2-3 criteria, plus a small conclusion label.",
+    "timeline": "Template: three chronological milestones on one horizontal line, oldest to newest.",
+    "opposition": "Template: left actor vs right actor, central issue/tension, opposing arrows.",
+    "dependency": "Template: dependent side -> dependency channel/resource -> controlling/supporting side.",
+    "process": "Template: step 1 -> step 2 -> step 3, one clear process flow.",
+    "relationship": "Template: 3-5 nodes connected by labeled arrows showing one relationship network.",
+}
+
+
 def _auto_extract_terms(sentence: str) -> list:
     """センテンスから安全な語句を自動抽出（Claude の補完用）"""
     terms = []
@@ -103,7 +114,7 @@ def _fallback_diagram_blueprint(row: dict, allowed_terms: Optional[list] = None)
     terms = _limit_allowed_terms((allowed_terms or []) + _auto_extract_terms(sent), sent)
     elements = terms[:3] if terms else ["要点", "背景", "結果"]
     labels = terms[:4]
-    return {
+    bp = {
         "visual_goal": f"この文の要点を因果または関係性として理解させる: {sent[:80]}",
         "structure": "cause_effect" if any(w in sent for w in ("ため", "ので", "結果", "背景")) else "relationship",
         "reading_path": "left-to-right",
@@ -112,6 +123,8 @@ def _fallback_diagram_blueprint(row: dict, allowed_terms: Optional[list] = None)
         "labels": labels,
         "forbidden": ["キーワード羅列", "長文説明", "重複文字", "孤立したカード", "詳細地図"],
     }
+    bp["template"] = DIAGRAM_STRUCTURE_TEMPLATES.get(bp["structure"], DIAGRAM_STRUCTURE_TEMPLATES["relationship"])
+    return bp
 
 
 def _normalize_diagram_blueprint(value, row: dict, allowed_terms: Optional[list] = None) -> dict:
@@ -158,7 +171,32 @@ def _normalize_diagram_blueprint(value, row: dict, allowed_terms: Optional[list]
         "labels": terms[:4],
         "forbidden": clean_list(value.get("forbidden"), 6) or ["キーワード羅列", "長文説明", "重複文字"],
     }
+    bp["template"] = DIAGRAM_STRUCTURE_TEMPLATES.get(structure, DIAGRAM_STRUCTURE_TEMPLATES["relationship"])
+    if _diagram_blueprint_is_weak(bp):
+        fallback = _fallback_diagram_blueprint(row, terms)
+        fallback["structure"] = structure
+        fallback["template"] = DIAGRAM_STRUCTURE_TEMPLATES.get(structure, DIAGRAM_STRUCTURE_TEMPLATES["relationship"])
+        return fallback
     return bp
+
+
+def _diagram_blueprint_is_weak(blueprint: dict) -> bool:
+    """画像生成前に弱い設計を弾く。APIを増やさず、弱いものはフォールバック設計へ寄せる。"""
+    if not isinstance(blueprint, dict):
+        return True
+    goal = str(blueprint.get("visual_goal", "")).strip()
+    elements = blueprint.get("elements") or []
+    relationships = blueprint.get("relationships") or []
+    if len(goal) < 12:
+        return True
+    if len(elements) < 3:
+        return True
+    if not relationships:
+        return True
+    generic = {"要点", "背景", "結果"}
+    if set(elements).issubset(generic) and not blueprint.get("labels"):
+        return True
+    return False
 
 
 def _blueprint_prompt_fragment(blueprint: dict) -> str:
@@ -173,6 +211,7 @@ def _blueprint_prompt_fragment(blueprint: dict) -> str:
         " Diagram blueprint to follow exactly: "
         f"visual goal = {blueprint.get('visual_goal', '')}; "
         f"structure = {blueprint.get('structure', '')}; "
+        f"template = {blueprint.get('template', '')}; "
         f"reading path = {blueprint.get('reading_path', '')}; "
         f"elements = {elements}; relationships = {rels}; "
         f"allowed label placement uses only these Japanese labels = {labels}; "
@@ -311,6 +350,7 @@ def generate_prompts_batch(
             "type": row_type,  # ★この type を厳守すること（変更禁止）
             "chapter": r.get("chapter_title", ""),
             "block_context": r.get("block_text", "")[:400],
+            "near_context": r.get("diagram_context", "")[:700],
             "sentence": sent,
             "auto_extracted_terms": hints,  # ヒント
             "visual_hint": r.get("visual_hint", ""),
@@ -328,7 +368,7 @@ def generate_prompts_batch(
     query = f"""動画原稿「{title}」の各センテンス（1文）に対応する英文画像プロンプトを書いてください。
 **各項目の type は厳守**（変更禁止）。type ごとに描き方が違います。
 
-入力（type=その項目の描画種別。auto_extracted_terms は機械抽出した数値・年代・固有名詞のヒント）:
+入力（type=その項目の描画種別。near_context は設計判断用の前後文脈。画像内ラベルは sentence / allowed_terms 由来に限定）:
 {inputs_json}
 
 {user_block}{worldview_block}
@@ -350,7 +390,17 @@ diagram_blueprint は以下の形式にする:
 }}
 diagram の prompt は必ずこの blueprint に沿って書くこと。
 prompt 内にも visual goal / reading path / 3-5 connected elements / relationship / label placement を具体的に含めること。
+near_context は visual_goal・structure・relationships の理解に使ってよいが、画像内ラベルは対象 sentence にある語だけにすること。
 type が diagram 以外の項目では diagram_blueprint は空オブジェクト {{}} にする。
+
+【structure別テンプレート】
+- cause_effect: 原因 → 仕組み/変化 → 結果
+- comparison: 左右比較 + 同じ評価軸 + 小さな結論
+- timeline: 3点だけの横時系列
+- opposition: 左右対立 + 中央の争点
+- dependency: 依存する側 → 依存経路/資源 → 支える/支配する側
+- process: 手順1 → 手順2 → 手順3
+- relationship: 3〜5ノードの関係図
 
 【最重要: type 別の描き方】
 - **realphoto**: 実写写真。"photorealistic documentary photograph, real photo, natural lighting,
