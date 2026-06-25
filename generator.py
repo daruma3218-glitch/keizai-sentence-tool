@@ -263,6 +263,14 @@ def _build_full_prompt(
         "flat_infographic": (
             "PRESET STYLE: flat educational infographic. Use simple icons, clean boxes, "
             "arrows and a restrained palette. Make the message readable at a glance. "
+            "Palette must be based on muted educational tones: background #D9E1E8, "
+            "secondary background #A8B9C4, main color #1B365D, comparison/sub color #2C4C3B, "
+            "neutral #E5A91A, warning #A6192E, highlight #B7950B. "
+            "You may adjust hierarchy, but avoid high-saturation colors and never display "
+            "color codes in the image. Place rounded backing shapes behind text when needed "
+            "for readability. Keep infographic and illustration layouts simple, organized, "
+            "and suitable for an educational YouTube channel. Avoid typos, duplicate text, "
+            "and repeated characters. "
         ),
         "pictogram": (
             "PRESET STYLE: pictogram signage. Use the simplest possible silhouettes and "

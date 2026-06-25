@@ -213,7 +213,13 @@ def test_diagram_prompts_require_readable_visual_argument():
     })
 
     assert "読む順番" in user_block
+    assert "#D9E1E8" in user_block
+    assert "#1B365D" in user_block
+    assert "角丸シェイプ" in user_block
     assert "labels and arrows in order" in final_prompt
     assert "3-5 connected elements" in final_prompt
+    assert "#D9E1E8" in final_prompt
+    assert "#1B365D" in final_prompt
+    assert "rounded backing shapes" in final_prompt
     assert "one visual goal" in fallback["prompt"]
     assert "reading path" in fallback["prompt"]
