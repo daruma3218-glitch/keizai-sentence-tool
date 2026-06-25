@@ -299,6 +299,50 @@ def test_regenerate_realphoto_passes_watermark_flag(tmp_path, monkeypatch):
     assert seen["kwargs"]["realphoto_watermark"] is True
 
 
+def test_regenerate_generation_exception_marks_snapshot_failed(tmp_path, monkeypatch):
+    """AI再生成が例外で落ちても rows_progress は failed に戻し、生成中で固めない。"""
+    out_root = tmp_path / "output"
+    job_dir = out_root / "job_fail"
+    (job_dir / "images").mkdir(parents=True)
+    monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+    monkeypatch.setattr(appmod, "get_channel", lambda channel_id: {"defaults": {}})
+    monkeypatch.setattr(appmod, "resolve_channel_keys", lambda channel: {"gemini": "g", "openai": ""})
+
+    (job_dir / "job.json").write_text(
+        '{"channel_id":"default","provider":"nanobanana","style_preset":"flat_infographic"}',
+        encoding="utf-8",
+    )
+    (job_dir / "prompts.json").write_text(
+        '{"rows":[{"no":15,"prompt":"Create a diagram.",'
+        '"type":"diagram","route":"diagram","sentence":"失敗確認の文です。"}]}',
+        encoding="utf-8",
+    )
+    (job_dir / "rows_progress.json").write_text(
+        '{"rows":[{"no":15,"sentence":"失敗確認の文です。","route":"diagram","engine":"ai","status":"ok"}]}',
+        encoding="utf-8",
+    )
+
+    def fail_generate(*args, **kwargs):
+        raise RuntimeError("provider timeout")
+
+    monkeypatch.setattr(generator, "run_parallel_generation", fail_generate)
+
+    with appmod.app.test_request_context(
+        "/api/regenerate/job_fail/15",
+        method="POST",
+        data={},
+    ):
+        resp, status = appmod.api_regenerate("job_fail", 15)
+
+    assert status == 500
+    assert "provider timeout" in resp.get_json()["error"]
+    snap = appmod.load_json(job_dir / "rows_progress.json", {"rows": []})["rows"][0]
+    assert snap["status"] == "failed"
+    assert snap["verify_issue"] is True
+    assert "provider timeout" in snap["error"]
+
+
 def test_regenerate_can_force_skip_without_generation(tmp_path, monkeypatch):
     out_root = tmp_path / "output"
     job_dir = out_root / "job_skip"

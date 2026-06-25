@@ -740,7 +740,7 @@
       return regenerateSceneWithRoute(no, route, ev);
     }
 
-    async function fetchWithTimeout(url, options = {}, timeoutMs = 300000) {
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 180000) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -764,6 +764,14 @@
       cell.innerHTML = previousHtml || `<div class="w-20 h-[45px] bg-red-50 rounded flex items-center justify-center mx-auto text-red-400 text-[10px]">${escapeHtml(message)}</div>${regenBtn(no, route || '')}`;
     }
 
+    function markRowRegenFailed(tr, message) {
+      if (!tr) return;
+      tr.setAttribute('data-status', 'failed');
+      tr.setAttribute('data-issue', '1');
+      tr.setAttribute('data-error', message || '再生成失敗');
+      applyRowFilters();
+    }
+
     async function regenerateSceneWithRoute(no, forceRoute, ev, options = {}) {
       if (ev) ev.stopPropagation();
       const tr = document.querySelector(`tr[data-no="${no}"]`);
@@ -779,6 +787,8 @@
       const previousCellHtml = cell ? cell.innerHTML : '';
       const currentRoute = forceRoute || tr.getAttribute('data-route') || '';
       if (cell) cell.innerHTML = `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto"><div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div></div>`;
+      tr.setAttribute('data-status', 'generating');
+      tr.setAttribute('data-error', '');
       try {
         const fd = new FormData();
         if (extra.trim()) fd.append('extra_instruction', extra.trim());
@@ -793,9 +803,12 @@
         const res = await fetchWithTimeout(`/api/regenerate/${JOB_ID}/${no}`, { method: 'POST', body: fd });
         const data = await readJsonOrError(res);
         if (!res.ok || data.error) {
-          alert('再生成に失敗: ' + (data.error || res.status));
+          const msg = data.error || String(res.status);
+          alert('再生成に失敗: ' + msg);
           restoreRegenCell(cell, previousCellHtml, no, currentRoute);
-          return;
+          markRowRegenFailed(tr, msg);
+          await pollRows();
+          return { ok: false, error: msg };
         }
         // 成功 → 画像をキャッシュ回避で再表示
         if (data.skipped) {
@@ -807,6 +820,14 @@
           applyRowFilters();
           return data;
         }
+        if (!data.filename) {
+          const msg = '再生成は完了しましたが、画像ファイルが返りませんでした。';
+          alert(msg);
+          restoreRegenCell(cell, previousCellHtml, no, currentRoute);
+          markRowRegenFailed(tr, msg);
+          await pollRows();
+          return { ok: false, error: msg };
+        }
         if (cell) {
           const newRoute = data.route || forceRoute || tr.getAttribute('data-route') || '';
           cell.innerHTML = `<img src="/results/${JOB_ID}/images/${data.filename}?t=${data.ts}${Date.now()}" class="thumb-img pop-in" onclick='openModal(${no})' alt="" loading="lazy"><br>${regenBtn(no, newRoute)}`;
@@ -814,6 +835,7 @@
         tr.setAttribute('data-filename', data.filename);
         tr.setAttribute('data-status', 'ok');
         tr.setAttribute('data-issue', '0');
+        tr.setAttribute('data-error', '');
         if (data.route) {
           tr.setAttribute('data-route', data.route);
           const routeCell = tr.querySelector('.route-cell');
@@ -824,10 +846,12 @@
         return data;
       } catch (e) {
         const msg = e.name === 'AbortError'
-          ? '再生成が5分以内に完了しなかったため中断しました。もう一度お試しください。'
+          ? '再生成が3分以内に完了しなかったため中断しました。元画像に戻します。'
           : '通信エラー: ' + e.message;
         alert(msg);
         restoreRegenCell(cell, previousCellHtml, no, currentRoute);
+        markRowRegenFailed(tr, msg);
+        await pollRows();
         return { ok: false, error: msg };
       }
     }
@@ -839,15 +863,21 @@
       const previousCellHtml = cell ? cell.innerHTML : '';
       const currentRoute = tr.getAttribute('data-route') || '';
       if (cell) cell.innerHTML = `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto"><div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div></div>`;
+      tr.setAttribute('data-status', 'generating');
+      tr.setAttribute('data-error', '');
       try {
         const res = await fetchWithTimeout(`/api/regenerate/${JOB_ID}/${no}`, { method: 'POST', body: new FormData() });
         const data = await readJsonOrError(res);
         if (!res.ok || data.error) {
           restoreRegenCell(cell, previousCellHtml, no, currentRoute);
-          tr.setAttribute('data-status', 'failed');
-          tr.setAttribute('data-issue', '1');
-          tr.setAttribute('data-error', data.error || String(res.status));
+          markRowRegenFailed(tr, data.error || String(res.status));
           return { ok: false, error: data.error || String(res.status) };
+        }
+        if (!data.skipped && !data.filename) {
+          const msg = '再生成は完了しましたが、画像ファイルが返りませんでした。';
+          restoreRegenCell(cell, previousCellHtml, no, currentRoute);
+          markRowRegenFailed(tr, msg);
+          return { ok: false, error: msg };
         }
         if (cell) {
           cell.innerHTML = `<img src="/results/${JOB_ID}/images/${data.filename}?t=${data.ts}${Date.now()}" class="thumb-img pop-in" onclick='openModal(${no})' alt="" loading="lazy"><br><button onclick='regenerateScene(${no}, event)' class="mt-1 text-[10px] text-cyan-600 hover:underline">🔄 再生成</button>`;
@@ -860,9 +890,7 @@
       } catch (e) {
         const msg = e.name === 'AbortError' ? '再生成タイムアウト' : e.message;
         restoreRegenCell(cell, previousCellHtml, no, currentRoute);
-        tr.setAttribute('data-status', 'failed');
-        tr.setAttribute('data-issue', '1');
-        tr.setAttribute('data-error', msg);
+        markRowRegenFailed(tr, msg);
         return { ok: false, error: msg };
       }
     }

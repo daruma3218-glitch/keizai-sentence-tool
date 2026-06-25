@@ -645,6 +645,23 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=No
         pass
 
 
+def _mark_regen_failed(job_dir, no, message, route=None, route_reason=None):
+    """再生成失敗を snapshot に残し、UI が生成中のまま固まらないようにする。"""
+    _update_regen_snapshot(
+        job_dir,
+        no,
+        False,
+        route=route or None,
+        route_reason=route_reason or "再生成失敗",
+        status="failed",
+        extra={
+            "error": str(message or "再生成失敗")[:300],
+            "regen_finished_at": datetime.now().isoformat(timespec="seconds"),
+            "verify_issue": True,
+        },
+    )
+
+
 def _find_existing_scene_image(job_dir, no, snap_row=None, target=None):
     """個別再生成の元画像を探す。見つからなければ None（従来の新規生成へ）。"""
     image_dir = job_dir / "images"
@@ -952,9 +969,13 @@ def api_regenerate(job_id, no):
 
     # ===== AI 生成（illustration / realphoto / diagram など）=====
     if (not target or not target.get("prompt")) and not force_route:
+        msg = ""
         if not prompts:
-            return jsonify({"error": "プロンプト情報が見つかりません（まだ生成準備中か、データが消えています）"}), 404
-        return jsonify({"error": f"№{no} のAI生成用プロンプトが見つかりません（chart/map は数値・地名のある文のみ再生成可）"}), 404
+            msg = "プロンプト情報が見つかりません（まだ生成準備中か、データが消えています）"
+        else:
+            msg = f"№{no} のAI生成用プロンプトが見つかりません（chart/map は数値・地名のある文のみ再生成可）"
+        _mark_regen_failed(job_dir, no, msg, route=route, route_reason=route_reason)
+        return jsonify({"error": msg}), 404
 
     route = route or "illustration"
     if force_route and (not target or not target.get("prompt") or original_route != force_route):
@@ -963,7 +984,9 @@ def api_regenerate(job_id, no):
         source_row = dict(snap_row or target or {})
         sentence = (source_row.get("sentence") or "").strip()
         if not sentence:
-            return jsonify({"error": "ルート変更再生成に必要な文が見つかりません"}), 404
+            msg = "ルート変更再生成に必要な文が見つかりません"
+            _mark_regen_failed(job_dir, no, msg, route=route, route_reason=route_reason)
+            return jsonify({"error": msg}), 404
         source_row.update({
             "no": no,
             "route": force_route,
@@ -1088,6 +1111,20 @@ def api_regenerate(job_id, no):
         "character": bool(target.get("character", False)) and route == "illustration",
     }
 
+    _update_regen_snapshot(
+        job_dir,
+        no,
+        True,
+        engine="ai",
+        route=route or None,
+        route_reason=route_reason or "再生成中",
+        status="generating",
+        extra={
+            "error": "",
+            "regen_started_at": datetime.now().isoformat(timespec="seconds"),
+        },
+    )
+
     try:
         results = run_parallel_generation(
             prompts=[entry],
@@ -1102,10 +1139,29 @@ def api_regenerate(job_id, no):
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
         )
     except Exception as e:
-        return jsonify({"error": f"再生成に失敗: {str(e)[:150]}"}), 500
+        msg = f"再生成に失敗: {str(e)[:150]}"
+        _mark_regen_failed(job_dir, no, msg, route=route, route_reason=route_reason)
+        return jsonify({"error": msg}), 500
 
-    ok = bool(results and results[0].get("success"))
+    ok = bool(results and results[0].get("success") and results[0].get("filename"))
     filename = results[0].get("filename") if ok else None
+    if not ok:
+        msg = results[0].get("error", "生成失敗") if results else "生成失敗"
+        if results and results[0].get("success") and not results[0].get("filename"):
+            msg = "生成は完了しましたが、画像ファイル名が返りませんでした"
+        _mark_regen_failed(job_dir, no, msg, route=route, route_reason=route_reason)
+        return jsonify({"error": msg}), 500
+
+    success_extra = {
+        "error": "",
+        "regen_finished_at": datetime.now().isoformat(timespec="seconds"),
+        "verify_issue": False,
+    }
+    if diagram_edit:
+        success_extra.update({
+            "diagram_blueprint": target.get("diagram_blueprint", {}),
+            "allowed_terms": target.get("allowed_terms", []),
+        })
 
     # rows_progress.json を更新（AI 生成は engine=ai のまま）
     _update_regen_snapshot(
@@ -1114,17 +1170,11 @@ def api_regenerate(job_id, no):
         ok,
         filename=filename,
         engine="ai" if force_route else None,
-        route=force_route or None,
-        route_reason=route_reason or None,
-        extra={
-            "diagram_blueprint": target.get("diagram_blueprint", {}),
-            "allowed_terms": target.get("allowed_terms", []),
-            "verify_issue": False,
-        } if diagram_edit else None,
+        route=route or None,
+        route_reason=route_reason or "再生成完了",
+        extra=success_extra,
     )
 
-    if not ok:
-        return jsonify({"error": results[0].get("error", "生成失敗") if results else "生成失敗"}), 500
     # キャッシュ回避用にタイムスタンプ付き URL を返す
     return jsonify({"ok": True, "no": no, "filename": filename, "route": route, "ts": datetime.now().strftime("%H%M%S")})
 
