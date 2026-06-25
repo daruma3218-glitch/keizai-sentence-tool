@@ -897,6 +897,7 @@ def api_regenerate(job_id, no):
     snap_row = next((r for r in snap_all if r.get("no") == no), None)
     extra = (request.form.get("extra_instruction", "") or "").strip()
     force_route = (request.form.get("force_route", "") or "").strip()
+    diagram_edit = request.form.get("diagram_edit", "") == "1"
     forceable_routes = {"web_photo", "realphoto", "diagram", "chart", "illustration", "skip"}
     if force_route and force_route not in forceable_routes:
         return jsonify({"error": f"この再生成で指定できないルートです: {force_route}"}), 400
@@ -912,6 +913,8 @@ def api_regenerate(job_id, no):
     route = (snap_row or {}).get("route") or (target or {}).get("route") or (target or {}).get("type") or ""
     engine = (snap_row or {}).get("engine") or ""
     original_route = route
+    if diagram_edit and not force_route:
+        force_route = "diagram"
     if force_route:
         route = force_route
         engine = "ai"
@@ -1008,6 +1011,40 @@ def api_regenerate(job_id, no):
         target["type"] = force_route
         _save_regen_prompt(job_dir, target)
 
+    if diagram_edit:
+        target = dict(target or snap_row or {"no": no})
+        bp = dict(target.get("diagram_blueprint") or {})
+        labels_raw = (request.form.get("diagram_labels", "") or "").strip()
+        labels = [x.strip() for x in labels_raw.replace("、", ",").split(",") if x.strip()]
+        structure = (request.form.get("diagram_structure", "") or "").strip()
+        visual_goal = (request.form.get("diagram_visual_goal", "") or "").strip()
+        relationships_raw = (request.form.get("diagram_relationships", "") or "").strip()
+        relationships = [x.strip() for x in relationships_raw.splitlines() if x.strip()]
+        if structure:
+            bp["structure"] = structure
+        if visual_goal:
+            bp["visual_goal"] = visual_goal
+        if labels:
+            bp["labels"] = labels[:4]
+            target["allowed_terms"] = labels[:4]
+        if relationships:
+            bp["relationships"] = relationships[:4]
+        target["diagram_blueprint"] = bp
+        target["route"] = "diagram"
+        target["type"] = "diagram"
+        route = "diagram"
+        force_route = "diagram"
+        engine = "ai"
+        edit_note = (
+            "Editor-adjusted diagram blueprint. Regenerate as a clear diagram using this blueprint exactly. "
+            f"Structure: {bp.get('structure', '')}. Visual goal: {bp.get('visual_goal', '')}. "
+            f"Labels: {', '.join(bp.get('labels', []))}. Relationships: {'; '.join(bp.get('relationships', []))}. "
+            "Keep labels short, readable, non-overlapping, and only use the listed Japanese labels."
+        )
+        extra = f"{extra}\n{edit_note}".strip()
+        route_reason = route_reason or "編集UIで図解設計を調整して再生成"
+        _save_regen_prompt(job_dir, target)
+
     prompt_text = target.get("prompt", "")
     if extra:
         prompt_text = f"{prompt_text}\n\nAdditional instruction: {extra}"
@@ -1079,6 +1116,11 @@ def api_regenerate(job_id, no):
         engine="ai" if force_route else None,
         route=force_route or None,
         route_reason=route_reason or None,
+        extra={
+            "diagram_blueprint": target.get("diagram_blueprint", {}),
+            "allowed_terms": target.get("allowed_terms", []),
+            "verify_issue": False,
+        } if diagram_edit else None,
     )
 
     if not ok:

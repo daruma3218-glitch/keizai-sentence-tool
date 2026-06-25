@@ -27,6 +27,8 @@
     .thumb-img:hover { transform: scale(1.05); }
     .sentence-cell { max-width: 480px; word-break: break-word; line-height: 1.5; }
     .chapter-cell, .block-cell { vertical-align: top; font-weight: 600; color: #075985; }
+    .editor-field { width: 100%; border: 1px solid #d1d5db; border-radius: 0.5rem; padding: 0.5rem 0.65rem; font-size: 12px; line-height: 1.45; background: #fff; }
+    .editor-field:focus { outline: none; border-color: #0891b2; box-shadow: 0 0 0 2px rgba(8,145,178,0.15); }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -189,7 +191,7 @@
 
   <!-- 拡大表示モーダル -->
   <div id="modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6" onclick="closeModal(event)">
-    <div class="max-w-5xl w-full bg-white rounded-2xl overflow-hidden shadow-2xl" onclick="event.stopPropagation()">
+    <div class="max-w-6xl w-full bg-white rounded-2xl overflow-hidden shadow-2xl" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200">
         <div class="min-w-0 flex-1">
           <p id="modalNo" class="text-xs text-gray-500 mb-0.5"></p>
@@ -197,8 +199,47 @@
         </div>
         <button onclick="closeModal()" class="text-gray-400 hover:text-gray-700 text-2xl leading-none flex-shrink-0">&times;</button>
       </div>
-      <div class="bg-gray-100 flex items-center justify-center p-4">
-        <img id="modalImg" src="" class="max-w-full max-h-[70vh] object-contain rounded-lg shadow">
+      <div class="bg-gray-100 grid grid-cols-1 lg:grid-cols-5 gap-4 p-4">
+        <div class="lg:col-span-3 flex items-center justify-center">
+          <img id="modalImg" src="" class="max-w-full max-h-[70vh] object-contain rounded-lg shadow">
+        </div>
+        <div id="diagramEditor" class="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-4 text-xs hidden">
+          <div class="flex items-center justify-between gap-2 mb-3">
+            <h3 class="text-sm font-semibold text-gray-900">図解設計を編集</h3>
+            <button onclick="regenerateModalDiagram(event)" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700">この設計で再生成</button>
+          </div>
+          <label class="block mb-2">
+            <span class="block text-[10px] font-semibold text-gray-500 mb-1">型</span>
+            <select id="modalDiagramStructure" class="editor-field">
+              <option value="cause_effect">原因 → 結果</option>
+              <option value="comparison">左右比較</option>
+              <option value="timeline">時系列</option>
+              <option value="opposition">対立構造</option>
+              <option value="dependency">依存関係</option>
+              <option value="process">プロセス</option>
+              <option value="relationship">関係図</option>
+            </select>
+          </label>
+          <label class="block mb-2">
+            <span class="block text-[10px] font-semibold text-gray-500 mb-1">この図で理解させること</span>
+            <textarea id="modalDiagramGoal" rows="3" class="editor-field"></textarea>
+          </label>
+          <label class="block mb-2">
+            <span class="block text-[10px] font-semibold text-gray-500 mb-1">画像内ラベル（カンマ区切り・最大4語）</span>
+            <input id="modalDiagramLabels" class="editor-field" placeholder="ロシア, ベラルーシ, 経済依存">
+          </label>
+          <label class="block mb-3">
+            <span class="block text-[10px] font-semibold text-gray-500 mb-1">要素の関係（1行1つ）</span>
+            <textarea id="modalDiagramRelationships" rows="4" class="editor-field"></textarea>
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="applyStructurePreset('dependency')" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">依存</button>
+            <button onclick="applyStructurePreset('opposition')" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">対立</button>
+            <button onclick="applyStructurePreset('timeline')" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">時系列</button>
+            <button onclick="applyStructurePreset('cause_effect')" class="px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200">因果</button>
+          </div>
+          <p id="modalVerifyReason" class="mt-3 text-[11px] text-rose-600"></p>
+        </div>
       </div>
       <div class="px-5 py-3 border-t border-gray-200 bg-gray-50 grid grid-cols-2 gap-3 text-xs">
         <div>
@@ -221,6 +262,7 @@
     let rowFilter = 'all';
     let chapterFilter = null;
     let lastJobStatus = 'running';
+    let currentModalNo = null;
 
     const els = {
       jobTitle: document.getElementById('jobTitle'),
@@ -342,6 +384,9 @@
         display: row.display || '',
         issue: rowHasIssue(row) ? '1' : '0',
         terms: JSON.stringify(row.allowed_terms || []),
+        blueprint: JSON.stringify(row.diagram_blueprint || {}),
+        verifyReason: row.verify_reason || '',
+        verifyTags: JSON.stringify(row.verify_issue_tags || []),
       };
     }
 
@@ -356,6 +401,9 @@
       tr.setAttribute('data-display', attrs.display);
       tr.setAttribute('data-issue', attrs.issue);
       tr.setAttribute('data-terms', attrs.terms);
+      tr.setAttribute('data-blueprint', attrs.blueprint);
+      tr.setAttribute('data-verify-reason', attrs.verifyReason);
+      tr.setAttribute('data-verify-tags', attrs.verifyTags);
     }
 
     function chapterLabel(row) {
@@ -493,6 +541,8 @@
         const newWebUrl = row.web_source_url || '';
         const prevRoute = tr.getAttribute('data-route') || '';
         const newRoute = row.route || '';
+        const prevIssue = tr.getAttribute('data-issue') || '0';
+        const nextIssue = rowHasIssue(row) ? '1' : '0';
         applyRowAttrs(tr, row);
 
         if (prevStatus !== row.status) {
@@ -504,7 +554,7 @@
           if (thumbCell) thumbCell.innerHTML = thumbCellHtml(row);
         }
 
-        if (prevRoute !== newRoute) {
+        if (prevRoute !== newRoute || prevIssue !== nextIssue) {
           tr.setAttribute('data-route', newRoute);
           const routeCell = tr.querySelector('.route-cell');
           if (routeCell) routeCell.innerHTML = routeBadgeHtml(row);
@@ -540,6 +590,9 @@
             data-route="${escapeHtml(attrs.route)}"
             data-display="${escapeHtml(attrs.display)}"
             data-issue="${attrs.issue}"
+            data-blueprint='${attrs.blueprint.replace(/'/g, "&#039;")}'
+            data-verify-reason="${escapeHtml(attrs.verifyReason)}"
+            data-verify-tags='${attrs.verifyTags.replace(/'/g, "&#039;")}'
             data-terms='${attrs.terms.replace(/'/g, "&#039;")}'>
           <td class="px-2 py-2 chapter-cell text-xs">${chapter}</td>
           <td class="px-2 py-2 block-cell text-xs text-gray-600">${block}</td>
@@ -697,12 +750,20 @@
         extra = prompt(`№${no} を${routeLabel}再生成します。\n変えたい点があれば指示を入力（空欄ならそのまま作り直し）:`, "");
         if (extra === null) return;  // キャンセル
       }
+      if (options.extraInstruction !== undefined) extra = options.extraInstruction || '';
       const cell = tr.querySelector('.thumb-cell');
       if (cell) cell.innerHTML = `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto"><div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div></div>`;
       try {
         const fd = new FormData();
         if (extra.trim()) fd.append('extra_instruction', extra.trim());
         if (forceRoute) fd.append('force_route', forceRoute);
+        if (options.diagramEdit) {
+          fd.append('diagram_edit', '1');
+          fd.append('diagram_structure', options.diagramStructure || '');
+          fd.append('diagram_visual_goal', options.diagramVisualGoal || '');
+          fd.append('diagram_labels', options.diagramLabels || '');
+          fd.append('diagram_relationships', options.diagramRelationships || '');
+        }
         const res = await fetch(`/api/regenerate/${JOB_ID}/${no}`, { method: 'POST', body: fd });
         const data = await res.json();
         if (!res.ok || data.error) {
@@ -732,6 +793,7 @@
           const routeCell = tr.querySelector('.route-cell');
           if (routeCell) routeCell.innerHTML = routeBadgeHtml({ route: data.route, route_reason: 'ルート変更再生成' });
         }
+        await pollRows();
         applyRowFilters();
         return data;
       } catch (e) {
@@ -829,6 +891,7 @@
       if (!tr) return;
       const filename = tr.getAttribute('data-filename');
       if (!filename) return;
+      currentModalNo = no;
       const modalImg = document.getElementById('modalImg');
       modalImg.src = '';
       modalImg.src = `/results/${JOB_ID}/images/${filename}?t=${Date.now()}`;
@@ -841,11 +904,68 @@
       } catch (e) {
         document.getElementById('modalTerms').textContent = '';
       }
+      populateDiagramEditor(tr);
       document.getElementById('modal').classList.remove('hidden');
+    }
+
+    function populateDiagramEditor(tr) {
+      const editor = document.getElementById('diagramEditor');
+      const route = tr.getAttribute('data-route') || '';
+      if (!editor) return;
+      if (route !== 'diagram' && route !== 'chart') {
+        editor.classList.add('hidden');
+        return;
+      }
+      editor.classList.remove('hidden');
+      let bp = {};
+      try { bp = JSON.parse(tr.getAttribute('data-blueprint') || '{}') || {}; } catch (e) { bp = {}; }
+      let terms = [];
+      try { terms = JSON.parse(tr.getAttribute('data-terms') || '[]') || []; } catch (e) { terms = []; }
+      document.getElementById('modalDiagramStructure').value = bp.structure || 'relationship';
+      document.getElementById('modalDiagramGoal').value = bp.visual_goal || (tr.getAttribute('data-sentence') || '');
+      document.getElementById('modalDiagramLabels').value = (bp.labels && bp.labels.length ? bp.labels : terms).slice(0, 4).join(', ');
+      document.getElementById('modalDiagramRelationships').value = (bp.relationships || []).join('\n');
+      const reason = tr.getAttribute('data-verify-reason') || '';
+      let tags = [];
+      try { tags = JSON.parse(tr.getAttribute('data-verify-tags') || '[]') || []; } catch (e) { tags = []; }
+      document.getElementById('modalVerifyReason').textContent = reason || tags.length ? `要確認: ${[reason].concat(tags).filter(Boolean).join(' / ')}` : '';
+    }
+
+    function applyStructurePreset(structure) {
+      const select = document.getElementById('modalDiagramStructure');
+      const rel = document.getElementById('modalDiagramRelationships');
+      if (select) select.value = structure;
+      const presets = {
+        dependency: '依存する側 → 依存経路/資源 → 支える/支配する側',
+        opposition: '左の主体 ↔ 中央の争点 ↔ 右の主体',
+        timeline: '古い出来事 → 転換点 → 現在の結果',
+        cause_effect: '原因 → 仕組み/変化 → 結果',
+      };
+      if (rel && presets[structure]) rel.value = presets[structure];
+    }
+
+    async function regenerateModalDiagram(ev) {
+      if (ev) ev.stopPropagation();
+      if (!currentModalNo) return;
+      const labels = document.getElementById('modalDiagramLabels').value || '';
+      const opts = {
+        skipPrompt: true,
+        diagramEdit: true,
+        diagramStructure: document.getElementById('modalDiagramStructure').value || 'relationship',
+        diagramVisualGoal: document.getElementById('modalDiagramGoal').value || '',
+        diagramLabels: labels,
+        diagramRelationships: document.getElementById('modalDiagramRelationships').value || '',
+        extraInstruction: 'Apply the editor adjusted blueprint. Improve clarity, label placement, and readability.',
+      };
+      const result = await regenerateSceneWithRoute(currentModalNo, 'diagram', ev, opts);
+      if (result && result.ok) {
+        closeModal();
+      }
     }
     function closeModal(e) {
       if (e && e.target.tagName === 'IMG') return;
       document.getElementById('modal').classList.add('hidden');
+      currentModalNo = null;
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
