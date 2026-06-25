@@ -853,6 +853,7 @@ class SentencePipeline:
                 r["no"],
                 prompt=r.get("prompt", ""),
                 allowed_terms=r.get("allowed_terms", []),
+                diagram_blueprint=r.get("diagram_blueprint", {}),
                 type=r.get("type", "illustration"),
             )
         self._progress(2, "プロンプト生成完了", 35)
@@ -1057,6 +1058,7 @@ class SentencePipeline:
                     "block_text": r.get("block_text", ""),  # 検証の文脈用（前後段落）
                     "keypoint": r.get("sentence", "")[:30],
                     "allowed_terms": r.get("allowed_terms", []),
+                    "diagram_blueprint": r.get("diagram_blueprint", {}),
                     "style": self.style_preset,
                     # キャラ固定: 先生が描かれる illustration のみ参照画像を使う
                     "character": bool(r.get("character", False)) and img_type == "illustration",

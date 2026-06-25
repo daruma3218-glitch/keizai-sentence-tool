@@ -97,6 +97,89 @@ def _limit_allowed_terms(terms: list, sentence: str, max_terms: int = 4) -> list
     return [t for _, _, t in scored[:max_terms]]
 
 
+def _fallback_diagram_blueprint(row: dict, allowed_terms: Optional[list] = None) -> dict:
+    """diagram 用の最低限の設計図。Claude失敗時でもキーワード羅列を避ける。"""
+    sent = row.get("sentence", "")
+    terms = _limit_allowed_terms((allowed_terms or []) + _auto_extract_terms(sent), sent)
+    elements = terms[:3] if terms else ["要点", "背景", "結果"]
+    labels = terms[:4]
+    return {
+        "visual_goal": f"この文の要点を因果または関係性として理解させる: {sent[:80]}",
+        "structure": "cause_effect" if any(w in sent for w in ("ため", "ので", "結果", "背景")) else "relationship",
+        "reading_path": "left-to-right",
+        "elements": elements,
+        "relationships": ["左から右へ、背景・要因・結果を矢印で接続する"],
+        "labels": labels,
+        "forbidden": ["キーワード羅列", "長文説明", "重複文字", "孤立したカード", "詳細地図"],
+    }
+
+
+def _normalize_diagram_blueprint(value, row: dict, allowed_terms: Optional[list] = None) -> dict:
+    """Claudeが返した diagram_blueprint を画像生成で使える小さなJSONに整える。"""
+    if not isinstance(value, dict):
+        return _fallback_diagram_blueprint(row, allowed_terms)
+
+    sent = row.get("sentence", "")
+    terms = _limit_allowed_terms(
+        list(value.get("labels") or []) + list(allowed_terms or []) + _auto_extract_terms(sent),
+        sent,
+    )
+
+    def clean_str(v, default=""):
+        return str(v).strip()[:140] if v is not None and str(v).strip() else default
+
+    def clean_list(v, limit=5):
+        if not isinstance(v, list):
+            return []
+        out = []
+        seen = set()
+        for item in v:
+            s = clean_str(item)
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+            if len(out) >= limit:
+                break
+        return out
+
+    structure = clean_str(value.get("structure"), "relationship")
+    if structure not in ("cause_effect", "comparison", "timeline", "opposition", "dependency", "process", "relationship"):
+        structure = "relationship"
+    reading_path = clean_str(value.get("reading_path"), "left-to-right")
+    if reading_path not in ("left-to-right", "top-to-bottom", "center-out"):
+        reading_path = "left-to-right"
+
+    bp = {
+        "visual_goal": clean_str(value.get("visual_goal")) or _fallback_diagram_blueprint(row, terms)["visual_goal"],
+        "structure": structure,
+        "reading_path": reading_path,
+        "elements": clean_list(value.get("elements"), 5) or (terms[:3] if terms else ["要点", "背景", "結果"]),
+        "relationships": clean_list(value.get("relationships"), 4) or ["要素同士の関係を矢印で接続する"],
+        "labels": terms[:4],
+        "forbidden": clean_list(value.get("forbidden"), 6) or ["キーワード羅列", "長文説明", "重複文字"],
+    }
+    return bp
+
+
+def _blueprint_prompt_fragment(blueprint: dict) -> str:
+    """設計JSONを画像生成プロンプトへ短く埋め込む。"""
+    if not isinstance(blueprint, dict):
+        return ""
+    labels = ", ".join(blueprint.get("labels") or [])
+    elements = "; ".join(blueprint.get("elements") or [])
+    rels = "; ".join(blueprint.get("relationships") or [])
+    forbidden = "; ".join(blueprint.get("forbidden") or [])
+    return (
+        " Diagram blueprint to follow exactly: "
+        f"visual goal = {blueprint.get('visual_goal', '')}; "
+        f"structure = {blueprint.get('structure', '')}; "
+        f"reading path = {blueprint.get('reading_path', '')}; "
+        f"elements = {elements}; relationships = {rels}; "
+        f"allowed label placement uses only these Japanese labels = {labels}; "
+        f"avoid = {forbidden}."
+    )
+
+
 def _build_user_block(user_instructions: str, style_preset: str) -> str:
     blocks = []
     if user_instructions.strip():
@@ -172,15 +255,22 @@ def _fallback_prompt_for_row(row: dict) -> dict:
         "illustration": "Simple flat educational illustration.",
         "decorative": "Minimal neutral educational background.",
     }.get(row_type, "Simple flat educational illustration.")
+    blueprint = _normalize_diagram_blueprint(
+        row.get("diagram_blueprint"),
+        row,
+        auto_terms,
+    ) if row_type == "diagram" else None
     return {
         "no": row["no"],
         "prompt": (
             f"{type_hint} Explain this Japanese sentence visually: {sent[:160]}. "
+            f"{_blueprint_prompt_fragment(blueprint) if blueprint else ''} "
             f"{DIAGRAM_PROMPT_REQUIREMENTS_EN if row_type == 'diagram' else ''} "
             f"{text_rule} 16:9 landscape composition, clean layout, no invented facts."
         ),
         "type": row_type,
         "allowed_terms": auto_terms,
+        "diagram_blueprint": blueprint or {},
         "character": False,
     }
 
@@ -245,6 +335,23 @@ def generate_prompts_batch(
 
 {DIAGRAM_DESIGN_RULES_JA}
 
+【diagram_blueprint（図解設計JSON）】
+type が diagram の項目は、画像プロンプトを書く前に必ず diagram_blueprint を作ること。
+これは図解ツクールのように「何を理解させる図か」を先に固定するための設計図です。
+diagram_blueprint は以下の形式にする:
+{{
+  "visual_goal": "この図で理解させる1つの主張",
+  "structure": "cause_effect | comparison | timeline | opposition | dependency | process | relationship",
+  "reading_path": "left-to-right | top-to-bottom | center-out",
+  "elements": ["3〜5個の構成要素"],
+  "relationships": ["要素同士をどう結ぶか。矢印・対比・依存など"],
+  "labels": ["画像内に置く短い日本語ラベル。allowed_terms と同じ語だけ"],
+  "forbidden": ["避ける表現。例: キーワード羅列, 長文説明, 重複文字"]
+}}
+diagram の prompt は必ずこの blueprint に沿って書くこと。
+prompt 内にも visual goal / reading path / 3-5 connected elements / relationship / label placement を具体的に含めること。
+type が diagram 以外の項目では diagram_blueprint は空オブジェクト {{}} にする。
+
 【最重要: type 別の描き方】
 - **realphoto**: 実写写真。"photorealistic documentary photograph, real photo, natural lighting,
   realistic textures, cinematic" を必ず含める。**フラット/アイコン/イラストには絶対しない**。
@@ -308,6 +415,7 @@ def generate_prompts_batch(
     "prompt": "英語プロンプト（スタイル指示・テキスト制約を必ず含む）",
     "type": "illustration | realphoto | map | diagram | chart | decorative",
     "allowed_terms": ["積極的に抽出した語"],
+    "diagram_blueprint": {{}} または上記形式の設計JSON,
     "character": true または false（ルール5。固定キャラ＝先生/教授/解説役が描かれる illustration のみ true）
   }},
   ...
@@ -359,22 +467,40 @@ def generate_prompts_batch(
                 p["type"] = "illustration"
             # character フラグは illustration のときだけ有効（図表/写真/地図/装飾では必ず False）
             p["character"] = bool(p.get("character", False)) and p["type"] == "illustration"
+            if p["type"] == "diagram":
+                bp = _normalize_diagram_blueprint(p.get("diagram_blueprint"), r, p["allowed_terms"])
+                p["diagram_blueprint"] = bp
+                fragment = _blueprint_prompt_fragment(bp)
+                if fragment and "Diagram blueprint to follow exactly" not in p.get("prompt", ""):
+                    p["prompt"] = f"{p.get('prompt', '')} {fragment}"
+            else:
+                p["diagram_blueprint"] = {}
             merged.append(p)
         else:
             # フォールバック
             short = sent[:80]
+            row_type = r.get("route") or r.get("type") or "decorative"
+            bp = _fallback_diagram_blueprint(r, auto_terms) if row_type == "diagram" else {}
+            fallback_terms = _limit_allowed_terms(auto_terms, sent)
+            fallback_text_rule = (
+                f"Insert only these Japanese labels: {', '.join(fallback_terms)}. Do NOT add any other text."
+                if fallback_terms else
+                "No text in image, no labels, no numbers."
+            )
             fallback_prompt = (
                 f"Flat infographic explaining: {short}. "
                 "Simple icons, 2-3 flat colors (navy blue, white, light gray). "
                 "Bold layout. No metaphors. "
-                "No text in image, no labels, no numbers. "
+                f"{_blueprint_prompt_fragment(bp) if bp else ''} "
+                f"{fallback_text_rule} "
                 "16:9 landscape orientation, no title text."
             )
             merged.append({
                 "no": no,
                 "prompt": fallback_prompt,
-                "type": "decorative",
-                "allowed_terms": _limit_allowed_terms(auto_terms, sent),
+                "type": row_type if row_type in ("illustration", "realphoto", "map", "diagram", "chart", "decorative") else "decorative",
+                "allowed_terms": fallback_terms,
+                "diagram_blueprint": bp,
                 "character": False,
             })
     return merged
@@ -397,7 +523,9 @@ def generate_all_prompts(
     for i in range(0, len(rows), BATCH_SIZE):
         batches.append(rows[i:i + BATCH_SIZE])
 
+    diagram_count = sum(1 for r in rows if (r.get("route") or r.get("type")) == "diagram")
     log("prompter", f"{len(rows)} センテンスを {len(batches)} バッチに分割（同時 {max_workers} 並列）/ style={style_preset}"
+                    + (f"／図解設計JSON {diagram_count} 件" if diagram_count else "")
                     + ("／世界観統一ON" if worldview_desc.strip() else ""))
 
     prompts_by_no = {}
@@ -450,6 +578,7 @@ def generate_all_prompts(
         merged_row["prompt"] = p.get("prompt", "")
         merged_row["type"] = p.get("type", "illustration")
         merged_row["allowed_terms"] = p.get("allowed_terms", [])
+        merged_row["diagram_blueprint"] = p.get("diagram_blueprint", {})
         merged_row["character"] = bool(p.get("character", False))  # キャラ固定フラグを引き継ぐ
         out_rows.append(merged_row)
 

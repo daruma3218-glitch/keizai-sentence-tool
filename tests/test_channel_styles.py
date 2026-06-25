@@ -2,7 +2,12 @@ from pathlib import Path
 
 from app import get_channel
 from pipeline import SentencePipeline, VALID_STYLES
-from prompter import _build_user_block, _fallback_prompt_for_row, _limit_allowed_terms
+from prompter import (
+    _build_user_block,
+    _fallback_prompt_for_row,
+    _limit_allowed_terms,
+    _normalize_diagram_blueprint,
+)
 from generator import _build_full_prompt
 
 
@@ -246,3 +251,31 @@ def test_diagram_prompts_require_readable_visual_argument():
     assert "rounded backing shapes" in final_prompt
     assert "one visual goal" in fallback["prompt"]
     assert "reading path" in fallback["prompt"]
+    assert fallback["diagram_blueprint"]["visual_goal"]
+    assert "Diagram blueprint to follow exactly" in fallback["prompt"]
+
+
+def test_diagram_blueprint_filters_labels_to_source_sentence():
+    row = {
+        "no": 1,
+        "route": "diagram",
+        "sentence": "ベラルーシはロシアへの経済依存を深めました。",
+    }
+    bp = _normalize_diagram_blueprint(
+        {
+            "visual_goal": "依存関係を示す",
+            "structure": "dependency",
+            "reading_path": "left-to-right",
+            "elements": ["ベラルーシ", "ロシア", "経済依存"],
+            "relationships": ["ベラルーシからロシアへ依存の矢印"],
+            "labels": ["ベラルーシ", "ロシア", "NATO"],
+            "forbidden": ["キーワード羅列"],
+        },
+        row,
+        allowed_terms=["ベラルーシ", "ロシア", "経済依存"],
+    )
+    assert bp["structure"] == "dependency"
+    assert bp["reading_path"] == "left-to-right"
+    assert "ベラルーシ" in bp["labels"]
+    assert "ロシア" in bp["labels"]
+    assert "NATO" not in bp["labels"]
