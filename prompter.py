@@ -69,6 +69,48 @@ DIAGRAM_STRUCTURE_TEMPLATES = {
 }
 
 
+ROSHIA_KAIZEN_BLOCK_JA = """【ロシア解体新書: カイゼン品質ゲート】
+日本的な制作カイゼンとして、diagram は次の標準作業で設計する:
+- 整理: 1枚1主張。装飾、曖昧な背景、意味の薄いアイコンを削る
+- 整頓: 左→右または中心→周辺に並べ、ラベルと矢印だけで内容が追える配置にする
+- 標準化: 地政学・歴史・政策は下の型から最も近いものを選ぶ
+- ポカヨケ: 日本地図、日本列島、円マーク、東京、日本風の街並み、可愛い表情、動物寓意を出さない
+- アンドン: うまく型に入らない時は、無理に複雑化せず「3ノードの関係図」に落とす
+
+ロシア解体新書で優先する図解型:
+- 従属関係図: 周辺国 → 軍事/エネルギー/通貨/情報 → ロシア
+- 緩衝地帯図: ロシア中心 → 周辺圏 → NATO/欧米側圧力
+- 帝国拡張/縮小図: 過去 → 転換点 → 現在
+- 資源依存図: 供給源 → パイプライン/輸送路 → 依存先
+- 制裁回避/迂回図: 制裁 → 迂回ルート → 影響
+- 国内統治構造図: 権力中枢 → 治安/メディア/制度 → 社会
+- 選択肢消失図: 選択肢A/B/Cが狭まり、最後に依存または衝突へ収束
+"""
+
+
+def _is_roshia_instruction(user_instructions: str) -> bool:
+    text = user_instructions or ""
+    return "ロシア解体新書" in text or "ロシア・旧ソ連" in text or "Russia, the USSR" in text
+
+
+def _infer_diagram_structure(sentence: str) -> str:
+    """文面から図解の既定構造を少し賢く選ぶ。"""
+    s = sentence or ""
+    if any(w in s for w in ("依存", "支援", "従属", "影響下", "結びつけ", "パイプライン", "通貨", "供給")):
+        return "dependency"
+    if any(w in s for w in ("対立", "戦争", "侵攻", "圧力", "制裁", "NATO", "欧米", "反発")):
+        return "opposition"
+    if len(re.findall(r'\d{3,4}年', s)) >= 1 or any(w in s for w in ("以降", "その後", "崩壊", "成立", "転換")):
+        return "timeline"
+    if any(w in s for w in ("ため", "ので", "結果", "背景", "原因", "なぜ")):
+        return "cause_effect"
+    if any(w in s for w in ("比較", "一方", "対して", "より", "違い")):
+        return "comparison"
+    if any(w in s for w in ("手順", "流れ", "プロセス", "段階")):
+        return "process"
+    return "relationship"
+
+
 def _auto_extract_terms(sentence: str) -> list:
     """センテンスから安全な語句を自動抽出（Claude の補完用）"""
     terms = []
@@ -114,9 +156,10 @@ def _fallback_diagram_blueprint(row: dict, allowed_terms: Optional[list] = None)
     terms = _limit_allowed_terms((allowed_terms or []) + _auto_extract_terms(sent), sent)
     elements = terms[:3] if terms else ["要点", "背景", "結果"]
     labels = terms[:4]
+    structure = _infer_diagram_structure(sent)
     bp = {
         "visual_goal": f"この文の要点を因果または関係性として理解させる: {sent[:80]}",
-        "structure": "cause_effect" if any(w in sent for w in ("ため", "ので", "結果", "背景")) else "relationship",
+        "structure": structure,
         "reading_path": "left-to-right",
         "elements": elements,
         "relationships": ["左から右へ、背景・要因・結果を矢印で接続する"],
@@ -155,7 +198,7 @@ def _normalize_diagram_blueprint(value, row: dict, allowed_terms: Optional[list]
                 break
         return out
 
-    structure = clean_str(value.get("structure"), "relationship")
+    structure = clean_str(value.get("structure"), _infer_diagram_structure(sent))
     if structure not in ("cause_effect", "comparison", "timeline", "opposition", "dependency", "process", "relationship"):
         structure = "relationship"
     reading_path = clean_str(value.get("reading_path"), "left-to-right")
@@ -324,6 +367,7 @@ def generate_prompts_batch(
 ) -> list:
     """1 バッチのセンテンスを英文プロンプト化"""
     user_block = _build_user_block(user_instructions, style_preset)
+    kaizen_block = f"\n\n{ROSHIA_KAIZEN_BLOCK_JA}" if _is_roshia_instruction(user_instructions) else ""
     # 世界観・キャラ統一の指示（illustration/diagram/decorative に適用）
     worldview_block = ""
     if worldview_desc.strip():
@@ -371,7 +415,7 @@ def generate_prompts_batch(
 入力（type=その項目の描画種別。near_context は設計判断用の前後文脈。画像内ラベルは sentence / allowed_terms 由来に限定）:
 {inputs_json}
 
-{user_block}{worldview_block}
+{user_block}{kaizen_block}{worldview_block}
 
 {DIAGRAM_DESIGN_RULES_JA}
 

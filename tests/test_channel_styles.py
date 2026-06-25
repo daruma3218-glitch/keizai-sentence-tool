@@ -5,6 +5,7 @@ from pipeline import SentencePipeline, VALID_STYLES
 from prompter import (
     _build_user_block,
     _fallback_prompt_for_row,
+    _is_roshia_instruction,
     _limit_allowed_terms,
     _normalize_diagram_blueprint,
 )
@@ -76,6 +77,8 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert "冒頭10文" in defaults["user_instructions"]
     assert "YouTubeの教養チャンネル" in defaults["user_instructions"]
     assert "位置関係図解" in defaults["user_instructions"]
+    assert "日本的なカイゼン" in defaults["user_instructions"]
+    assert "ポカヨケ" in defaults["user_instructions"]
     assert "短いラベル付きインフォグラフィック" in defaults["user_instructions"]
     assert "1〜4語まで使用してよい" in defaults["user_instructions"]
     assert "可愛い" in defaults["user_instructions"]
@@ -253,6 +256,18 @@ def test_diagram_prompts_require_readable_visual_argument():
     assert "reading path" in fallback["prompt"]
     assert fallback["diagram_blueprint"]["visual_goal"]
     assert "Diagram blueprint to follow exactly" in fallback["prompt"]
+
+
+def test_roshia_kaizen_profile_is_detected_and_infers_dependency():
+    defaults = get_channel("roshia").get("defaults", {})
+    assert _is_roshia_instruction(defaults["user_instructions"])
+    fallback = _fallback_prompt_for_row({
+        "no": 1,
+        "route": "diagram",
+        "sentence": "ベラルーシはロシアへの経済依存を深めました。",
+    })
+    assert fallback["diagram_blueprint"]["structure"] == "dependency"
+    assert "dependent side" in fallback["diagram_blueprint"]["template"]
 
 
 def test_diagram_blueprint_filters_labels_to_source_sentence():
