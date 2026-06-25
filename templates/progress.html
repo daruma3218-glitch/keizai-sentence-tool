@@ -411,6 +411,12 @@
       return raw.trim() || `章 ${row.chapter_index || 1}`;
     }
 
+    function blockDownloadLink(row) {
+      const ch = row.chapter_index ?? 1;
+      const block = row.block_index ?? 0;
+      return `<a href="/download/block/${JOB_ID}/${encodeURIComponent(ch)}/${encodeURIComponent(block)}" class="inline-flex items-center mt-1 px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-700 text-[10px] hover:bg-cyan-100" title="このブロックだけ画像・CSV・結合用manifestをZIPでダウンロード">ZIP</a>`;
+    }
+
     function chapterStats(rows) {
       const map = new Map();
       rows.forEach(row => {
@@ -573,7 +579,8 @@
       const isFirstInBlock = row.sentence_index === 0;
       const isFirstInChapter = isFirstInBlock && row.block_index === 0;
       const chapter = isFirstInChapter ? escapeHtml(row.chapter_title || '') : '';
-      const block = isFirstInBlock ? escapeHtml(row.block_text || '').substring(0, 80) + (row.block_text && row.block_text.length > 80 ? '...' : '') : '';
+      const blockLabel = escapeHtml(row.block_text || '').substring(0, 80) + (row.block_text && row.block_text.length > 80 ? '...' : '');
+      const block = isFirstInBlock ? `${blockLabel}<br>${blockDownloadLink(row)}` : '';
       const borderClass = isFirstInChapter ? 'border-t-2 border-t-cyan-300' : (isFirstInBlock ? 'border-t border-t-gray-200' : '');
       const attrs = rowDataAttrs(row);
       return `

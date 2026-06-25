@@ -7,6 +7,7 @@
 
 import functools
 import io
+import csv
 import json
 import os
 import secrets
@@ -142,6 +143,10 @@ def _safe_job_dir(job_id: str):
     except ValueError:
         return None
     return job_dir
+
+
+def _safe_download_name(text: str, fallback: str = "download") -> str:
+    return "".join(c for c in (text or "") if c not in r'\/:*?"<>|').strip()[:50] or fallback
 
 
 # ====== 認証 ======
@@ -1268,6 +1273,127 @@ def download_csv(job_id):
     )
 
 
+def _rows_for_download(result_dir: Path) -> list:
+    manifest = load_json(result_dir / "manifest.json", {})
+    rows = manifest.get("rows") or []
+    if rows:
+        return rows
+    return load_json(result_dir / "rows_progress.json", {"rows": []}).get("rows", [])
+
+
+def _write_rows_csv_to_zip(zf: zipfile.ZipFile, rows: list, arcname: str):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["章", "ブロック", "センテンス", "№", "ビート", "推定開始", "ソース",
+                "エンジン", "重要度", "表示", "画像", "URL", "URL種別", "ライセンス", "クレジット"])
+    route_labels = getattr(SentencePipeline, "ROUTE_LABELS", {})
+    disp = {"image": "画像", "hold": "継続", "none": "なし"}
+    for r in rows:
+        w.writerow([
+            r.get("chapter_title", "") if r.get("sentence_index") == 0 else "",
+            r.get("block_text", "") if r.get("sentence_index") == 0 else "",
+            r.get("sentence", ""),
+            r.get("no", ""),
+            "" if r.get("beat_id") is None else r.get("beat_id"),
+            r.get("est_start", "") or "",
+            route_labels.get(r.get("route", ""), r.get("route", "")),
+            r.get("engine", "") or "",
+            r.get("importance", "") or "",
+            disp.get(r.get("display", ""), "画像" if r.get("filename") else ""),
+            r.get("filename", "") or r.get("web_local_file", "") or "",
+            r.get("web_source_url", "") or r.get("commons_page_url", "") or "",
+            r.get("web_source_type", "") or "",
+            r.get("license", "") or "",
+            r.get("attribution", "") or "",
+        ])
+    zf.writestr(arcname, "\ufeff" + buf.getvalue())
+
+
+def _send_temp_zip(tmp_path: str, download_name: str):
+    resp = send_file(
+        tmp_path,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=download_name,
+    )
+
+    @resp.call_on_close
+    def _cleanup():
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    return resp
+
+
+@app.route("/download/block/<job_id>/<int:chapter_index>/<int:block_index>")
+@login_required
+def download_block_zip(job_id, chapter_index, block_index):
+    """指定ブロックの画像 + CSV + manifest をZIPでダウンロード。後工程で結合しやすい単位。"""
+    result_dir = _safe_job_dir(job_id)
+    if not result_dir or not result_dir.exists():
+        return "結果が見つかりません", 404
+
+    rows = [
+        r for r in _rows_for_download(result_dir)
+        if int(r.get("chapter_index") or 0) == chapter_index
+        and int(r.get("block_index") or 0) == block_index
+    ]
+    if not rows:
+        return "ブロックが見つかりません", 404
+
+    manifest = load_json(result_dir / "manifest.json", {})
+    title = manifest.get("title", job_id)
+    safe_title = _safe_download_name(title, job_id)
+    block_title = (rows[0].get("block_text") or f"block_{block_index + 1}").strip()
+    safe_block = _safe_download_name(block_title, f"block_{block_index + 1}")
+    prefix = f"ch{chapter_index:02d}_block{block_index + 1:03d}"
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(prefix=f"{job_id}_{prefix}_", suffix=".zip", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+
+    image_names = []
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+        images_dir = result_dir / "images"
+        for r in rows:
+            for key in ("filename", "web_local_file"):
+                fname = r.get(key) or ""
+                if not fname:
+                    continue
+                img = images_dir / Path(str(fname)).name
+                if img.exists() and img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                    arc = f"images/{img.name}"
+                    if arc not in image_names:
+                        zf.write(img, arc)
+                        image_names.append(arc)
+
+        _write_rows_csv_to_zip(zf, rows, "block.csv")
+        zf.writestr("block_manifest.json", json.dumps({
+            "job_id": job_id,
+            "title": title,
+            "chapter_index": chapter_index,
+            "block_index": block_index,
+            "block_order_key": prefix,
+            "block_title": block_title,
+            "sentence_nos": [r.get("no") for r in rows],
+            "image_files": image_names,
+            "merge_hint": "Sort blocks by block_order_key, then concatenate rows/images in sentence_nos order.",
+        }, ensure_ascii=False, indent=2))
+        zf.writestr("README.txt", (
+            "このZIPはセンテンスつくーるのブロック単位出力です。\n"
+            "後で結合する場合は block_manifest.json の block_order_key 順に並べ、"
+            "block.csv と images/ を結合してください。\n"
+        ))
+
+    return _send_temp_zip(
+        tmp_path,
+        f"{safe_title}_{job_id}_{prefix}_{safe_block}.zip",
+    )
+
+
 @app.route("/download/<job_id>")
 @login_required
 def download_zip(job_id):
@@ -1278,7 +1404,7 @@ def download_zip(job_id):
 
     manifest = load_json(result_dir / "manifest.json", {})
     title = manifest.get("title", job_id)
-    safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip()[:50] or job_id
+    safe_title = _safe_download_name(title, job_id)
 
     # ZIP はメモリ(BytesIO)ではなく一時ファイルに書き出す。
     # 大量画像(100枚超)を BytesIO に展開すると Render Free(512MB)で
@@ -1302,22 +1428,7 @@ def download_zip(job_id):
             if p.exists():
                 zf.write(p, arc)
 
-    resp = send_file(
-        tmp_path,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{safe_title}_{job_id}.zip",
-    )
-
-    # 送信完了後に一時ファイルを削除
-    @resp.call_on_close
-    def _cleanup():
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-
-    return resp
+    return _send_temp_zip(tmp_path, f"{safe_title}_{job_id}.zip")
 
 
 if __name__ == "__main__":
