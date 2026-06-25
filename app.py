@@ -358,6 +358,8 @@ def index():
     past_jobs = []
     if OUTPUT_DIR.exists():
         for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
+            if len(past_jobs) >= 30:
+                break
             if not d.is_dir():
                 continue
             manifest = load_json(d / "manifest.json", {})
