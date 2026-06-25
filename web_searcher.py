@@ -120,10 +120,15 @@ def _youtube_thumbnail_url(url: str) -> str:
     return ""
 
 
+def _is_youtube_url(url: str) -> bool:
+    u = (url or "").lower()
+    return "youtube.com" in u or "youtu.be" in u
+
+
 def _source_type(url: str, title: str = "") -> str:
     u = (url or "").lower()
     t = (title or "").lower()
-    if "youtube.com" in u or "youtu.be" in u:
+    if _is_youtube_url(u):
         return "youtube"
     if any(x in u for x in ("ted.com", "vimeo.com", "coursera.org")):
         return "video"
@@ -162,8 +167,8 @@ def _select_chunk(
     primary_media = profile == "primary_media"
     if primary_media:
         system = (
-            "あなたはYouTube動画制作向けの素材リサーチャーです。"
-            "原稿センテンスから、一次情報・記事・実在人物写真・登壇動画・講演動画・公式資料を"
+            "あなたは動画制作向けの素材リサーチャーです。"
+            "原稿センテンスから、一次情報・記事・実在人物写真・講演資料・公式資料を"
             "Web検索で探す価値が高いものを選びます。結果は必ず JSON 配列のみで返してください。"
         )
         criteria = """【選定基準（成功の法則向け・一次情報/実写素材を広く採用）】
@@ -171,14 +176,15 @@ def _select_chunk(
 - 企業名、商品名、サービス名、ブランド名、実在プロジェクト
 - 書籍、論文、研究、統計、調査、大学、研究機関、政府機関
 - 公式発表、プレスリリース、年次報告書、IR資料、講演資料
-- YouTube/TED/大学/企業イベント等の登壇・講演・インタビュー動画
+- 大学・企業イベント等の講演ページ、登壇記事、インタビュー記事（YouTube は除外）
 - 実際の職場、会議、店舗、製造現場、学校、スポーツ現場などリアル画像が効く文
 - 抽象概念でも、具体的な人物・事例・企業・本・研究に結びつけて素材化できる文
 
 【検索クエリ方針】
-- 可能なら「公式」「講演」「登壇」「インタビュー」「YouTube」「TED」「論文」「統計」
+- 可能なら「公式」「講演」「登壇」「インタビュー」「論文」「統計」
   「年次報告書」「プレスリリース」「大学」「政府」「原典」を含める
 - 人物名・企業名・書籍名など固有名詞を優先
+- YouTube / youtu.be は検索対象・採用対象から除外
 """
     else:
         system = (
@@ -387,15 +393,16 @@ def search_single_sentence(
     primary_media = profile == "primary_media"
     if primary_media:
         system = (
-            "あなたはYouTube動画制作向けの素材リサーチャーです。"
-            "記事、公式資料、一次情報、実在人物の写真、講演・登壇動画を探します。"
-            "公式サイト、大学・政府・企業IR、論文、プレスリリース、本人/公式YouTube、TED等を優先してください。"
+            "あなたは動画制作向けの素材リサーチャーです。"
+            "記事、公式資料、一次情報、実在人物の写真、講演ページ・登壇記事を探します。"
+            "公式サイト、大学・政府・企業IR、論文、プレスリリース、公式プロフィール等を優先してください。"
+            "YouTube / youtu.be は検索対象・採用対象から必ず除外してください。"
         )
         priority = (
             "- 公式サイト、企業IR、年次報告書、プレスリリース、政府/大学/研究機関、論文、統計など一次情報を最優先\n"
-            "- 実在人物が出る場合は、本人公式サイト・Wikipedia/Wikimedia・公式プロフィール・講演ページ・YouTube登壇動画を優先\n"
-            "- YouTubeは本人/企業/大学/TED/公式カンファレンス等の公式・準公式チャンネルを優先\n"
-            "- 記事だけでなく、動画・講演・インタビュー・登壇資料も候補に含める\n"
+            "- 実在人物が出る場合は、本人公式サイト・Wikipedia/Wikimedia・公式プロフィール・講演ページを優先\n"
+            "- 記事だけでなく、講演ページ・インタビュー記事・登壇資料も候補に含める\n"
+            "- YouTube / youtu.be のURLは採用しない\n"
             "- ゴシップ、まとめサイト、無断転載、出典不明サムネイルは避ける\n"
         )
     else:
@@ -413,7 +420,8 @@ def search_single_sentence(
 
 【最重要】
 - 必ず Web 検索を実行すること
-- 画像・記事・一次資料・登壇動画・インタビュー動画のうち、動画素材制作に使いやすいものを優先
+- 画像・記事・一次資料・講演ページ・インタビュー記事のうち、動画素材制作に使いやすいものを優先
+- YouTube / youtu.be は採用しない
 {priority}
 - 数件で OK。最も信頼性の高い 1 件を選んで返す
 
@@ -425,10 +433,12 @@ def search_single_sentence(
     best_url = ""
     best_title = ""
     if primary_media:
-        # 一次情報・公式動画・研究/公式資料を優先
-        priority_types = ("youtube", "official", "research", "company", "video", "encyclopedia", "article")
+        # 一次情報・研究/公式資料を優先。YouTube はユーザー方針で除外。
+        priority_types = ("official", "research", "company", "video", "encyclopedia", "article")
         for typ in priority_types:
             for u in urls:
+                if _is_youtube_url(u.get("url", "")):
+                    continue
                 if _source_type(u.get("url", ""), u.get("title", "")) == typ:
                     best_url = u["url"]
                     best_title = u["title"]
@@ -437,23 +447,27 @@ def search_single_sentence(
                 break
     else:
         for u in urls:
+            if _is_youtube_url(u.get("url", "")):
+                continue
             # Wikipedia 優先
             if "wikipedia.org" in u["url"]:
                 best_url = u["url"]
                 best_title = u["title"]
                 break
     if not best_url and urls:
-        best_url = urls[0]["url"]
-        best_title = urls[0]["title"]
+        for u in urls:
+            if _is_youtube_url(u.get("url", "")):
+                continue
+            best_url = u["url"]
+            best_title = u["title"]
+            break
 
     source_type = _source_type(best_url, best_title)
 
-    # サムネイル取得（Wikipedia / YouTube）
+    # サムネイル取得（Wikipedia）
     thumb_url = ""
     if "wikipedia.org/wiki/" in best_url:
         thumb_url = _wikipedia_image_url(best_url)
-    elif source_type == "youtube":
-        thumb_url = _youtube_thumbnail_url(best_url)
 
     return {
         "no": no,
