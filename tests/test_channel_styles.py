@@ -49,6 +49,7 @@ def test_seikou_channel_uses_dedicated_api_prefix():
     assert defaults["provider"] == "nanobanana"
     assert defaults["chart_engine"] == "render"
     assert defaults["map_engine"] == "render"
+    assert defaults["allow_maps"] is False
     assert defaults["web_image_count"] == 60
     assert defaults["web_search_profile"] == "primary_media"
     assert "一次情報" in defaults["user_instructions"]
@@ -58,6 +59,7 @@ def test_seikou_channel_uses_dedicated_api_prefix():
 def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     defaults = get_channel("roshia").get("defaults", {})
     assert defaults["allow_charts"] is False
+    assert defaults["allow_maps"] is False
     assert defaults["intro_visual_boost"] == 10
     assert defaults["map_route_limit"] == 8
     assert defaults["realistic_route_min"] == 35
@@ -68,7 +70,7 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert "円マーク" in defaults["user_instructions"]
     assert "冒頭10文" in defaults["user_instructions"]
     assert "YouTubeの教養チャンネル" in defaults["user_instructions"]
-    assert "地図は多用しない" in defaults["user_instructions"]
+    assert "位置関係図解" in defaults["user_instructions"]
     assert "短いラベル付きインフォグラフィック" in defaults["user_instructions"]
     assert "1〜4語まで使用してよい" in defaults["user_instructions"]
     assert "可愛い" in defaults["user_instructions"]
@@ -106,11 +108,12 @@ def test_intro_visual_boost_prefers_realistic_opening(tmp_path):
     assert routes[4]["route"] == "diagram"
 
 
-def test_intro_visual_boost_uses_map_only_for_explicit_geography(tmp_path):
+def test_intro_visual_boost_uses_diagram_for_explicit_geography_when_maps_disabled(tmp_path):
     pipe = SentencePipeline(
         "dummy",
         tmp_path,
         intro_visual_boost=1,
+        allow_maps=False,
         verify_diagrams=False,
     )
     rows = [
@@ -119,13 +122,33 @@ def test_intro_visual_boost_uses_map_only_for_explicit_geography(tmp_path):
     routes = {1: {"route": "diagram", "importance": 3}}
     changed = pipe._apply_intro_visual_boost(rows, routes)
     assert changed == 1
-    assert routes[1]["route"] == "map"
+    assert routes[1]["route"] == "diagram"
+
+
+def test_disable_map_routes_converts_maps_to_relationship_diagrams(tmp_path):
+    pipe = SentencePipeline(
+        "dummy",
+        tmp_path,
+        allow_maps=False,
+        verify_diagrams=False,
+    )
+    rows = [
+        {"no": 1, "sentence": "ロシア軍はベラルーシ経由で進軍しました。", "block_text": ""},
+    ]
+    routes = {1: {"route": "map", "importance": 3}}
+    changed = pipe._disable_map_routes(rows, routes)
+    assert changed == 1
+    assert routes[1]["route"] == "diagram"
+    assert routes[1]["engine"] == "ai"
+    assert "位置関係" in routes[1]["reason"]
+    assert "no map outlines" in routes[1]["visual_hint"]
 
 
 def test_map_route_limit_converts_extra_maps_to_realphoto(tmp_path):
     pipe = SentencePipeline(
         "dummy",
         tmp_path,
+        allow_maps=True,
         map_route_limit=2,
         verify_diagrams=False,
     )

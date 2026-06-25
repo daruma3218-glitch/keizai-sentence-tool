@@ -206,7 +206,7 @@ def generate_prompts_batch(
 ---
 {worldview_desc.strip()}
 ---
-※ realphoto（実写）・map（衛星地図）・chart（グラフ）にはこの世界観を適用しない（実写・地図・数値はそのまま）。
+※ realphoto（実写）・chart（グラフ）にはこの世界観を適用しない（実写・数値はそのまま）。
 ※ 人物が登場する illustration では必ず上のキャラクター設定の人物を使う。"""
 
     # Claude に渡す入力 + 自動抽出済み terms をヒントとして同梱
@@ -223,6 +223,7 @@ def generate_prompts_batch(
             "block_context": r.get("block_text", "")[:400],
             "sentence": sent,
             "auto_extracted_terms": hints,  # ヒント
+            "visual_hint": r.get("visual_hint", ""),
         })
     inputs_json = json.dumps(inputs, ensure_ascii=False, indent=2)
 
@@ -254,6 +255,8 @@ def generate_prompts_batch(
 - **map**: リアルな衛星・地形図。"realistic satellite map, terrain, natural earth colors" を含める。
   フラットな地図にはしない。上で指定したグラフィックスタイルは map には適用しないこと。
 - **illustration / diagram / chart / decorative**: 上で指定したグラフィックスタイルに従って描く。
+- visual_hint がある項目は必ず従う。特に「no map outlines」とある場合は、地図・国境線の細密描写ではなく、
+  矢印・領域ブロック・回廊・短いラベルで位置関係を説明するシンプルな図解にする。
 
 【最重要ルール】
 1. プロンプトは英語で書く
@@ -293,6 +296,7 @@ def generate_prompts_batch(
   地形の起伏（レリーフシェーディング）も表現する。対象の国・地域は半透明の色で塗り分け、
   国境は細い線で示す。Google Earth / NASA衛星画像 / ナショナルジオグラフィック品質を目指す。
 - diagram: 概念図・フロー図（アイコン + 矢印 + ラベル）。キーワード羅列ではなく、因果・比較・流れ・関係性で見せる。
+  地理・領土・ルート・勢力圏を扱う場合も、詳細地図ではなく、矢印・領域ブロック・回廊・短いラベルの位置関係図解にする。
   prompt 内に必ず「visual goal」「reading path」「3-5 connected elements」「relationship between elements」「allowed label placement」を英語で具体的に書く
 - chart: 数値比較（棒グラフ・円グラフ・大きな数字）。チャンネル指示でグラフ禁止の場合は diagram として扱う
 - decorative: 接続詞・挨拶・抽象表現（背景パターン）

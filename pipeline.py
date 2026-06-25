@@ -60,7 +60,8 @@ class SentencePipeline:
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
         allow_charts: bool = True,         # False: chart route を diagram に変換する
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
-        intro_visual_boost: int = 0,       # 冒頭N文は実写/地図を優先
+        allow_maps: bool = True,           # False: map route を地理関係の図解に変換する
+        intro_visual_boost: int = 0,       # 冒頭N文は実写/Web写真/図解を優先
         map_route_limit: int = 0,          # 0なら無制限。超過したmapはrealphotoへ寄せる
         realistic_route_min: int = 0,      # web_photo + realphoto を最低何件まで増やすか
         no_image_text: bool = False,       # True: AI図解/イラストの allowed_terms を空にする
@@ -102,6 +103,7 @@ class SentencePipeline:
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
         self.allow_charts = bool(allow_charts)
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
+        self.allow_maps = bool(allow_maps)
         self.intro_visual_boost = max(0, min(int(intro_visual_boost or 0), 30))
         self.map_route_limit = max(0, min(int(map_route_limit or 0), 60))
         self.realistic_route_min = max(0, min(int(realistic_route_min or 0), 180))
@@ -134,9 +136,9 @@ class SentencePipeline:
         self._rows_lock = threading.Lock()
 
     def _apply_intro_visual_boost(self, rows: list, routes: dict) -> int:
-        """冒頭だけ視聴維持優先で、実写/地図に寄せる。
+        """冒頭だけ視聴維持優先で、実写/Web写真/図解に寄せる。
 
-        図解で説明に入る前に、実写・Web写真・地図で「現実の話」感を出すための補正。
+        図解で説明に入る前に、実写・Web写真で「現実の話」感を出すための補正。
         内容のない繋ぎも、冒頭では薄い実写背景として使えるようにする。
         """
         if self.intro_visual_boost <= 0:
@@ -156,12 +158,12 @@ class SentencePipeline:
             no = r["no"]
             rt = routes.get(no, {})
             current = rt.get("route", "")
-            if current in ("web_photo", "realphoto", "map"):
+            if current in ("web_photo", "realphoto") or (self.allow_maps and current == "map"):
                 continue
             text = f"{r.get('chapter_title','')} {r.get('block_text','')} {r.get('sentence','')}"
             compact = text.replace(" ", "")
             if any(w in compact for w in map_words):
-                new_route = "map"
+                new_route = "map" if self.allow_maps else "diagram"
             elif any(w in compact for w in web_words):
                 new_route = "web_photo"
             elif current in ("skip", "diagram", "illustration", "chart") or any(w in compact for w in physical_words):
@@ -171,7 +173,7 @@ class SentencePipeline:
             routes[no] = {
                 **rt,
                 "route": new_route,
-                "reason": f"冒頭{self.intro_visual_boost}文は実写/地図優先",
+                "reason": f"冒頭{self.intro_visual_boost}文は実写/Web写真/図解優先",
                 "search_query": (r.get("sentence", "") or "")[:30] if new_route == "web_photo" else "",
                 "topic": (r.get("sentence", "") or "")[:18] if new_route == "web_photo" else "",
                 "importance": max(3, int(rt.get("importance", 3) or 3)),
@@ -181,8 +183,42 @@ class SentencePipeline:
         if changed:
             self._log(
                 "router",
-                f"冒頭実写ブースト: {changed} 件を実写/Web写真/地図へ補正",
+                f"冒頭実写ブースト: {changed} 件を実写/Web写真/図解へ補正",
                 f"intro_visual_boost={self.intro_visual_boost}"
+            )
+        return changed
+
+    def _disable_map_routes(self, rows: list, routes: dict) -> int:
+        """map を使わず、位置関係を説明するシンプルな図解へ変換する。"""
+        if self.allow_maps:
+            return 0
+        changed = 0
+        row_by_no = {r["no"]: r for r in rows}
+        for no, rt in routes.items():
+            if rt.get("route") != "map":
+                continue
+            row = row_by_no.get(no, {})
+            rt["route"] = "diagram"
+            rt["engine"] = "ai"
+            rt["reason"] = "地図なし設定: 位置関係・ルート・勢力圏をシンプル図解で表現"
+            rt["visual_hint"] = (
+                "Use a clean relationship/route diagram instead of a geographic map: "
+                "boxes, arrows, region labels, corridors, and influence zones; no map outlines."
+            )
+            changed += 1
+            self._update_row(
+                no,
+                route="diagram",
+                engine="ai",
+                route_reason=rt["reason"],
+                visual_hint=rt["visual_hint"],
+                sentence=row.get("sentence", ""),
+            )
+        if changed:
+            self._log(
+                "router",
+                f"地図なし設定: map {changed} 件を位置関係図解へ変換",
+                "地図のごちゃつきを避け、矢印・ラベル・領域ブロックで説明します",
             )
         return changed
 
@@ -656,6 +692,7 @@ class SentencePipeline:
             }
         # route を各行に反映（row dict 自体にも route を入れる＝prompter が type 判定に使う）
         self._apply_intro_visual_boost(rows, routes)
+        self._disable_map_routes(rows, routes)
         self._limit_map_routes(rows, routes)
         self._boost_realistic_routes(rows, routes)
 
@@ -741,7 +778,7 @@ class SentencePipeline:
                     if r.get("route") == "chart" and r.get("engine") == "render":
                         r["engine"] = "ai"
         # ----- map（Step2）: route=map を Natural Earth GeoJSON で正確描画。降格先は illustration -----
-        if self.map_engine == "render":
+        if self.allow_maps and self.map_engine == "render":
             try:
                 from router import extract_map_specs
                 map_rows = [r for r in rows if r.get("route") == "map" and self._wants_image(r)]

@@ -341,6 +341,7 @@ def _build_full_prompt(
         "- Center the main content with comfortable empty space around it.\n"
         "- Simple, clear, professional. Avoid clutter.\n"
         "- For diagrams, do NOT make a mere keyword list. Show one clear structure: cause -> effect, comparison, process flow, or relationship map.\n"
+        "- For geographic relationships in diagrams, do NOT create a detailed map. Use simplified region blocks, arrows, corridors, influence zones, and short labels instead.\n"
         "- For diagrams, the viewer must understand the message by following the labels and arrows in order. Use 3-5 connected elements, not scattered isolated cards.\n"
         "- For diagrams, every label must support the visual argument; omit decorative or redundant labels.\n"
         "- Avoid duplicate labels, overlapping text, and repeated words.\n"

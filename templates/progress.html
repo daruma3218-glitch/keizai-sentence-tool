@@ -556,7 +556,7 @@
       const map = {
         web_photo:    { icon: '🌐', label: 'Web写真', cls: 'bg-purple-50 text-purple-700' },
         realphoto:    { icon: '📷', label: '実写風',   cls: 'bg-teal-50 text-teal-700' },
-        map:          { icon: '🗺️', label: '地図',     cls: 'bg-green-50 text-green-700' },
+        map:          { icon: '🧭', label: '旧:地図',  cls: 'bg-gray-50 text-gray-500' },
         diagram:      { icon: '📊', label: '図解',     cls: 'bg-blue-50 text-blue-700' },
         chart:        { icon: '📈', label: 'グラフ',   cls: 'bg-amber-50 text-amber-700' },
         illustration: { icon: '🎨', label: 'イラスト', cls: 'bg-pink-50 text-pink-700' },
@@ -790,7 +790,7 @@
 
     // ルート違いを記録 → 次回以降のルーターが few-shot として学習する
     const ROUTE_CHOICES = [
-      ['web_photo', '🌐 Web写真'], ['realphoto', '📷 実写風'], ['map', '🗺️ 地図'],
+      ['web_photo', '🌐 Web写真'], ['realphoto', '📷 実写風'],
       ['diagram', '📊 図解'], ['chart', '📈 グラフ'], ['illustration', '🎨 イラスト'], ['skip', '⊘ スキップ'],
     ];
     async function reportRouteError(no, ev) {

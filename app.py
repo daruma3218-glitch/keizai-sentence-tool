@@ -295,6 +295,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             chart_engine=defaults.get("chart_engine", "ai"),
             allow_charts=defaults.get("allow_charts", True),
             map_engine=defaults.get("map_engine", "ai"),
+            allow_maps=defaults.get("allow_maps", False),
             intro_visual_boost=defaults.get("intro_visual_boost", 0),
             map_route_limit=defaults.get("map_route_limit", 0),
             realistic_route_min=defaults.get("realistic_route_min", 0),
@@ -877,7 +878,7 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
 def api_regenerate(job_id, no):
     """指定シーン(№)の画像を1枚だけ作り直す。
 
-    - chart / map（決定論レンダ）: 文から spec を再抽出して renderer で描き直す
+    - chart（決定論レンダ）: 文から spec を再抽出して renderer で描き直す
     - それ以外（illustration / realphoto / diagram など）: AI で作り直す
     任意で extra_instruction（追加指示）を受け取り、プロンプト末尾に足して再生成できる。
     """
@@ -896,7 +897,7 @@ def api_regenerate(job_id, no):
     snap_row = next((r for r in snap_all if r.get("no") == no), None)
     extra = (request.form.get("extra_instruction", "") or "").strip()
     force_route = (request.form.get("force_route", "") or "").strip()
-    forceable_routes = {"web_photo", "realphoto", "map", "diagram", "chart", "illustration", "skip"}
+    forceable_routes = {"web_photo", "realphoto", "diagram", "chart", "illustration", "skip"}
     if force_route and force_route not in forceable_routes:
         return jsonify({"error": f"この再生成で指定できないルートです: {force_route}"}), 400
 
@@ -905,6 +906,7 @@ def api_regenerate(job_id, no):
     channel = get_channel(channel_id)
     ch_keys = resolve_channel_keys(channel)
     defaults = channel.get("defaults", {}) or {}
+    allow_maps = bool(defaults.get("allow_maps", False))
 
     # 対象行のルート/エンジン（snapshot 優先：chart/map は render エンジン）
     route = (snap_row or {}).get("route") or (target or {}).get("route") or (target or {}).get("type") or ""
@@ -917,6 +919,11 @@ def api_regenerate(job_id, no):
     route_reason = ""
     if force_route:
         route_reason = f"{original_route or 'unknown'} から {force_route} へルート変更して再生成"
+    elif route == "map" and not allow_maps:
+        force_route = "diagram"
+        route = "diagram"
+        engine = "ai"
+        route_reason = "地図なし設定: map から位置関係図解へ再生成"
 
     if force_route == "skip":
         _update_regen_snapshot(
@@ -934,14 +941,10 @@ def api_regenerate(job_id, no):
     if force_route == "chart":
         return _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra,
                                         force_route="chart", route_reason=route_reason)
-    if force_route == "map":
-        return _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra,
-                                      force_route="map", route_reason=route_reason)
-
-    # ===== v3: chart / map は決定論レンダ（AIプロンプトを持たない）→ 抽出し直して描き直す =====
+    # ===== v3: chart は決定論レンダ（AIプロンプトを持たない）→ 抽出し直して描き直す =====
     if not force_route and route == "chart" and (engine == "render" or defaults.get("chart_engine") == "render"):
         return _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra)
-    if not force_route and route == "map" and (engine == "render" or defaults.get("map_engine") == "render"):
+    if allow_maps and not force_route and route == "map" and (engine == "render" or defaults.get("map_engine") == "render"):
         return _regenerate_render_map(job_dir, no, snap_row, ch_keys, defaults, extra)
 
     # ===== AI 生成（illustration / realphoto / diagram など）=====
@@ -1085,7 +1088,7 @@ def api_regenerate(job_id, no):
 
 # v3 Step5: ルート違いフィードバック。編集者が「この文は別ルートが正しい」と教えると、
 # チャンネル別の route_feedback.jsonl に蓄積し、次回以降のルーターに few-shot として渡す。
-_FEEDBACK_ROUTES = ("web_photo", "realphoto", "map", "diagram", "chart", "illustration", "skip")
+_FEEDBACK_ROUTES = ("web_photo", "realphoto", "diagram", "chart", "illustration", "skip")
 
 
 @app.route("/api/feedback/<job_id>/<int:no>", methods=["POST"])
