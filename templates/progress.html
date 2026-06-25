@@ -225,7 +225,7 @@
             <textarea id="modalDiagramGoal" rows="3" class="editor-field"></textarea>
           </label>
           <label class="block mb-2">
-            <span class="block text-[10px] font-semibold text-gray-500 mb-1">画像内ラベル（カンマ区切り・最大4語）</span>
+            <span class="block text-[10px] font-semibold text-gray-500 mb-1">画像内ラベル（カンマ区切り・最大6語）</span>
             <input id="modalDiagramLabels" class="editor-field" placeholder="ロシア, ベラルーシ, 経済依存">
           </label>
           <label class="block mb-3">
@@ -1000,7 +1000,7 @@
       try { terms = JSON.parse(tr.getAttribute('data-terms') || '[]') || []; } catch (e) { terms = []; }
       document.getElementById('modalDiagramStructure').value = bp.structure || 'relationship';
       document.getElementById('modalDiagramGoal').value = bp.visual_goal || (tr.getAttribute('data-sentence') || '');
-      document.getElementById('modalDiagramLabels').value = (bp.labels && bp.labels.length ? bp.labels : terms).slice(0, 4).join(', ');
+      document.getElementById('modalDiagramLabels').value = (bp.labels && bp.labels.length ? bp.labels : terms).slice(0, 6).join(', ');
       document.getElementById('modalDiagramRelationships').value = (bp.relationships || []).join('\n');
       const reason = tr.getAttribute('data-verify-reason') || '';
       let tags = [];

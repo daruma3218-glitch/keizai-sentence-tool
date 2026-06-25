@@ -310,6 +310,19 @@ def _build_full_prompt(
             "for other countries). NEVER use Japanese on signs in a foreign scene.\n"
             "- Keep such incidental text minimal and natural, like in a real documentary photo.\n"
         )
+    elif terms and prompt_type == "diagram":
+        terms_str = ", ".join(terms)
+        text_policy = (
+            "*** TEXT POLICY for a DIAGRAM (CRITICAL) ***\n"
+            f"- Japanese labels allowed in this diagram: {terms_str}\n"
+            "- Factual labels such as country names, people, places, dates, numbers, and organizations "
+            "MUST come only from the allowed list above.\n"
+            "- You MAY use only short structural connector labels if they are in the allowed list "
+            "(for example: 原因, 結果, 背景, 変化, 影響, 依存, 支援, 圧力, 対立, 比較, 流れ).\n"
+            "- Do NOT invent any new factual names, numbers, countries, places, claims, captions, or title text.\n"
+            "- Use at most 6 short labels total. Render each label at most once.\n"
+            "- Keep labels short, readable, placed on rounded backing shapes when helpful, and connected by arrows.\n"
+        )
     elif terms:
         terms_str = ", ".join(terms)
         text_policy = (

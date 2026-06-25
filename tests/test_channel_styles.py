@@ -80,7 +80,7 @@ def test_roshia_channel_disables_charts_and_blocks_japan_leakage():
     assert "日本的なカイゼン" in defaults["user_instructions"]
     assert "ポカヨケ" in defaults["user_instructions"]
     assert "短いラベル付きインフォグラフィック" in defaults["user_instructions"]
-    assert "1〜4語まで使用してよい" in defaults["user_instructions"]
+    assert "最大6語まで使用してよい" in defaults["user_instructions"]
     assert "可愛い" in defaults["user_instructions"]
     assert "warm retro hand-drawn" not in defaults["worldview_desc"]
     assert "symbolic flat infographics" in defaults["worldview_desc"]
@@ -224,9 +224,19 @@ def test_allowed_terms_are_limited_to_reduce_keyword_lists():
     sentence = "ロシアのGDPは2025年に6.3%低下し、輸出額は430ドル相当で、ベラルーシと中国にも影響した。"
     terms = ["ロシア", "GDP", "2025年", "6.3%", "輸出額", "430ドル", "ベラルーシ", "中国"]
     limited = _limit_allowed_terms(terms, sentence)
-    assert len(limited) <= 4
+    assert len(limited) <= 6
     assert len(set(limited)) == len(limited)
     assert any(t in limited for t in ("6.3%", "430ドル", "2025年"))
+
+
+def test_diagram_allowed_terms_can_include_structural_connectors():
+    sentence = "ベラルーシはロシアへの経済依存を深めました。"
+    terms = ["ベラルーシ", "ロシア", "経済依存", "依存", "結果", "圧力"]
+    limited = _limit_allowed_terms(terms, sentence, allow_connectors=True)
+    assert len(limited) <= 6
+    assert "ベラルーシ" in limited
+    assert "ロシア" in limited
+    assert "結果" in limited
 
 
 def test_diagram_prompts_require_readable_visual_argument():
@@ -295,6 +305,7 @@ def test_diagram_blueprint_filters_labels_to_source_sentence():
     assert "ベラルーシ" in bp["labels"]
     assert "ロシア" in bp["labels"]
     assert "NATO" not in bp["labels"]
+    assert any(t in bp["labels"] for t in ("依存", "結果", "影響", "流れ"))
 
 
 def test_diagram_context_is_attached_only_to_diagram_rows(tmp_path):

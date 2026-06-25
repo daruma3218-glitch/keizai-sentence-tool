@@ -1055,8 +1055,8 @@ def api_regenerate(job_id, no):
         if visual_goal:
             bp["visual_goal"] = visual_goal
         if labels:
-            bp["labels"] = labels[:4]
-            target["allowed_terms"] = labels[:4]
+            bp["labels"] = labels[:6]
+            target["allowed_terms"] = labels[:6]
         if relationships:
             bp["relationships"] = relationships[:4]
         target["diagram_blueprint"] = bp
