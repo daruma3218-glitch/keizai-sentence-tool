@@ -584,6 +584,7 @@ def api_scene_fix():
             "allowed_terms": allowed_terms if route in ("diagram", "illustration") else [],
             "style": style_preset,
             "character": False,
+            "edit_source": bool(reference_image_path),
         })
 
     events = []
@@ -640,6 +641,131 @@ def api_scene_fix():
     (job_dir / "scene.txt").write_text(sentence, encoding="utf-8")
 
     return jsonify({"ok": True, **manifest})
+
+
+@app.route("/api/scene-fix/<job_id>/revise", methods=["POST"])
+@login_required
+def api_scene_fix_revise(job_id):
+    """生成済みの案を元画像として、追加指示でさらに1枚だけ修正する。"""
+    from generator import run_parallel_generation, PROVIDER_NANOBANANA
+
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return jsonify({"ok": False, "error": "ジョブが見つかりません"}), 404
+    manifest_path = job_dir / "manifest.json"
+    manifest = load_json(manifest_path, {})
+    try:
+        source_index = int(request.form.get("index") or 0)
+    except ValueError:
+        source_index = 0
+    instruction = (request.form.get("instruction") or "").strip()
+    if len(instruction) < 2:
+        return jsonify({"ok": False, "error": "修正指示を入力してください"}), 400
+
+    variants = manifest.get("variants", [])
+    variant = next((v for v in variants if int(v.get("index") or 0) == source_index), None)
+    if not variant or not variant.get("ok") or not variant.get("filename"):
+        return jsonify({"ok": False, "error": "修正元の画像が見つかりません"}), 400
+
+    images_dir = job_dir / "images"
+    source_image = (images_dir / Path(str(variant.get("filename"))).name).resolve()
+    try:
+        source_image.relative_to(images_dir.resolve())
+    except ValueError:
+        return jsonify({"ok": False, "error": "修正元の画像パスが不正です"}), 400
+    if not source_image.exists():
+        return jsonify({"ok": False, "error": "修正元の画像ファイルがありません"}), 404
+
+    channel_id = manifest.get("channel_id", "default")
+    channel = get_channel(channel_id)
+    ch_keys = resolve_channel_keys(channel)
+    defaults = channel.get("defaults", {}) or {}
+    route = manifest.get("route", "diagram")
+    if route not in ("diagram", "realphoto", "illustration"):
+        route = "diagram"
+    provider = manifest.get("provider") or PROVIDER_NANOBANANA
+    if provider not in VALID_PROVIDERS:
+        provider = PROVIDER_NANOBANANA
+    style_preset = manifest.get("style_preset") or defaults.get("style_preset", "flat_infographic")
+    if style_preset not in VALID_STYLES:
+        style_preset = "flat_infographic"
+    openai_quality = defaults.get("openai_quality", "medium")
+    if openai_quality not in ("low", "medium", "high"):
+        openai_quality = "medium"
+
+    revisions = manifest.get("revisions", [])
+    revision_no = 1 + sum(1 for r in revisions if int(r.get("source_index") or 0) == source_index)
+    revised_index = f"{source_index}_rev{revision_no}"
+    sentence = manifest.get("sentence", "")
+    base_extra = manifest.get("extra_instruction", "")
+    extra = (base_extra + "\n" + "Further editor revision: " + instruction).strip()
+    prompt = _build_scene_fix_prompt(
+        sentence,
+        route,
+        source_index,
+        extra,
+        defaults,
+        fix_mode="same_style",
+    )
+    prompt = (
+        "Refine the attached generated image. Keep the useful parts of the current composition, "
+        "but apply the editor revision exactly. Do not introduce unsupported facts.\n"
+        + prompt
+    )
+
+    entry = {
+        "index": revised_index,
+        "prompt": prompt,
+        "type": route,
+        "section": "シーン直し 再修正",
+        "excerpt": sentence,
+        "keypoint": sentence[:30],
+        "allowed_terms": manifest.get("allowed_terms", []) if route in ("diagram", "illustration") else [],
+        "style": style_preset,
+        "character": False,
+        "edit_source": True,
+    }
+
+    try:
+        results = run_parallel_generation(
+            prompts=[entry],
+            output_dir=images_dir,
+            provider=provider,
+            gemini_api_key=ch_keys.get("gemini") or None,
+            openai_api_key=ch_keys.get("openai") or None,
+            openai_quality=openai_quality,
+            concurrency=1,
+            style_preset=style_preset,
+            edit_image_path=str(source_image),
+            realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"再修正に失敗しました: {str(e)[:180]}"}), 500
+
+    r = results[0] if results else {}
+    if not r.get("success") or not r.get("filename"):
+        return jsonify({"ok": False, "error": r.get("error", "再修正に失敗しました")}), 500
+
+    revised = {
+        "source_index": source_index,
+        "revision_no": revision_no,
+        "index": revised_index,
+        "filename": r.get("filename"),
+        "url": f"/results/{job_id}/images/{r.get('filename')}",
+        "instruction": instruction,
+        "provider": r.get("provider", provider),
+        "created_at": datetime.now().isoformat(),
+    }
+    revisions.append(revised)
+    manifest["revisions"] = revisions
+    variant["previous_filename"] = variant.get("filename", "")
+    variant["filename"] = revised["filename"]
+    variant["url"] = revised["url"]
+    variant["revision_no"] = revision_no
+    variant["revised_at"] = revised["created_at"]
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return jsonify({"ok": True, "job_id": job_id, "variant": variant, "revision": revised})
 
 
 @app.route("/api/scene-fix/<job_id>/select", methods=["POST"])

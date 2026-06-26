@@ -97,6 +97,7 @@ def test_scene_fix_reference_image_select_and_zip(tmp_path, monkeypatch):
     seen = {}
     def fake_generate(prompts, output_dir, **kwargs):
         seen["edit_image_path"] = kwargs.get("edit_image_path")
+        seen["prompts"] = prompts
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         out = []
         for p in prompts:
@@ -123,6 +124,7 @@ def test_scene_fix_reference_image_select_and_zip(tmp_path, monkeypatch):
     assert body["reference_image"] == "reference/source.png"
     assert seen["edit_image_path"]
     assert Path(seen["edit_image_path"]).exists()
+    assert seen["prompts"][0]["edit_source"] is True
 
     select = client.post(f"/api/scene-fix/{body['job_id']}/select", data={"index": "1"})
     assert select.status_code == 200
@@ -136,3 +138,55 @@ def test_scene_fix_reference_image_select_and_zip(tmp_path, monkeypatch):
     assert "selected_variant.json" in names
     assert "images/1.png" in names
     assert "reference/source.png" in names
+
+
+
+def test_scene_fix_revise_generated_variant(tmp_path, monkeypatch):
+    out_root = tmp_path / "output"
+    monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+    monkeypatch.setattr(appmod, "get_channel", lambda channel_id: {
+        "id": "roshia",
+        "defaults": {
+            "style_preset": "flat_infographic",
+            "type_providers": {"diagram": "gpt-image"},
+        },
+    })
+    monkeypatch.setattr(appmod, "resolve_channel_keys", lambda channel: {"gemini": "g", "openai": "o", "anthropic": "a"})
+
+    calls = []
+    def fake_generate(prompts, output_dir, **kwargs):
+        calls.append({"prompts": prompts, "kwargs": kwargs})
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        out = []
+        for p in prompts:
+            fname = f"{p['index']}.png"
+            _png(Path(output_dir) / fname)
+            out.append({"index": p["index"], "success": True, "filename": fname, "provider": kwargs.get("provider")})
+        return out
+
+    monkeypatch.setattr(generator, "run_parallel_generation", fake_generate)
+
+    client = appmod.app.test_client()
+    created = client.post("/api/scene-fix", data={
+        "channel_id": "roshia",
+        "route": "diagram",
+        "variant_count": "1",
+        "provider": "auto",
+        "sentence": "依存関係が政策判断を縛りました。",
+    }).get_json()
+
+    resp = client.post(f"/api/scene-fix/{created['job_id']}/revise", data={
+        "index": "1",
+        "instruction": "文字を減らして矢印を太くする",
+    })
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["revision"]["filename"] == "1_rev1.png"
+    assert calls[-1]["kwargs"]["edit_image_path"].endswith("/images/1.png")
+    assert calls[-1]["prompts"][0]["edit_source"] is True
+    manifest = json.loads((out_root / created["job_id"] / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["variants"][0]["filename"] == "1_rev1.png"
+    assert manifest["revisions"][0]["instruction"] == "文字を減らして矢印を太くする"
