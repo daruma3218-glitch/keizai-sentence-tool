@@ -428,6 +428,17 @@ def _scene_fix_variant_hint(route: str, variant_no: int) -> str:
     return table[(variant_no - 1) % len(table)]
 
 
+def _scene_fix_mode_instruction(mode: str) -> str:
+    table = {
+        "balanced": "Create distinct options with different composition choices while keeping the same factual meaning.",
+        "more_clear": "Prioritize clarity over decoration. Use a simple structure, strong hierarchy, and an obvious reading order.",
+        "less_text": "Reduce text volume. Use only the few most important words from the source sentence and let the composition explain the idea.",
+        "more_real": "Make the scene more realistic and usable as video material. Prefer concrete setting, natural light, and editorial restraint.",
+        "same_style": "Use the attached reference image as the style/composition anchor. Keep the original direction and make controlled improvements only.",
+    }
+    return table.get(mode, table["balanced"])
+
+
 def _scene_fix_allowed_terms(sentence: str, route: str) -> list:
     """シーン直し用の画像内テキスト候補。図解だけ構造語を許可する。"""
     try:
@@ -442,7 +453,7 @@ def _scene_fix_allowed_terms(sentence: str, route: str) -> list:
         return []
 
 
-def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: str, defaults: dict) -> str:
+def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: str, defaults: dict, fix_mode: str = "balanced") -> str:
     """1シーン修正用の複数案プロンプト。制約は軽く、でも事実は増やさない。"""
     hint = _scene_fix_variant_hint(route, variant_no)
     worldview = (defaults.get("worldview_desc") or "").strip()
@@ -465,6 +476,7 @@ def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: s
     parts = [
         route_rule,
         hint,
+        "Fix mode: " + _scene_fix_mode_instruction(fix_mode),
         f"Source sentence: {sentence}",
         "Do not add new factual claims, names, countries, dates, numbers, or entities that are not supported by the sentence.",
         "Make it suitable as one scene in an educational video.",
@@ -480,6 +492,20 @@ def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: s
     if extra:
         parts.append("Editor request: " + extra[:800])
     return "\n".join(parts)
+
+
+def _save_scene_fix_reference(job_dir: Path):
+    f = request.files.get("reference_image")
+    if not f or not f.filename:
+        return None
+    suffix = Path(f.filename).suffix.lower()
+    if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
+        return None
+    ref_dir = job_dir / "reference"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    path = ref_dir / f"source{suffix}"
+    f.save(path)
+    return path
 
 
 @app.route("/scene-fix")
@@ -534,19 +560,23 @@ def api_scene_fix():
     openai_quality = (request.form.get("openai_quality") or defaults.get("openai_quality") or "medium").strip()
     if openai_quality not in ("low", "medium", "high"):
         openai_quality = "medium"
+    fix_mode = (request.form.get("fix_mode") or "balanced").strip()
+    if fix_mode not in ("balanced", "more_clear", "less_text", "more_real", "same_style"):
+        fix_mode = "balanced"
     extra = (request.form.get("extra_instruction") or "").strip()
 
     job_id = f"scene_fix_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
     job_dir = OUTPUT_DIR / job_id
     images_dir = job_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
+    reference_image_path = _save_scene_fix_reference(job_dir)
 
     allowed_terms = _scene_fix_allowed_terms(sentence, route)
     prompts = []
     for i in range(1, variant_count + 1):
         prompts.append({
             "index": i,
-            "prompt": _build_scene_fix_prompt(sentence, route, i, extra, defaults),
+            "prompt": _build_scene_fix_prompt(sentence, route, i, extra, defaults, fix_mode=fix_mode),
             "type": route,
             "section": "シーン直し",
             "excerpt": sentence,
@@ -572,6 +602,7 @@ def api_scene_fix():
             style_preset=style_preset,
             progress_callback=on_progress,
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
+            edit_image_path=str(reference_image_path) if reference_image_path else None,
         )
     except Exception as e:
         return jsonify({"ok": False, "error": f"生成に失敗しました: {str(e)[:180]}"}), 500
@@ -596,6 +627,8 @@ def api_scene_fix():
         "route": route,
         "provider": provider,
         "style_preset": style_preset,
+        "fix_mode": fix_mode,
+        "reference_image": f"reference/{reference_image_path.name}" if reference_image_path else "",
         "sentence": sentence,
         "extra_instruction": extra,
         "allowed_terms": allowed_terms,
@@ -607,6 +640,67 @@ def api_scene_fix():
     (job_dir / "scene.txt").write_text(sentence, encoding="utf-8")
 
     return jsonify({"ok": True, **manifest})
+
+
+@app.route("/api/scene-fix/<job_id>/select", methods=["POST"])
+@login_required
+def api_scene_fix_select(job_id):
+    """シーン直しの採用案を軽量に記録する。"""
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return jsonify({"ok": False, "error": "ジョブが見つかりません"}), 404
+    manifest = load_json(job_dir / "manifest.json", {})
+    try:
+        index = int(request.form.get("index") or 0)
+    except ValueError:
+        index = 0
+    variant = next((v for v in manifest.get("variants", []) if int(v.get("index") or 0) == index), None)
+    if not variant or not variant.get("ok"):
+        return jsonify({"ok": False, "error": "採用できる案が見つかりません"}), 400
+    selected = {
+        "job_id": job_id,
+        "selected_index": index,
+        "filename": variant.get("filename", ""),
+        "url": variant.get("url", ""),
+        "selected_at": datetime.now().isoformat(),
+    }
+    (job_dir / "selected_variant.json").write_text(json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest["selected_variant"] = selected
+    (job_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return jsonify({"ok": True, **selected})
+
+
+@app.route("/download/scene-fix/<job_id>")
+@login_required
+def download_scene_fix_zip(job_id):
+    """シーン直しの全案をZIPでダウンロード。"""
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return "結果が見つかりません", 404
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(prefix=f"{job_id}_", suffix=".zip", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+        for rel in ("manifest.json", "selected_variant.json", "scene.txt"):
+            p2 = job_dir / rel
+            if p2.exists():
+                zf.write(p2, rel)
+        images_dir = job_dir / "images"
+        if images_dir.exists():
+            for img in sorted(images_dir.iterdir()):
+                if img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                    zf.write(img, f"images/{img.name}")
+        ref_dir = job_dir / "reference"
+        if ref_dir.exists():
+            for img in sorted(ref_dir.iterdir()):
+                if img.is_file():
+                    zf.write(img, f"reference/{img.name}")
+        zf.writestr("README.txt", "シーン直しつくーるの生成案一式です。selected_variant.json がある場合は採用案を示します。\n")
+
+    return _send_temp_zip(tmp_path, f"{job_id}_scene_fix.zip")
 
 
 @app.route("/start", methods=["POST"])
