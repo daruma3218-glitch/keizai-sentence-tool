@@ -398,6 +398,217 @@ def index():
     )
 
 
+def _scene_fix_variant_hint(route: str, variant_no: int) -> str:
+    diagram_hints = [
+        "Variant A: causal flow diagram, left-to-right, cause -> mechanism -> result.",
+        "Variant B: relationship map, center-out, main subject in the center with 3 connected nodes.",
+        "Variant C: comparison diagram, two balanced sides with a small conclusion.",
+        "Variant D: process diagram, three steps connected by arrows.",
+        "Variant E: minimal bold infographic, few large shapes and strong reading path.",
+    ]
+    realphoto_hints = [
+        "Variant A: wide documentary news still, establishes the real-world scene.",
+        "Variant B: medium shot with people, workplace, meeting, street, or institution context.",
+        "Variant C: close-up of a relevant object, document, facility, product, or symbolic real detail.",
+        "Variant D: cinematic editorial photograph with strong composition and natural lighting.",
+        "Variant E: neutral documentary scene with more empty space for editing.",
+    ]
+    illustration_hints = [
+        "Variant A: symbolic flat illustration with clear foreground subject.",
+        "Variant B: infographic-style illustration with arrows and simple icons.",
+        "Variant C: scene-based educational illustration with a human-scale context.",
+        "Variant D: minimal icon composition with strong negative space.",
+        "Variant E: editorial explainer illustration, calm and serious tone.",
+    ]
+    table = {
+        "diagram": diagram_hints,
+        "realphoto": realphoto_hints,
+        "illustration": illustration_hints,
+    }.get(route, diagram_hints)
+    return table[(variant_no - 1) % len(table)]
+
+
+def _scene_fix_allowed_terms(sentence: str, route: str) -> list:
+    """シーン直し用の画像内テキスト候補。図解だけ構造語を許可する。"""
+    try:
+        from prompter import _auto_extract_terms, _limit_allowed_terms, DIAGRAM_CONNECTOR_TERMS
+        allow_connectors = route == "diagram"
+        return _limit_allowed_terms(
+            _auto_extract_terms(sentence) + (DIAGRAM_CONNECTOR_TERMS if allow_connectors else []),
+            sentence,
+            allow_connectors=allow_connectors,
+        )
+    except Exception:
+        return []
+
+
+def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: str, defaults: dict) -> str:
+    """1シーン修正用の複数案プロンプト。制約は軽く、でも事実は増やさない。"""
+    hint = _scene_fix_variant_hint(route, variant_no)
+    worldview = (defaults.get("worldview_desc") or "").strip()
+    user_instructions = (defaults.get("user_instructions") or "").strip()
+    route_rule = {
+        "diagram": (
+            "Create a clear educational diagram. The priority is comprehension: one visual goal, "
+            "a clear reading path, 3-5 connected elements, arrows/lines that explain relationships, "
+            "not isolated keyword cards."
+        ),
+        "realphoto": (
+            "Create a photorealistic documentary image. No Japanese labels, no infographic UI, "
+            "no flat illustration. It should look like a usable editorial/video material still."
+        ),
+        "illustration": (
+            "Create a serious educational illustration. It can use symbols and simple arrows, "
+            "but should not become cute, childish, or decorative."
+        ),
+    }.get(route, "Create a clear educational image.")
+    parts = [
+        route_rule,
+        hint,
+        f"Source sentence: {sentence}",
+        "Do not add new factual claims, names, countries, dates, numbers, or entities that are not supported by the sentence.",
+        "Make it suitable as one scene in an educational video.",
+    ]
+    if route == "diagram":
+        parts.append(
+            "For labels: factual labels must come from the sentence; short connector labels such as 原因, 結果, 依存, 対立, 変化, 影響, 流れ are allowed only when they clarify the structure."
+        )
+    if user_instructions:
+        parts.append("Channel quality instructions: " + user_instructions[:1000])
+    if worldview and route in ("diagram", "illustration"):
+        parts.append("Visual world / tone: " + worldview[:1000])
+    if extra:
+        parts.append("Editor request: " + extra[:800])
+    return "\n".join(parts)
+
+
+@app.route("/scene-fix")
+@login_required
+def scene_fix_page():
+    channels = load_channels()
+    for c in channels:
+        keys = resolve_channel_keys(c)
+        c["_has_gemini"] = bool(keys["gemini"])
+        c["_has_openai"] = bool(keys["openai"])
+        c["_has_anthropic"] = bool(keys["anthropic"])
+    return render_template(
+        "scene_fix.html",
+        channels=channels,
+        providers=VALID_PROVIDERS,
+    )
+
+
+@app.route("/api/scene-fix", methods=["POST"])
+@login_required
+def api_scene_fix():
+    """1センテンスから4〜5案を生成する個別修正ツール。"""
+    from generator import run_parallel_generation, PROVIDER_NANOBANANA
+
+    sentence = (request.form.get("sentence") or "").strip()
+    if len(sentence) < 3:
+        return jsonify({"ok": False, "error": "センテンスを入力してください"}), 400
+    route = (request.form.get("route") or "diagram").strip()
+    if route not in ("diagram", "realphoto", "illustration"):
+        return jsonify({"ok": False, "error": "画像タイプが不正です"}), 400
+    try:
+        variant_count = int(request.form.get("variant_count") or 4)
+    except ValueError:
+        variant_count = 4
+    variant_count = max(1, min(5, variant_count))
+
+    channel_id = request.form.get("channel_id", "default")
+    channel = get_channel(channel_id)
+    channel_id = channel.get("id", "default")
+    ch_keys = resolve_channel_keys(channel)
+    defaults = channel.get("defaults", {}) or {}
+    style_preset = defaults.get("style_preset", "flat_infographic")
+    if style_preset not in VALID_STYLES:
+        style_preset = "flat_infographic"
+
+    provider = (request.form.get("provider") or "auto").strip()
+    if provider == "auto":
+        type_providers = defaults.get("type_providers") or {}
+        provider = type_providers.get(route) or defaults.get("provider") or PROVIDER_NANOBANANA
+    if provider not in VALID_PROVIDERS:
+        provider = PROVIDER_NANOBANANA
+    openai_quality = (request.form.get("openai_quality") or defaults.get("openai_quality") or "medium").strip()
+    if openai_quality not in ("low", "medium", "high"):
+        openai_quality = "medium"
+    extra = (request.form.get("extra_instruction") or "").strip()
+
+    job_id = f"scene_fix_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
+    job_dir = OUTPUT_DIR / job_id
+    images_dir = job_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    allowed_terms = _scene_fix_allowed_terms(sentence, route)
+    prompts = []
+    for i in range(1, variant_count + 1):
+        prompts.append({
+            "index": i,
+            "prompt": _build_scene_fix_prompt(sentence, route, i, extra, defaults),
+            "type": route,
+            "section": "シーン直し",
+            "excerpt": sentence,
+            "keypoint": sentence[:30],
+            "allowed_terms": allowed_terms if route in ("diagram", "illustration") else [],
+            "style": style_preset,
+            "character": False,
+        })
+
+    events = []
+    def on_progress(ev):
+        events.append(ev)
+
+    try:
+        results = run_parallel_generation(
+            prompts=prompts,
+            output_dir=images_dir,
+            provider=provider,
+            gemini_api_key=ch_keys.get("gemini") or None,
+            openai_api_key=ch_keys.get("openai") or None,
+            openai_quality=openai_quality,
+            concurrency=min(variant_count, 3),
+            style_preset=style_preset,
+            progress_callback=on_progress,
+            realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"生成に失敗しました: {str(e)[:180]}"}), 500
+
+    variants = []
+    for r in results:
+        filename = r.get("filename") if r.get("success") else ""
+        variants.append({
+            "index": r.get("index"),
+            "ok": bool(r.get("success")),
+            "filename": filename,
+            "url": f"/results/{job_id}/images/{filename}" if filename else "",
+            "error": r.get("error", ""),
+            "provider": r.get("provider", provider),
+            "variant_hint": _scene_fix_variant_hint(route, int(r.get("index") or 1)),
+        })
+
+    manifest = {
+        "tool": "scene_fix",
+        "job_id": job_id,
+        "channel_id": channel_id,
+        "route": route,
+        "provider": provider,
+        "style_preset": style_preset,
+        "sentence": sentence,
+        "extra_instruction": extra,
+        "allowed_terms": allowed_terms,
+        "variants": variants,
+        "events": events[-30:],
+        "created_at": datetime.now().isoformat(),
+    }
+    (job_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (job_dir / "scene.txt").write_text(sentence, encoding="utf-8")
+
+    return jsonify({"ok": True, **manifest})
+
+
 @app.route("/start", methods=["POST"])
 @login_required
 def start_job():

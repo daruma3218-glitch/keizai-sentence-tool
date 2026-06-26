@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>シーン直しつくーる</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', 'Noto Sans JP', sans-serif; }
+    .thumb { aspect-ratio: 16 / 9; object-fit: cover; width: 100%; border-radius: 8px; border: 1px solid #e5e7eb; background: #f8fafc; }
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    .skeleton { background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-900">
+  <nav class="bg-white/90 backdrop-blur border-b border-slate-200 sticky top-0 z-20">
+    <div class="max-w-7xl mx-auto px-5 h-14 flex items-center justify-between">
+      <a href="/" class="font-bold text-slate-900">センテンスつくーる</a>
+      <div class="flex items-center gap-4 text-sm">
+        <a href="/" class="text-slate-500 hover:text-cyan-700">一括生成</a>
+        <span class="font-semibold text-cyan-700">シーン直し</span>
+      </div>
+    </div>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-5 py-6">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <section class="lg:col-span-4 bg-white rounded-xl border border-slate-200 p-5 shadow-sm h-fit">
+        <h1 class="text-xl font-bold mb-1">シーン直しつくーる</h1>
+        <p class="text-sm text-slate-500 mb-5">微妙な1シーンだけ、4〜5案をまとめて作ります。</p>
+
+        <form id="sceneForm" class="space-y-4">
+          <label class="block">
+            <span class="block text-sm font-semibold mb-1">チャンネル</span>
+            <select name="channel_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              {% for ch in channels %}
+              <option value="{{ ch.id }}">{{ ch.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="block text-sm font-semibold mb-1">画像タイプ</span>
+            <select name="route" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <option value="diagram">図解</option>
+              <option value="realphoto">実写風</option>
+              <option value="illustration">イラスト</option>
+            </select>
+          </label>
+
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block">
+              <span class="block text-sm font-semibold mb-1">生成枚数</span>
+              <select name="variant_count" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                <option value="4">4枚</option>
+                <option value="5">5枚</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="block text-sm font-semibold mb-1">モデル</span>
+              <select name="provider" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                <option value="auto">タイプ別に自動</option>
+                <option value="gpt-image">ChatGPT画像</option>
+                <option value="nanobanana">nanobanana</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="block">
+            <span class="block text-sm font-semibold mb-1">元センテンス</span>
+            <textarea name="sentence" rows="5" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-relaxed" placeholder="修正したいシーンの文章を入れてください"></textarea>
+          </label>
+
+          <label class="block">
+            <span class="block text-sm font-semibold mb-1">追加指示</span>
+            <textarea name="extra_instruction" rows="3" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="例: 文字少なめ、矢印で依存関係を強調、実写ならニュース映像っぽく"></textarea>
+          </label>
+
+          <button id="submitBtn" class="w-full rounded-lg bg-cyan-700 text-white font-semibold py-2.5 hover:bg-cyan-800 disabled:opacity-50" type="submit">4〜5案を生成</button>
+        </form>
+      </section>
+
+      <section class="lg:col-span-8">
+        <div id="status" class="hidden mb-4 rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-800"></div>
+        <div id="results" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="md:col-span-2 bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400">生成結果がここに並びます</div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const form = document.getElementById('sceneForm');
+    const results = document.getElementById('results');
+    const statusBox = document.getElementById('status');
+    const submitBtn = document.getElementById('submitBtn');
+
+    function escapeHtml(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+
+    function setLoading(count) {
+      results.innerHTML = Array.from({length: count}).map((_, i) => `
+        <div class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+          <div class="thumb skeleton flex items-center justify-center text-slate-400 text-sm">生成中 ${i + 1}</div>
+          <div class="mt-3 h-4 w-2/3 skeleton rounded"></div>
+        </div>
+      `).join('');
+    }
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(form);
+      const count = parseInt(fd.get('variant_count') || '4', 10);
+      setLoading(count);
+      submitBtn.disabled = true;
+      statusBox.classList.remove('hidden');
+      statusBox.textContent = '生成中です。4〜5枚なので少し待ちます。';
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 600000);
+        const res = await fetch('/api/scene-fix', { method: 'POST', body: fd, signal: controller.signal });
+        clearTimeout(timer);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+        const okCount = (data.variants || []).filter(v => v.ok).length;
+        statusBox.textContent = `生成完了: ${okCount}/${(data.variants || []).length}枚（job: ${data.job_id}）`;
+        results.innerHTML = (data.variants || []).map(v => {
+          if (!v.ok) {
+            return `<div class="bg-white rounded-xl border border-rose-200 p-4 text-rose-700 text-sm">案${v.index}: 失敗<br>${escapeHtml(v.error)}</div>`;
+          }
+          return `
+            <article class="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+              <a href="${v.url}" target="_blank"><img class="thumb" src="${v.url}?t=${Date.now()}" alt="案${v.index}" loading="lazy"></a>
+              <div class="mt-3 flex items-center justify-between gap-2">
+                <div>
+                  <div class="font-semibold text-sm">案${v.index}</div>
+                  <div class="text-[11px] text-slate-500 leading-snug">${escapeHtml(v.variant_hint)}</div>
+                </div>
+                <a href="${v.url}" download class="shrink-0 rounded-md bg-slate-900 text-white text-xs px-3 py-1.5 hover:bg-slate-700">DL</a>
+              </div>
+            </article>`;
+        }).join('');
+      } catch (e) {
+        statusBox.textContent = '生成に失敗しました: ' + e.message;
+        results.innerHTML = `<div class="md:col-span-2 bg-white rounded-xl border border-rose-200 p-6 text-rose-700">${escapeHtml(e.message)}</div>`;
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
