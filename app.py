@@ -371,6 +371,10 @@ def index():
             job_state = load_json(d / "job.json", {})
             if not manifest and not job_state:
                 continue
+            # シーン直しつくーるの出力は一括生成用の /progress では開けない。
+            # 最近のジョブには通常のセンテンス生成ジョブだけを表示する。
+            if manifest.get("tool") == "scene_fix" or d.name.startswith("scene_fix_"):
+                continue
             ch_id = manifest.get("channel_id", job_state.get("channel_id", ""))
             past_jobs.append({
                 "id": d.name,
