@@ -605,6 +605,26 @@ def api_scene_fix():
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
             edit_image_path=str(reference_image_path) if reference_image_path else None,
         )
+        # 参照画像つきの編集生成は provider 側の制約で全滅することがある。
+        # 生成ボタン自体は止めず、通常生成へ自動フォールバックする。
+        if reference_image_path and not any(r.get("success") for r in results):
+            events.append({
+                "status": "fallback",
+                "message": "参照画像つき生成が失敗したため、通常生成に切り替えました",
+            })
+            fallback_prompts = [{**p, "edit_source": False} for p in prompts]
+            results = run_parallel_generation(
+                prompts=fallback_prompts,
+                output_dir=images_dir,
+                provider=provider,
+                gemini_api_key=ch_keys.get("gemini") or None,
+                openai_api_key=ch_keys.get("openai") or None,
+                openai_quality=openai_quality,
+                concurrency=min(variant_count, 3),
+                style_preset=style_preset,
+                progress_callback=on_progress,
+                realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
+            )
     except Exception as e:
         return jsonify({"ok": False, "error": f"生成に失敗しました: {str(e)[:180]}"}), 500
 

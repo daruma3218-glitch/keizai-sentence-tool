@@ -190,3 +190,52 @@ def test_scene_fix_revise_generated_variant(tmp_path, monkeypatch):
     manifest = json.loads((out_root / created["job_id"] / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["variants"][0]["filename"] == "1_rev1.png"
     assert manifest["revisions"][0]["instruction"] == "文字を減らして矢印を太くする"
+
+
+
+def test_scene_fix_reference_generation_falls_back_when_edit_fails(tmp_path, monkeypatch):
+    out_root = tmp_path / "output"
+    monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+    monkeypatch.setattr(appmod, "get_channel", lambda channel_id: {
+        "id": "roshia",
+        "defaults": {
+            "style_preset": "flat_infographic",
+            "type_providers": {"diagram": "gpt-image"},
+        },
+    })
+    monkeypatch.setattr(appmod, "resolve_channel_keys", lambda channel: {"gemini": "g", "openai": "o", "anthropic": "a"})
+
+    calls = []
+    def fake_generate(prompts, output_dir, **kwargs):
+        calls.append({"prompts": prompts, "kwargs": kwargs})
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        if kwargs.get("edit_image_path"):
+            return [{"index": p["index"], "success": False, "filename": None, "error": "edit unavailable"} for p in prompts]
+        out = []
+        for p in prompts:
+            fname = f"{p['index']}.png"
+            _png(Path(output_dir) / fname)
+            out.append({"index": p["index"], "success": True, "filename": fname})
+        return out
+
+    monkeypatch.setattr(generator, "run_parallel_generation", fake_generate)
+
+    client = appmod.app.test_client()
+    resp = client.post("/api/scene-fix", data={
+        "channel_id": "roshia",
+        "route": "diagram",
+        "variant_count": "2",
+        "provider": "auto",
+        "sentence": "依存関係が政策判断を縛りました。",
+        "reference_image": (io.BytesIO(b"fake image bytes"), "source.png"),
+    }, content_type="multipart/form-data")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert all(v["ok"] for v in body["variants"])
+    assert len(calls) == 2
+    assert calls[0]["kwargs"]["edit_image_path"]
+    assert calls[1]["kwargs"].get("edit_image_path") is None
+    assert calls[1]["prompts"][0]["edit_source"] is False
+    assert any(e.get("status") == "fallback" for e in body["events"])
