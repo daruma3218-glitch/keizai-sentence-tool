@@ -444,14 +444,13 @@ def _scene_fix_mode_instruction(mode: str) -> str:
 
 
 def _scene_fix_allowed_terms(sentence: str, route: str) -> list:
-    """シーン直し用の画像内テキスト候補。図解だけ構造語を許可する。"""
+    """シーン直し用の画像内テキスト候補。原稿にある語だけを許可する。"""
     try:
-        from prompter import _auto_extract_terms, _limit_allowed_terms, DIAGRAM_CONNECTOR_TERMS
-        allow_connectors = route == "diagram"
+        from prompter import _auto_extract_terms, _limit_allowed_terms
         return _limit_allowed_terms(
-            _auto_extract_terms(sentence) + (DIAGRAM_CONNECTOR_TERMS if allow_connectors else []),
+            _auto_extract_terms(sentence),
             sentence,
-            allow_connectors=allow_connectors,
+            allow_connectors=False,
         )
     except Exception:
         return []
@@ -487,7 +486,7 @@ def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: s
     ]
     if route == "diagram":
         parts.append(
-            "For labels: factual labels must come from the sentence; short connector labels such as 原因, 結果, 依存, 対立, 変化, 影響, 流れ are allowed only when they clarify the structure."
+            "For labels: use only short factual labels that appear in the source sentence. Do not display generic structural labels such as 原因, 結果, 背景, 影響, 依存, 対立, 比較, 流れ unless that exact word appears in the sentence and is explicitly allowed. Express structure with arrows, grouping, placement, and line direction instead."
         )
     if user_instructions:
         parts.append("Channel quality instructions: " + user_instructions[:1000])

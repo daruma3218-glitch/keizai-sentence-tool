@@ -229,14 +229,16 @@ def test_allowed_terms_are_limited_to_reduce_keyword_lists():
     assert any(t in limited for t in ("6.3%", "430ドル", "2025年"))
 
 
-def test_diagram_allowed_terms_can_include_structural_connectors():
+def test_diagram_allowed_terms_exclude_generic_structural_connectors():
     sentence = "ベラルーシはロシアへの経済依存を深めました。"
     terms = ["ベラルーシ", "ロシア", "経済依存", "依存", "結果", "圧力"]
-    limited = _limit_allowed_terms(terms, sentence, allow_connectors=True)
+    limited = _limit_allowed_terms(terms, sentence, allow_connectors=False)
     assert len(limited) <= 6
     assert "ベラルーシ" in limited
     assert "ロシア" in limited
-    assert "結果" in limited
+    assert "経済依存" in limited
+    assert "結果" not in limited
+    assert "圧力" not in limited
 
 
 def test_diagram_prompts_require_readable_visual_argument():
@@ -305,7 +307,9 @@ def test_diagram_blueprint_filters_labels_to_source_sentence():
     assert "ベラルーシ" in bp["labels"]
     assert "ロシア" in bp["labels"]
     assert "NATO" not in bp["labels"]
-    assert any(t in bp["labels"] for t in ("依存", "結果", "影響", "流れ"))
+    assert "結果" not in bp["labels"]
+    assert "影響" not in bp["labels"]
+    assert "流れ" not in bp["labels"]
 
 
 def test_diagram_context_is_attached_only_to_diagram_rows(tmp_path):
