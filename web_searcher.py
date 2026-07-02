@@ -20,7 +20,7 @@ import anthropic
 from utils import parse_json_array
 
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-sonnet-5"
 SEARCH_BATCH_SIZE = 6  # 1 リクエストで複数センテンスをまとめて検索
 
 

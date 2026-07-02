@@ -23,7 +23,7 @@ import anthropic
 from utils import claude_query, parse_json_array
 
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-sonnet-5"
 CHUNK_SIZE = 40  # 1 リクエストで分類する文数
 ROUTER_CHUNK_TIMEOUT_SECONDS = 90
 ROUTER_OVERALL_TIMEOUT_SECONDS = 240

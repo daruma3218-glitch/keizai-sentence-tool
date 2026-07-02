@@ -47,7 +47,7 @@ def claude_query(
     query: str,
     system: str,
     max_tokens: int = 4096,
-    model: str = "claude-sonnet-4-6",
+    model: str = "claude-sonnet-5",
     max_retries: int = 3,
     timeout_seconds: Optional[float] = None,
 ) -> str:

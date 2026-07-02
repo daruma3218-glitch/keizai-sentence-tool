@@ -22,7 +22,7 @@ import anthropic
 from utils import claude_query, parse_json_object
 
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-sonnet-5"
 SPLITTER_TITLE_TIMEOUT_SECONDS = 45
 SPLITTER_ANALYSIS_TIMEOUT_SECONDS = 60
 LONG_SINGLE_CHAPTER_MIN_SENTENCES = 80

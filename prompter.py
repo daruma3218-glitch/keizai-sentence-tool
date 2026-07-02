@@ -15,7 +15,7 @@ import anthropic
 from utils import claude_query, parse_json_array
 
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-sonnet-5"
 BATCH_SIZE = 8
 PROMPTER_BATCH_TIMEOUT_SECONDS = 90
 PROMPTER_OVERALL_TIMEOUT_SECONDS = 360
