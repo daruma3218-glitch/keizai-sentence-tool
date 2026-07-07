@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from utils import get_anthropic_client, save_json, load_json
+from utils import get_anthropic_client, save_json, load_json, SNAPSHOT_IO_LOCK
 from splitter import split_manuscript
 from prompter import generate_all_prompts
 from web_searcher import run_web_search, run_web_search_for_selections
@@ -398,12 +398,15 @@ class SentencePipeline:
             "rows": rows,
             "updated_at": datetime.now().isoformat(),
         }
-        try:
-            (self.output_dir / "rows_progress.json").write_text(
-                json.dumps(snapshot, ensure_ascii=False), encoding="utf-8"
-            )
-        except Exception:
-            pass
+        # 再生成エンドポイント（_update_regen_snapshot）と同じファイルを書くため、
+        # 共有ロックで書き込みを直列化（同時書き込みによる更新消失を防ぐ）
+        with SNAPSHOT_IO_LOCK:
+            try:
+                (self.output_dir / "rows_progress.json").write_text(
+                    json.dumps(snapshot, ensure_ascii=False), encoding="utf-8"
+                )
+            except Exception:
+                pass
 
     # ---- 画像配置ロジック ----
     def _wants_image(self, r) -> bool:

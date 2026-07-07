@@ -3,11 +3,18 @@
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 import anthropic
+
+# rows_progress.json への書き込みを直列化する共有ロック。
+# パイプラインスレッド（_dump_snapshot）と Flask リクエストスレッド（再生成の
+# _update_regen_snapshot）が同じファイルを read-modify-write するため、
+# 同時書き込みで片方の更新が消える競合をここで防ぐ。
+SNAPSHOT_IO_LOCK = threading.Lock()
 
 
 def load_env(project_root: Path) -> None:

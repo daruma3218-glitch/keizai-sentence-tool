@@ -12,12 +12,18 @@ LLM は一切使わない。
 
 import math
 import os
+import threading
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")  # ヘッドレス（サーバ）
 import matplotlib.pyplot as plt
 from matplotlib import font_manager as fm
+
+# matplotlib(pyplot) はスレッドセーフではない。パイプラインスレッドの描画と
+# Flask リクエストスレッドの個別再生成（render_chart/render_map）が同時に走ると
+# グローバル状態が壊れ得るため、描画全体をこのロックで直列化する。
+_RENDER_LOCK = threading.Lock()
 
 # ===== フォント登録（文字化けを構造的に排除）=====
 _ASSETS = Path(__file__).parent / "assets"
@@ -391,11 +397,16 @@ _DRAWERS = {
 
 
 def render_chart(spec: dict, output_path, theme: dict = None) -> bool:
-    """chart_spec を 1920x1080 PNG に描画する。
+    """chart_spec を 1920x1080 PNG に描画する（スレッド間で直列化）。
 
     成功で True。spec 不正・描画失敗時は False を返し、図は作らない
     （呼び出し側で engine:ai の従来ルートへ降格すること）。
     """
+    with _RENDER_LOCK:
+        return _render_chart_locked(spec, output_path, theme)
+
+
+def _render_chart_locked(spec: dict, output_path, theme: dict = None) -> bool:
     if not isinstance(spec, dict):
         return False
     theme = {**DEFAULT_THEME, **(theme or {})}
@@ -665,11 +676,16 @@ def _deconflict_texts(fig, ax, texts, pad_px=24, max_iter=80):
 
 
 def render_map(spec: dict, output_path, theme: dict = None) -> bool:
-    """map_spec を 1920x1080 PNG に描画する。
+    """map_spec を 1920x1080 PNG に描画する（スレッド間で直列化）。
 
     成功で True。解決できる国が無い/描画失敗時は False（呼び出し側で
     route を illustration(engine:ai) へ降格すること）。
     """
+    with _RENDER_LOCK:
+        return _render_map_locked(spec, output_path, theme)
+
+
+def _render_map_locked(spec: dict, output_path, theme: dict = None) -> bool:
     if not isinstance(spec, dict):
         return False
     theme = {**DEFAULT_THEME, **(theme or {})}

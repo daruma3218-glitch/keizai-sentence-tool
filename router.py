@@ -135,7 +135,10 @@ def _route_chunk(
     if few_shot:
         lines = []
         for ex in few_shot[:12]:
+            # 改行・カギ括弧を無害化（フィードバック文が箇条書きの形式を壊して
+            # 偽の few-shot 行やルール文として解釈されるのを防ぐ）
             s = (ex.get("sentence", "") or "")[:50]
+            s = s.replace("\n", " ").replace("\r", " ").replace("「", "『").replace("」", "』")
             g = ex.get("given_route", "")
             c = ex.get("correct_route", "")
             if s and c:

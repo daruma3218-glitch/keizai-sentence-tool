@@ -826,6 +826,13 @@ class ParallelImageGenerator:
                 print(f"  [generator] 時間予算({overall_budget}s)超過: 未完了 {len(pending)} 枚を打ち切り", flush=True)
         finally:
             self._executor.shutdown(wait=False)
+            # 打ち切り等で canonical タスクがキャンセルされた場合でも、
+            # 待機中の follower を必ず解放する（イベント未setのまま放置しない）
+            for _ev in (self._canonical_events or {}).values():
+                try:
+                    _ev.set()
+                except Exception:
+                    pass
 
         # 入力順に正規化。未完了はキャンセルして「失敗」確定（行の🌀を必ず消す）。
         results = []

@@ -29,7 +29,7 @@ from flask import (
     url_for,
 )
 
-from utils import load_env, load_json
+from utils import load_env, load_json, SNAPSHOT_IO_LOCK
 from pipeline import SentencePipeline, VALID_STYLES
 from generator import PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS
 
@@ -1082,28 +1082,34 @@ def api_delete_job(job_id):
 
 
 def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=None, route_reason=None, status=None, extra=None):
-    """再生成結果を rows_progress.json に反映（chart/map/AI 共通）。"""
+    """再生成結果を rows_progress.json に反映（chart/map/AI 共通）。
+
+    read-modify-write 全体を SNAPSHOT_IO_LOCK で直列化する。
+    同時に2枚再生成した場合や、実行中ジョブの _dump_snapshot と重なった場合に
+    片方の更新が失われる競合を防ぐ。
+    """
     import json as _json
     snap_path = job_dir / "rows_progress.json"
-    snap = load_json(snap_path, {"rows": []})
-    for r in snap.get("rows", []):
-        if r.get("no") == no:
-            r["status"] = status or ("ok" if ok else "failed")
-            if filename:
-                r["filename"] = filename
-            if engine:
-                r["engine"] = engine
-            if route:
-                r["route"] = route
-            if route_reason:
-                r["route_reason"] = route_reason
-            if extra:
-                r.update(extra)
-            break
-    try:
-        snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    with SNAPSHOT_IO_LOCK:
+        snap = load_json(snap_path, {"rows": []})
+        for r in snap.get("rows", []):
+            if r.get("no") == no:
+                r["status"] = status or ("ok" if ok else "failed")
+                if filename:
+                    r["filename"] = filename
+                if engine:
+                    r["engine"] = engine
+                if route:
+                    r["route"] = route
+                if route_reason:
+                    r["route_reason"] = route_reason
+                if extra:
+                    r.update(extra)
+                break
+        try:
+            snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _mark_regen_failed(job_dir, no, message, route=None, route_reason=None):

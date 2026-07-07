@@ -61,8 +61,13 @@ def _clean_attribution(ext: dict) -> str:
     return " / ".join(out) or "Wikimedia Commons"
 
 
-def search_commons_one(query: str, limit: int = 12, timeout: int = 20) -> Optional[dict]:
-    """Commons を検索し、許可ライセンスの画像 1 枚のメタを返す（無ければ None）。"""
+def search_commons_one(query: str, limit: int = 12, timeout: int = 20,
+                       min_w: int = 400, min_h: int = 300) -> Optional[dict]:
+    """Commons を検索し、許可ライセンスの画像 1 枚のメタを返す（無ければ None）。
+
+    min_w/min_h: 採用する最小画像サイズ。既定(400x300)で0件のとき、呼び出し側が
+    緩めた値で再検索できる（歴史写真など小さめ素材しか無いトピックの取りこぼし対策）。
+    """
     q = (query or "").strip()
     if not q:
         return None
@@ -95,7 +100,7 @@ def search_commons_one(query: str, limit: int = 12, timeout: int = 20) -> Option
         if not _license_ok(short):
             continue
         w, h = ii.get("width", 0) or 0, ii.get("height", 0) or 0
-        if w < 400 or h < 300:
+        if w < min_w or h < min_h:
             continue  # 小さすぎ（ロゴ・アイコン）を除外
         return {
             "url": ii.get("url", ""),
@@ -178,6 +183,7 @@ def run_commons_search_for_selections(
                 pending.append(s)
 
     # 0 件だったものを英訳して再検索
+    relaxed_hits = 0
     if pending:
         trans = _translate_queries(client, [s.get("query", "") for s in pending], log)
         with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
@@ -195,9 +201,29 @@ def run_commons_search_for_selections(
                 if res:
                     results[s["no"]] = _emit(s, res)
 
+        # それでも 0 件のものは、最小サイズ条件を緩めて最後にもう一度だけ探す。
+        # 歴史写真・古い資料はスキャンが小さいことが多く、既定(400x300)では
+        # 全滅するトピックがあるため（緩和後も 240x160 未満のロゴ級は弾く）。
+        pending2 = [s for s in pending if s["no"] not in results]
+        if pending2:
+            with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
+                futs = {}
+                for s in pending2:
+                    q = (trans.get(s.get("query", "")) or "").strip() or s.get("query", "")
+                    futs[ex.submit(search_commons_one, q, 12, 20, 240, 160)] = s
+                for f in as_completed(futs):
+                    s = futs[f]
+                    try:
+                        res = f.result()
+                    except Exception:
+                        res = None
+                    if res:
+                        results[s["no"]] = _emit(s, res)
+                        relaxed_hits += 1
+
     log("websearch",
         f"Commons: {len(results)}/{len(selections)} 件取得（許可ライセンスのみ・"
-        f"英訳再検索含む）")
+        f"英訳再検索含む" + (f"・サイズ緩和で+{relaxed_hits}" if relaxed_hits else "") + "）")
     return results
 
 

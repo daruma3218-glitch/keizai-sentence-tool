@@ -100,6 +100,57 @@ def _wikipedia_image_url(article_url: str) -> str:
     return ""
 
 
+# og:image / twitter:image を拾う（属性順が逆のHTMLにも対応）
+_META_IMAGE_PATTERNS = [
+    re.compile(
+        r'<meta[^>]+(?:property|name)\s*=\s*["\'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["\'][^>]*\scontent\s*=\s*["\']([^"\']+)["\']',
+        re.IGNORECASE),
+    re.compile(
+        r'<meta[^>]+content\s*=\s*["\']([^"\']+)["\'][^>]*\s(?:property|name)\s*=\s*["\'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["\']',
+        re.IGNORECASE),
+]
+
+
+def _extract_og_image(html: str, base_url: str = "") -> str:
+    """HTML から og:image / twitter:image の画像URLを取り出す（相対URLは絶対化）。"""
+    if not html:
+        return ""
+    for pat in _META_IMAGE_PATTERNS:
+        m = pat.search(html)
+        if not m:
+            continue
+        img = (m.group(1) or "").strip()
+        if not img:
+            continue
+        if img.startswith("//"):
+            img = "https:" + img
+        elif base_url and not img.lower().startswith(("http://", "https://")):
+            img = urllib.parse.urljoin(base_url, img)
+        if img.lower().startswith(("http://", "https://")):
+            return img
+    return ""
+
+
+def _page_main_image(page_url: str, timeout: int = 8) -> str:
+    """記事ページの主画像（og:image）URLを返す。無ければ空文字。
+
+    Wikipedia 以外（報道・公的機関・公式サイト等）からも参考画像を取れるようにする。
+    メタタグは <head> にあるためページ先頭 200KB だけ読む（軽量・安全）。
+    """
+    if not page_url or not page_url.lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        req = urllib.request.Request(page_url, headers={"User-Agent": "sentence-tool/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if ctype and "html" not in ctype:
+                return ""
+            html = resp.read(200_000).decode("utf-8", errors="ignore")
+        return _extract_og_image(html, base_url=page_url)
+    except Exception:
+        return ""
+
+
 def _youtube_thumbnail_url(url: str) -> str:
     """YouTube URL から標準サムネイルURLを推定する。"""
     try:
@@ -462,12 +513,35 @@ def search_single_sentence(
             best_title = u["title"]
             break
 
-    source_type = _source_type(best_url, best_title)
-
-    # サムネイル取得（Wikipedia）
+    # サムネイル取得: Wikipedia は公式API、それ以外のサイトは og:image（ページ主画像）。
+    # 最良URLで画像が取れなければ他の検索結果も順に試す（取得率と関連性の底上げ）。
     thumb_url = ""
-    if "wikipedia.org/wiki/" in best_url:
-        thumb_url = _wikipedia_image_url(best_url)
+    candidates = []
+    if best_url:
+        candidates.append({"url": best_url, "title": best_title})
+    for u in urls:
+        uu = u.get("url", "")
+        if not uu or uu == best_url or _is_youtube_url(uu):
+            continue
+        candidates.append(u)
+        if len(candidates) >= 4:
+            break
+    for cand in candidates:
+        cu = cand.get("url", "")
+        if not cu:
+            continue
+        if "wikipedia.org/wiki/" in cu:
+            t = _wikipedia_image_url(cu)
+        else:
+            t = _page_main_image(cu)
+        if t:
+            thumb_url = t
+            if cu != best_url:
+                # 実際に画像が取れたページを出典として採用（出典と画像のズレを防ぐ）
+                best_url, best_title = cu, cand.get("title", "")
+            break
+
+    source_type = _source_type(best_url, best_title)
 
     return {
         "no": no,
