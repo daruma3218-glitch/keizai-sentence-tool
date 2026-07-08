@@ -258,15 +258,18 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
                          worldview_desc: str = "", verify_diagrams: bool = True,
                          channel_id: str = "default", ch_keys: dict = None,
                          character_ref_path: str = "",
-                         title_override: str = "", fact_context: str = ""):
+                         title_override: str = "", fact_context: str = "",
+                         resume: bool = False):
     job_dir = OUTPUT_DIR / job_id
     ch_keys = ch_keys or {}
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
                       else f"gpt-image ({openai_quality})")
     try:
-        _set_job_state(job_id, status="running", phase=0, message="開始しています...", percent=0)
+        _set_job_state(job_id, status="running", phase=0,
+                       message="再開しています..." if resume else "開始しています...", percent=0)
         _add_log(job_id, "system",
-                 f"ジョブ {job_id} を開始（ch={channel_id} / {provider_label} / 並列 {concurrency} / style={style_preset} / route={route_mode} / Web画像 {web_image_count}）")
+                 ("ジョブを再開します（完了済みの成果物は再利用）: " if resume else "ジョブ ") +
+                 f"{job_id} （ch={channel_id} / {provider_label} / 並列 {concurrency} / style={style_preset} / route={route_mode} / Web画像 {web_image_count}）")
 
         def on_progress(phase, msg, pct):
             _set_job_state(job_id, status="running", phase=phase, message=msg, percent=pct)
@@ -318,6 +321,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             router_concurrency=defaults.get("router_concurrency", 2),
             title_override=title_override,
             fact_context=fact_context,
+            resume=resume,
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,
@@ -384,6 +388,8 @@ def index():
                 "total": manifest.get("total_sentences", job_state.get("total_sentences", 0)),
                 "channel": ch_id,
                 "date": d.name[:8] if len(d.name) >= 8 else "",
+                # 未完了（manifest 無し）かつ原稿が残っていれば途中から再開できる
+                "resumable": (not manifest) and (d / "manuscript.txt").exists(),
             })
     # 各チャンネルのキー設定状況（UI 表示用）
     channels = load_channels()
@@ -1008,6 +1014,12 @@ def start_job():
         style_preset=style_preset,
         web_image_count=web_image_count,
         max_diagrams=max_diagrams,
+        # 途中再開用に全パラメータを保存（サーバー再起動でメモリが消えても復元できる）
+        route_mode=route_mode,
+        worldview_desc=worldview_desc,
+        verify_diagrams=verify_diagrams,
+        title_override=title_override,
+        fact_context=fact_context,
     )
 
     thread = threading.Thread(
@@ -1019,6 +1031,105 @@ def start_job():
     )
     thread.start()
     return jsonify({"job_id": job_id, "redirect": f"/progress/{job_id}"})
+
+
+def _build_resume_args(job_id: str):
+    """途中で止まったジョブの再開引数を、ディスク上の保存情報から復元する。
+
+    戻り値: (args_tuple, error_message)。error_message が None なら再開可能。
+    旧ジョブ（パラメータ未保存）はチャンネル既定値で補完する。
+    """
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return None, "ジョブのデータがサーバー上にありません（再デプロイ等で消えた可能性）"
+    if (job_dir / "manifest.json").exists():
+        return None, "このジョブは完了済みです（再開は不要）"
+    manuscript_path = job_dir / "manuscript.txt"
+    if not manuscript_path.exists():
+        return None, "原稿ファイルが見つからないため再開できません（新規ジョブとして作り直してください）"
+    try:
+        manuscript_text = manuscript_path.read_text(encoding="utf-8")
+    except Exception:
+        return None, "原稿ファイルを読み込めませんでした"
+    if len(manuscript_text.strip()) < 100:
+        return None, "保存された原稿が短すぎるため再開できません"
+
+    job_state = load_json(job_dir / "job.json", {})
+    channel = get_channel(job_state.get("channel_id", "default"))
+    channel_id = channel.get("id", "default")
+    defaults = channel.get("defaults", {}) or {}
+    ch_keys = resolve_channel_keys(channel)
+
+    user_instructions = ""
+    ui_path = job_dir / "user_instructions.txt"
+    if ui_path.exists():
+        try:
+            user_instructions = ui_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    def _int_of(key, fallback, lo, hi):
+        try:
+            v = int(job_state.get(key) if job_state.get(key) is not None else fallback)
+        except (TypeError, ValueError):
+            v = int(fallback)
+        return max(lo, min(hi, v))
+
+    provider = job_state.get("provider") or defaults.get("provider", PROVIDER_NANOBANANA)
+    if provider not in VALID_PROVIDERS:
+        provider = PROVIDER_NANOBANANA
+    openai_quality = job_state.get("openai_quality") or defaults.get("openai_quality", "medium")
+    if openai_quality not in ("low", "medium", "high"):
+        openai_quality = "medium"
+    style_preset = job_state.get("style_preset") or defaults.get("style_preset", "flat_infographic")
+    if style_preset not in VALID_STYLES:
+        style_preset = "flat_infographic"
+    route_mode = job_state.get("route_mode") or defaults.get("route_mode", "auto")
+    if route_mode not in ("auto", "all_ai"):
+        route_mode = "auto"
+    worldview_desc = job_state.get("worldview_desc")
+    if worldview_desc is None:
+        # 旧ジョブ: worldview 指定が保存されていない → チャンネル既定にフォールバック
+        worldview_desc = defaults.get("worldview_desc", "") if defaults.get("worldview_mode", True) else ""
+    verify_diagrams = job_state.get("verify_diagrams")
+    if verify_diagrams is None:
+        verify_diagrams = bool(defaults.get("verify_diagrams", False))
+    skip_decorative = bool(job_state.get("skip_decorative", defaults.get("skip_decorative", False)))
+    concurrency = _int_of("concurrency", defaults.get("concurrency", 4), 1, 24)
+    web_image_count = _int_of("web_image_count", defaults.get("web_image_count", 0), 0, 200)
+    max_diagrams = _int_of("max_diagrams", defaults.get("max_diagrams", 150), 1, 300)
+    title_override = job_state.get("title_override") or ""
+    fact_context = job_state.get("fact_context") or ""
+
+    character_ref_path = ""
+    _cref = (defaults.get("character_ref") or "").strip()
+    if worldview_desc and _cref:
+        _crp = PROJECT_ROOT / _cref
+        if _crp.exists():
+            character_ref_path = str(_crp)
+
+    args = (job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
+            skip_decorative, style_preset, web_image_count, max_diagrams, route_mode,
+            worldview_desc, bool(verify_diagrams), channel_id, ch_keys, character_ref_path,
+            title_override, fact_context, True)  # resume=True
+    return args, None
+
+
+@app.route("/api/resume/<job_id>", methods=["POST"])
+@login_required
+def api_resume(job_id):
+    """途中で止まったジョブを再開する（完了済みの成果物はスキップして残りだけ実行）。"""
+    with _jobs_lock:
+        st = (_jobs.get(job_id) or {}).get("status")
+    if st == "running":
+        return jsonify({"error": "このジョブは現在実行中です"}), 409
+    args, err = _build_resume_args(job_id)
+    if err:
+        return jsonify({"error": err}), 400
+    _set_job_state(job_id, status="queued", phase=0, message="再開の準備中...", percent=0)
+    _add_log(job_id, "system", "再開リクエストを受け付けました（完了済みの成果物は再利用します）")
+    threading.Thread(target=_run_pipeline_thread, args=args, daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "redirect": f"/progress/{job_id}"})
 
 
 @app.route("/progress/<job_id>")

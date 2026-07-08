@@ -312,6 +312,14 @@
                       </span>
                     </div>
                   </a>
+                  {% if job.resumable %}
+                  <button type="button"
+                          class="resumeJobBtn flex-shrink-0 px-3 text-xs font-medium text-cyan-600 hover:text-white hover:bg-cyan-600 transition"
+                          data-job-id="{{ job.id }}"
+                          title="途中で止まったジョブを再開（完了済みの画像・判定は再利用し、残りだけ実行）">
+                    ▶ 再開
+                  </button>
+                  {% endif %}
                   <button type="button"
                           class="deleteJobBtn flex-shrink-0 px-3 text-xs text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-r-lg transition"
                           data-job-id="{{ job.id }}"
@@ -453,6 +461,25 @@
           alert(err.message || '削除に失敗しました');
           btn.disabled = false;
           btn.textContent = '削除';
+        }
+      });
+    });
+
+    // 途中で止まったジョブの再開（完了済み成果物は再利用し、残りだけ実行）
+    document.querySelectorAll('.resumeJobBtn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const jobId = btn.dataset.jobId;
+        btn.disabled = true;
+        btn.textContent = '再開中…';
+        try {
+          const res = await fetch(`/api/resume/${encodeURIComponent(jobId)}`, { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || '再開に失敗しました');
+          window.location.href = data.redirect || `/progress/${jobId}`;
+        } catch (err) {
+          alert(err.message || '再開に失敗しました');
+          btn.disabled = false;
+          btn.textContent = '▶ 再開';
         }
       });
     });

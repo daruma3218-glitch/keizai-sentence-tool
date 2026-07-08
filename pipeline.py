@@ -78,10 +78,12 @@ class SentencePipeline:
         router_concurrency: int = 2,          # Claudeルーター分類の同時数（長文は低めが安定）
         title_override: str = "",           # v3 Step7: final.json の tentative_title
         fact_context: str = "",             # v3 Step7: final.json の検証済み数値・出典
+        resume: bool = False,               # 途中で止まったジョブの再開（ディスク上の成果物を再利用）
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
     ):
+        self.resume = bool(resume)
         self.manuscript_text = manuscript_text
         self.output_dir = Path(output_dir)
         self.user_instructions = user_instructions
@@ -419,6 +421,21 @@ class SentencePipeline:
             return r.get("display") == "image"
         return True
 
+    def _existing_image(self, no) -> str:
+        """再開用: その文の生成済み画像がディスクにあればファイル名を返す。
+
+        前回の実行で保存された images/{no}.png 等（1KB超＝壊れていない）を
+        完成済みとみなし、再生成をスキップする根拠にする。
+        """
+        for ext in ("png", "jpg", "jpeg", "webp"):
+            p = self.images_dir / f"{no}.{ext}"
+            try:
+                if p.exists() and p.stat().st_size > 1024:
+                    return p.name
+            except OSError:
+                continue
+        return ""
+
     def _force_high_coverage_images(self, rows: list, routes: dict) -> int:
         """大量生成指定では、beat/skip による減りすぎを補正する。
 
@@ -668,8 +685,16 @@ class SentencePipeline:
                 prebuilt = load_json(pc_path, {}).get("chapters") or None
             except Exception:
                 prebuilt = None
-        split_result = split_manuscript(client, self.manuscript_text, log=self._log,
-                                        prebuilt_chapters=prebuilt)
+        split_result = None
+        if self.resume:
+            cached_split = load_json(self.output_dir / "split_result.json", None)
+            if isinstance(cached_split, dict) and cached_split.get("rows"):
+                split_result = cached_split
+                self._log("resume",
+                          f"再開: 前回の分解結果を再利用（{len(split_result['rows'])} 文・Claude呼び出しスキップ）")
+        if split_result is None:
+            split_result = split_manuscript(client, self.manuscript_text, log=self._log,
+                                            prebuilt_chapters=prebuilt)
         analysis = split_result["analysis"]
         chapters = split_result["chapters"]
         rows = split_result["rows"]
@@ -705,39 +730,56 @@ class SentencePipeline:
         self._progress(1, f"分解完了: {total_sentences} センテンス検出", 15)
 
         # ===== Phase 2-router: 各文のソースを判定 =====
-        if self.route_mode == "auto":
-            self._progress(2, "各文のソースを判定中（ルーター）...", 16)
-            self._log("router", "ルーターが各文の最適なソースを判定します")
-            few_shot = self._load_route_feedback()
-            if few_shot:
-                self._log("router", f"過去のルート違いフィードバック {len(few_shot)} 件を学習に反映します")
-            routes = route_all_sentences(
-                client, rows, title,
-                user_instructions=self.user_instructions,
-                max_workers=self.router_concurrency, log=self._log,
-                few_shot=few_shot,
-            )
-        else:  # all_ai: v1 互換（全文 AI 生成）
-            self._log("router", "route_mode=all_ai: 全文を AI 生成に回します")
-            routes = {
-                r["no"]: {"route": "illustration", "reason": "all_ai モード", "search_query": "", "topic": "", "propaganda": False}
-                for r in rows
-            }
-        # route を各行に反映（row dict 自体にも route を入れる＝prompter が type 判定に使う）
-        self._apply_intro_visual_boost(rows, routes)
-        self._disable_map_routes(rows, routes)
-        self._limit_map_routes(rows, routes)
-        self._boost_realistic_routes(rows, routes)
+        # 再開時: 前回保存した routes.json（boost 等の後処理適用済み）を再利用する。
+        # JSON 経由でキーが文字列化されているため int に正規化。全文をカバーして
+        # いなければ（途中保存など）安全側に倒して作り直す。
+        routes = None
+        if self.resume:
+            cached_routes = load_json(self.output_dir / "routes.json", None)
+            if isinstance(cached_routes, dict) and cached_routes:
+                try:
+                    normalized = {int(k): v for k, v in cached_routes.items()}
+                except (TypeError, ValueError):
+                    normalized = None
+                if normalized and all(r["no"] in normalized for r in rows):
+                    routes = normalized
+                    self._log("resume",
+                              f"再開: ルート判定を再利用（{len(routes)} 件・Claude呼び出しスキップ）")
+        if routes is None:
+            if self.route_mode == "auto":
+                self._progress(2, "各文のソースを判定中（ルーター）...", 16)
+                self._log("router", "ルーターが各文の最適なソースを判定します")
+                few_shot = self._load_route_feedback()
+                if few_shot:
+                    self._log("router", f"過去のルート違いフィードバック {len(few_shot)} 件を学習に反映します")
+                routes = route_all_sentences(
+                    client, rows, title,
+                    user_instructions=self.user_instructions,
+                    max_workers=self.router_concurrency, log=self._log,
+                    few_shot=few_shot,
+                )
+            else:  # all_ai: v1 互換（全文 AI 生成）
+                self._log("router", "route_mode=all_ai: 全文を AI 生成に回します")
+                routes = {
+                    r["no"]: {"route": "illustration", "reason": "all_ai モード", "search_query": "", "topic": "", "propaganda": False}
+                    for r in rows
+                }
+            # route の後処理（boost 等）は新規計算時のみ。routes.json は処理済みを
+            # 保存しているので、再利用時に再適用すると二重適用になる。
+            self._apply_intro_visual_boost(rows, routes)
+            self._disable_map_routes(rows, routes)
+            self._limit_map_routes(rows, routes)
+            self._boost_realistic_routes(rows, routes)
 
-        if not self.allow_charts:
-            converted = 0
-            for rt in routes.values():
-                if rt.get("route") == "chart":
-                    rt["route"] = "diagram"
-                    rt["reason"] = "チャンネル設定でグラフなし"
-                    converted += 1
-            if converted:
-                self._log("router", f"グラフなし設定: chart {converted} 件を diagram に変換")
+            if not self.allow_charts:
+                converted = 0
+                for rt in routes.values():
+                    if rt.get("route") == "chart":
+                        rt["route"] = "diagram"
+                        rt["reason"] = "チャンネル設定でグラフなし"
+                        converted += 1
+                if converted:
+                    self._log("router", f"グラフなし設定: chart {converted} 件を diagram に変換")
 
         save_json(self.output_dir / "routes.json", routes)
 
@@ -788,6 +830,19 @@ class SentencePipeline:
             try:
                 from router import extract_chart_specs
                 chart_rows = [r for r in rows if r.get("route") == "chart" and self._wants_image(r)]
+                # 再開時: 前回描画済みのグラフはスキップ（抽出・描画とも不要）
+                if self.resume and chart_rows:
+                    remaining = []
+                    for r in chart_rows:
+                        fn = self._existing_image(r["no"])
+                        if fn:
+                            r["engine"] = "render"
+                            self._update_row(r["no"], status="ok", filename=fn, engine="render")
+                        else:
+                            remaining.append(r)
+                    if len(remaining) < len(chart_rows):
+                        self._log("resume", f"再開: 描画済みグラフ {len(chart_rows) - len(remaining)} 枚を再利用")
+                    chart_rows = remaining
                 if chart_rows:
                     self._progress(2, "chart の数値を抽出して図を描画中...", 20)
                     specs = extract_chart_specs(client, chart_rows, log=self._log,
@@ -815,6 +870,19 @@ class SentencePipeline:
             try:
                 from router import extract_map_specs
                 map_rows = [r for r in rows if r.get("route") == "map" and self._wants_image(r)]
+                # 再開時: 前回描画済みの地図はスキップ
+                if self.resume and map_rows:
+                    remaining = []
+                    for r in map_rows:
+                        fn = self._existing_image(r["no"])
+                        if fn:
+                            r["engine"] = "render"
+                            self._update_row(r["no"], status="ok", filename=fn, engine="render")
+                        else:
+                            remaining.append(r)
+                    if len(remaining) < len(map_rows):
+                        self._log("resume", f"再開: 描画済み地図 {len(map_rows) - len(remaining)} 枚を再利用")
+                    map_rows = remaining
                 if map_rows:
                     self._progress(2, "地図データを抽出して描画中...", 21)
                     specs = extract_map_specs(client, map_rows, log=self._log)
@@ -872,13 +940,26 @@ class SentencePipeline:
         self._progress(2, f"英文プロンプトを並列生成中（style={self.style_preset}）...", 22)
         self._log("prompter", f"{len(ai_rows)} 件（AI生成対象）のプロンプトを生成します")
         ai_rows_for_prompts = self._attach_diagram_context(ai_rows, rows)
-        rows_with_prompts = generate_all_prompts(
-            client, ai_rows_for_prompts, title=title,
-            user_instructions=self.user_instructions,
-            style_preset=self.style_preset, worldview_desc=self.worldview_desc,
-            max_workers=6, log=self._log,
-        )
-        self._remove_image_text_terms(rows_with_prompts)
+        # 再開時: 前回のプロンプトが今回の対象を全てカバーしていれば再利用（Claude節約）。
+        # 対象が変わっていたら（ルート再計算等）安全側に倒して作り直す。
+        rows_with_prompts = None
+        if self.resume:
+            cached_prompts = (load_json(self.output_dir / "prompts.json", {}) or {}).get("rows")
+            if cached_prompts:
+                need = {r["no"] for r in ai_rows_for_prompts}
+                have = {r.get("no") for r in cached_prompts if r.get("prompt")}
+                if need and need.issubset(have):
+                    rows_with_prompts = cached_prompts
+                    self._log("resume",
+                              f"再開: 画像プロンプトを再利用（{len(rows_with_prompts)} 件・Claude呼び出しスキップ）")
+        if rows_with_prompts is None:
+            rows_with_prompts = generate_all_prompts(
+                client, ai_rows_for_prompts, title=title,
+                user_instructions=self.user_instructions,
+                style_preset=self.style_preset, worldview_desc=self.worldview_desc,
+                max_workers=6, log=self._log,
+            )
+            self._remove_image_text_terms(rows_with_prompts)
         save_json(self.output_dir / "prompts.json", {"rows": rows_with_prompts})
         self._log("prompter", f"プロンプト生成完了: {len(rows_with_prompts)} 件")
 
@@ -929,7 +1010,10 @@ class SentencePipeline:
             thumb_url = info.get("thumb_url", "")
             if thumb_url:
                 fname = f"{info['no']}.jpg"  # 数字だけのファイル名（№と一致）
-                if download_thumbnail(thumb_url, self.images_dir / fname):
+                existing = self._existing_image(info["no"])  # 再開時は前回DL済みを再利用
+                if existing:
+                    local_file = existing
+                elif download_thumbnail(thumb_url, self.images_dir / fname):
                     local_file = fname
             update = dict(
                 web_source_url=info.get("source_url", ""),
@@ -972,6 +1056,23 @@ class SentencePipeline:
 
         web_thread = None
 
+        # 再開時: 前回の Web/Commons 取得結果を再生してから、未取得分だけ検索する
+        resumed_web_nos = set()
+        if self.resume:
+            cached_web = (load_json(self.output_dir / "web_results.json", {}) or {}).get("items") or []
+            for info in cached_web:
+                no = info.get("no")
+                if no is None or no in resumed_web_nos:
+                    continue
+                resumed_web_nos.add(no)
+                try:
+                    _web_on_item(info)
+                except Exception:
+                    continue
+            if resumed_web_nos:
+                self._log("resume", f"再開: Web/Commons 画像 {len(resumed_web_nos)} 件を再利用（検索スキップ）")
+                _web_save_final()
+
         if self.route_mode == "auto" and (web_photo_rows or self.web_search_profile == "primary_media"):
             # 通常はルーターが web_photo に振った文だけ検索。
             # primary_media（成功の法則）は、記事・一次資料・講演ページも拾うため、
@@ -1002,6 +1103,9 @@ class SentencePipeline:
                         "query": rt.get("search_query") or r.get("sentence", "")[:30],
                         "topic": rt.get("topic") or r.get("sentence", "")[:20],
                     })
+            # 再開時: 前回取得済みの文は検索対象から外す
+            if resumed_web_nos:
+                selections = [s for s in selections if s.get("no") not in resumed_web_nos]
             web_workers = 8 if self.web_search_profile == "primary_media" else 4
             self._log("websearch",
                       f"Web 画像取得を並列起動: {len(selections)} 件（ルーター選定・同時 {web_workers} 並列）")
@@ -1073,11 +1177,19 @@ class SentencePipeline:
         # Step C: 各 row のステータスを「選定済み（pending）」or「間引き」にマーク
         generation_targets = []
         thinned_count = 0
+        resumed_ai_done = 0
         for r in rows_with_prompts:
             no = r["no"]
             if self.skip_decorative and r.get("type") == "decorative":
                 continue  # 既に skipped
             if no in selected_nos:
+                # 再開時: 前回生成済みの画像はそのまま採用（API呼び出しゼロ）
+                if self.resume:
+                    fn = self._existing_image(no)
+                    if fn:
+                        self._update_row(no, status="ok", filename=fn)
+                        resumed_ai_done += 1
+                        continue
                 # 画像 type はルーターの route を最優先（realphoto/map 等を確実に反映）
                 route_type = routes.get(no, {}).get("route", "")
                 img_type = route_type if route_type in AI_ROUTES else r.get("type", "illustration")
@@ -1101,6 +1213,10 @@ class SentencePipeline:
                 # 候補だったが均等配置から外れた → 「間引き」
                 self._update_row(no, status="thinned")
                 thinned_count += 1
+
+        if resumed_ai_done:
+            self._log("resume",
+                      f"再開: 生成済みAI画像 {resumed_ai_done} 枚を再利用（残り {len(generation_targets)} 枚のみ生成）")
 
         # ===== v3 Step6: エンティティ参照（一貫性ロック）=====
         # 同じ被写体（国・組織・繰り返す概念）が 3 回以上 AI 画像に登場するとき、
@@ -1263,9 +1379,12 @@ class SentencePipeline:
                 except Exception:
                     pass
 
-        success_count = sum(1 for r in results if r.get("success"))
-        fail_count = len(results) - success_count
-        self._log("generator", f"画像生成完了: 成功 {success_count} / 失敗 {fail_count}")
+        new_success = sum(1 for r in results if r.get("success"))
+        fail_count = len(results) - new_success
+        success_count = new_success + resumed_ai_done
+        self._log("generator",
+                  f"画像生成完了: 成功 {success_count} / 失敗 {fail_count}"
+                  + (f"（うち再開で再利用 {resumed_ai_done} 枚）" if resumed_ai_done else ""))
 
         # ===== Phase 3b: 図解の意味を自動検証 → ズレてたら再生成 =====
         # 検証は「あれば嬉しい」機能。何があってもジョブ完了を止めない（必ず先へ進む）。
