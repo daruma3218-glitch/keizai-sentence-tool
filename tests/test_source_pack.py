@@ -23,6 +23,41 @@ import web_searcher  # noqa: E402
 
 # ---------- source_collector ----------
 
+def test_video_prompt_requests_overseas_primary_sources(monkeypatch):
+    """元ネタ動画の検索指示に、英語（原語）検索・TED等の海外一次情報の優先が入る。"""
+    captured = {}
+
+    def fake_research(client, query, system, **kw):
+        captured["query"] = query
+        captured["max_uses"] = kw.get("max_uses")
+        return "[]", []
+    monkeypatch.setattr(source_collector, "_claude_research_call", fake_research)
+    source_collector.collect_chapter_source_videos(None, "T", "第1章", "要約", per_chapter=3)
+    q = captured["query"]
+    assert "英語でも検索" in q and "TED" in q and "原語" in q
+    assert captured["max_uses"] >= 4  # 日英両方で検索できる回数
+
+
+def test_selection_prompt_allows_english_queries(monkeypatch):
+    """primary_media の選定プロンプトで英語クエリが許可されている。"""
+    captured = {}
+
+    class _FakeMessages:
+        def create(self, **kw):
+            captured["kw"] = kw
+            return _FakeMsgResp("[]")
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    web_searcher._select_chunk(
+        _FakeClient(), [{"no": 1, "sentence": "海外の起業家についての文。" * 3}],
+        target_count=1, exclude_nos=set(), log=lambda *a, **k: None, profile="primary_media")
+    content = captured["kw"]["messages"][0]["content"]
+    text = "\n".join(b.get("text", "") for b in content) if isinstance(content, list) else content
+    assert "英語で作ってよい" in text and "日本語または英語" in text
+
+
 def test_collect_chapter_source_videos_filters_and_verifies(monkeypatch):
     text = json.dumps([
         {"url": "https://www.youtube.com/watch?v=abc", "title": "本人講演", "reason": "本人の一次情報"},

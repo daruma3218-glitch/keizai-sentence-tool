@@ -32,15 +32,20 @@ def collect_chapter_source_videos(client, title: str, chapter_title: str,
 
 【探すもの】本人の講演・インタビュー・対談、公式チャンネルの動画、ドキュメンタリー、
 大学の講義など、内容の裏取りや演出の参考になる実在の動画（YouTube / TED / Vimeo 可）
+【海外の一次情報を優先】対象が海外の人物・企業・研究なら、**英語でも検索**して
+原語の一次情報（TED Talk、本人の英語スピーチ・インタビュー、公式チャンネル、
+大学講義、カンファレンス登壇）を優先的に含めること。日本語の解説・要約動画より原典を上位に。
 【避けるもの】無関係なまとめ動画、転載と思われるもの、内容の薄いショート動画
 最大 {per_chapter} 件。確信が持てるものだけ。見つからなければ空配列 [] を返す。
+title は原語のままでよい。reason は日本語で書く。
 
 【出力 JSON のみ・前置き禁止】
 [
   {{"url": "https://...", "title": "動画タイトル", "reason": "元ネタ/参考になる理由（30字以内）"}}
 ]"""
+    # max_uses=4: 日本語と英語（原語）の両方で検索できる余地を持たせる
     text, real_urls = _claude_research_call(
-        client, query, system, max_tokens=1500, max_uses=3, timeout=timeout)
+        client, query, system, max_tokens=1500, max_uses=4, timeout=timeout)
     items = parse_json_array(text)
     real = [u.get("url", "") for u in real_urls if u.get("url")]
     out = []

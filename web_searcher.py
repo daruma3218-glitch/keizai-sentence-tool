@@ -244,6 +244,10 @@ def _select_chunk(
 - person: 実在人物 → クエリ例:「氏名 講演 写真」「氏名 インタビュー 公式」
 - document: 書籍・論文・レポート・公式資料 → クエリ例:「書名 表紙」「◯◯ 論文 大学」
 - data: 統計・調査データ → クエリ例:「◯◯ 統計 出典 政府」
+
+【海外対象は英語クエリで】対象が海外の人物・企業・書籍・研究なら、query は
+**英語で作ってよい**（原語の一次情報のほうが公式写真・原典ページが見つかるため）。
+例: "James Clear interview photo" / "Stanford marshmallow experiment" / "Patagonia headquarters office"
 """
     else:
         system = (
@@ -264,6 +268,7 @@ def _select_chunk(
     exclude_note = f"\n\n【除外: 以下の no はすでに選定済みなので絶対に選ばないこと】\n{sorted(exclude_nos)[:200]}" if exclude_nos else ""
     # primary_media は素材タイプ（scene/person/document/data）も出力させ、検索クエリの的中率を上げる
     mt_field = ', "material_type": "scene|person|document|data"' if primary_media else ""
+    q_lang = "日本語または英語（海外対象は英語推奨）" if primary_media else "日本語"
     # 固定ルール部（プロファイル毎に一定）を先頭に置き prompt cache 対象にする。
     # 件数・センテンス・除外リストなど毎回変わるものは後段の動的部へ分離。
     fixed_selection_rules = f"""以下のセンテンスから、Web で参考画像（写真・絵画・歴史画像）が見つかりやすい候補を指定件数ぶん選んでください。
@@ -280,7 +285,7 @@ def _select_chunk(
 
 【出力 JSON（必ずこの形式のみ）】
 [
-  {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ(日本語40文字以内、固有名詞含む)"{mt_field}}}
+  {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ({q_lang}、40文字以内、固有名詞含む)"{mt_field}}}
 ]
 出力は JSON 配列のみ、前置き禁止。"""
 
@@ -472,6 +477,8 @@ def search_single_sentence(
             "- 公式サイト、企業IR、年次報告書、プレスリリース、政府/大学/研究機関、論文、統計など一次情報を最優先\n"
             "- 実在人物が出る場合は、本人公式サイト・Wikipedia/Wikimedia・公式プロフィール・講演ページを優先\n"
             "- 記事だけでなく、講演ページ・インタビュー記事・登壇資料も候補に含める\n"
+            "- 対象が海外の人物・企業・研究なら、**英語でも検索**し、原語の一次情報"
+            "（本人公式サイト・TED・大学・海外報道・原典ページ）を積極的に採用する\n"
             "- YouTube / youtu.be のURLは採用しない\n"
             "- ゴシップ、まとめサイト、無断転載、出典不明サムネイルは避ける\n"
         )
