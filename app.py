@@ -156,6 +156,11 @@ def login_required(f):
         if not APP_PASSWORD:
             return f(*args, **kwargs)
         if not session.get("authenticated"):
+            # fetch() で呼ばれる API 系にログインページ(HTML)を返すと、フロントが
+            # 「Unexpected token '<' ... is not valid JSON」という意味不明なエラーになる。
+            # JSON で 401 を返し、UI に「ログインし直して」と表示させる。
+            if request.path.startswith("/api/") or request.path == "/start":
+                return jsonify({"error": "ログインセッションが切れました。ページを再読み込みしてログインし直してください。"}), 401
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
