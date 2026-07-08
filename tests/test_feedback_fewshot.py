@@ -18,12 +18,19 @@ import router  # noqa: E402
 from pipeline import SentencePipeline  # noqa: E402
 
 
+def _query_text(query) -> str:
+    """prompt cache 版はコンテンツブロックのリスト。テキストへ正規化して比較する。"""
+    if isinstance(query, list):
+        return "\n".join(block.get("text", "") for block in query if isinstance(block, dict))
+    return query
+
+
 def _capture_query(monkeypatch):
     """router.claude_query を差し替えて、組み立てられたクエリ文字列を捕捉する。"""
     captured = {}
 
     def fake_claude_query(client, query, system, **kw):
-        captured["query"] = query
+        captured["query"] = _query_text(query)
         captured["system"] = system
         return "[]"  # parse_json_array("[]") -> []（API は呼ばない）
 

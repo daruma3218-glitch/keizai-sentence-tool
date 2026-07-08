@@ -49,9 +49,57 @@ def get_anthropic_client(api_key: str = "") -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=api_key)
 
 
+# ===== Prompt cache（API代削減。中山さんの monorepo 改修 97346ca を移植）=====
+PROMPT_CACHE_DISABLED_VALUES = {"0", "false", "no", "off"}
+PROMPT_CACHE_MIN_SYSTEM_CHARS = 1000
+
+
+def prompt_cache_enabled() -> bool:
+    """PROMPT_CACHE_ENABLED=0/false/no/off のときだけ無効化する。"""
+    flag = os.environ.get("PROMPT_CACHE_ENABLED", "1").strip().lower()
+    return flag not in PROMPT_CACHE_DISABLED_VALUES
+
+
+def cached_text_block(text: str, min_chars: int = PROMPT_CACHE_MIN_SYSTEM_CHARS) -> dict:
+    """長い固定テキストブロックだけ prompt cache 対象にする。"""
+    block = {"type": "text", "text": text}
+    if prompt_cache_enabled() and isinstance(text, str) and len(text) >= min_chars:
+        block["cache_control"] = {"type": "ephemeral"}
+    return block
+
+
+def cached_system_param(system: str, min_chars: int = PROMPT_CACHE_MIN_SYSTEM_CHARS):
+    """長い固定 system prompt のみ prompt cache 対象にする。"""
+    if prompt_cache_enabled() and isinstance(system, str) and len(system) >= min_chars:
+        return [cached_text_block(system, min_chars)]
+    return system
+
+
+def cached_user_content(*parts) -> list:
+    """(text, cacheable) の並びから Anthropic content blocks を作る。"""
+    content = []
+    for part in parts:
+        text, cacheable = part if isinstance(part, tuple) else (part, False)
+        if not text:
+            continue
+        content.append(cached_text_block(text) if cacheable else {"type": "text", "text": text})
+    return content
+
+
+def log_prompt_cache_usage(response, label: str = "Claude") -> None:
+    """キャッシュが実際に読まれた/作られたときだけ軽く表示する。"""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    if cache_read or cache_create:
+        print(f"  [CACHE] {label}: read={cache_read} create={cache_create}", flush=True)
+
+
 def claude_query(
     client: anthropic.Anthropic,
-    query: str,
+    query: "str | list",  # list = cached_user_content() が作る content blocks
     system: str,
     max_tokens: int = 4096,
     model: str = "claude-sonnet-5",
@@ -64,10 +112,11 @@ def claude_query(
             response = client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
-                system=system,
+                system=cached_system_param(system),
                 messages=[{"role": "user", "content": query}],
                 timeout=timeout_seconds,
             )
+            log_prompt_cache_usage(response, model)
             if not response or not response.content:
                 if attempt == max_retries - 1:
                     return ""

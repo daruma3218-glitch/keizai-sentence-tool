@@ -20,7 +20,7 @@ from typing import Callable, Optional
 
 import anthropic
 
-from utils import claude_query, parse_json_array
+from utils import cached_user_content, claude_query, parse_json_array
 
 
 CLAUDE_MODEL = "claude-sonnet-5"
@@ -154,11 +154,9 @@ def _route_chunk(
         "1 つ割り当てます。結果は必ず JSON 配列のみで返してください。"
     )
 
-    query = f"""動画「{title}」の各センテンスに、最適な画像ソース種別（route）を 1 つ割り当ててください。
-
-センテンス一覧:
-{inputs_json}
-{user_block}{propaganda_block}{few_shot_block}
+    # 固定ルール部（全チャンク共通）を先頭に置き prompt cache 対象にする。
+    # 動的な内容（タイトル・センテンス・few-shot 等）は後段に分離（キャッシュを壊さない）。
+    fixed_route_rules = """各センテンスに、最適な画像ソース種別（route）を 1 つ割り当ててください。
 
 【route の種別と判定基準】
 1. web_photo … **実在の特定の**歴史人物・事件・建造物で「本物の写真/絵画」が見たいもの
@@ -194,23 +192,39 @@ def _route_chunk(
 
 【出力 JSON（必ずこの形式のみ）】
 [
-  {{
+  {
     "no": 1,
     "route": "web_photo",
     "reason": "判定理由を15字以内で",
     "search_query": "Web検索クエリ（web_photoのときのみ、日本語30字以内、固有名詞を含む）",
     "topic": "トピック名（web_photoのときのみ、10〜20字）",
-    "importance": 4, "entities": ["ロシア"], "beat": "new"{propaganda_field}
-  }},
-  {{
+    "importance": 4, "entities": ["ロシア"], "beat": "new"
+  },
+  {
     "no": 2,
     "route": "diagram",
     "reason": "概念の対比のため",
     "importance": 3, "entities": [], "beat": "continue"
-  }}
+  }
 ]
+JSON 配列のみ返す。"""
 
-必ず {len(rows_chunk)} 件すべてに route / importance / entities / beat を付与すること。JSON 配列のみ返す。"""
+    propaganda_output_note = (
+        f"\npropaganda_mix モード時は、出力の各オブジェクトに次の追加フィールドも付与すること:{propaganda_field}\n"
+        if propaganda_field else ""
+    )
+    dynamic_route_payload = f"""動画「{title}」
+
+センテンス一覧:
+{inputs_json}
+{user_block}{propaganda_block}{few_shot_block}{propaganda_output_note}
+
+必ず {len(rows_chunk)} 件すべてに route / importance / entities / beat を付与すること。"""
+
+    query = cached_user_content(
+        (fixed_route_rules, True),
+        (dynamic_route_payload, False),
+    )
 
     result = claude_query(
         client,

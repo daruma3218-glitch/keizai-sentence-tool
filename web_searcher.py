@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import anthropic
 
-from utils import parse_json_array
+from utils import cached_system_param, cached_user_content, log_prompt_cache_usage, parse_json_array
 
 
 CLAUDE_MODEL = "claude-sonnet-5"
@@ -39,7 +39,7 @@ def _claude_research_call(
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
-            system=system,
+            system=cached_system_param(system),
             tools=[{
                 "type": "web_search_20250305",
                 "name": "web_search",
@@ -48,6 +48,7 @@ def _claude_research_call(
             messages=[{"role": "user", "content": query}],
             timeout=timeout,
         )
+        log_prompt_cache_usage(response, "web_search")
         for block in response.content:
             block_type = getattr(block, "type", "")
             if hasattr(block, "text"):
@@ -254,15 +255,14 @@ def _select_chunk(
 - 統計データの背景となるもの（GDP、軍事費、原油生産 → 関連写真）
 """
     exclude_note = f"\n\n【除外: 以下の no はすでに選定済みなので絶対に選ばないこと】\n{sorted(exclude_nos)[:200]}" if exclude_nos else ""
-    query = f"""以下のセンテンスから、Web で参考画像（写真・絵画・歴史画像）が見つかりやすい候補を**{target_count}件**選んでください。
-
-候補センテンス:
-{inputs_json}{exclude_note}
+    # 固定ルール部（プロファイル毎に一定）を先頭に置き prompt cache 対象にする。
+    # 件数・センテンス・除外リストなど毎回変わるものは後段の動的部へ分離。
+    fixed_selection_rules = f"""以下のセンテンスから、Web で参考画像（写真・絵画・歴史画像）が見つかりやすい候補を指定件数ぶん選んでください。
 
 {criteria}
 
 【選定方針】
-- できるだけ多く選ぶ。{target_count}件に満たない場合は、候補センテンスから関連画像が見つかりそうなものを広く拾う
+- できるだけ多く選ぶ。指定件数に満たない場合は、候補センテンスから関連画像が見つかりそうなものを広く拾う
 - 「やや関連がある程度」でも採用してよい
 
 【除外】
@@ -273,18 +273,28 @@ def _select_chunk(
 [
   {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ(日本語40文字以内、固有名詞含む)"}}
 ]
+出力は JSON 配列のみ、前置き禁止。"""
 
-必ず可能な限り {target_count} 件を出力。出力は JSON 配列のみ、前置き禁止。"""
+    dynamic_selection_payload = f"""候補センテンス:
+{inputs_json}{exclude_note}
+
+必ず可能な限り {target_count} 件を出力。"""
+
+    query = cached_user_content(
+        (fixed_selection_rules, True),
+        (dynamic_selection_payload, False),
+    )
 
     # 必要 token 数を推算（1 件あたり約 150 token）
     needed_tokens = max(4000, target_count * 200 + 2000)
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=min(needed_tokens, 16000),  # 上限 16k
-        system=system,
+        system=cached_system_param(system),
         messages=[{"role": "user", "content": query}],
         timeout=90.0,
     )
+    log_prompt_cache_usage(response, "websearch.select")
     text = ""
     for b in response.content:
         if hasattr(b, "text"):
