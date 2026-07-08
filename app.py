@@ -1132,6 +1132,81 @@ def api_resume(job_id):
     return jsonify({"ok": True, "job_id": job_id, "redirect": f"/progress/{job_id}"})
 
 
+@app.route("/api/web_candidates/<job_id>/<int:no>")
+@login_required
+def api_web_candidates(job_id, no):
+    """その文のWeb検索候補ページから、差し替え可能な画像候補（最大4件）を解決して返す。
+
+    候補ページURLは生成時に保存済み（web_candidates）。ここで初めて各ページの
+    主画像（Wikipedia APIサムネ / og:image）を解決する＝選ぶ時だけコストを払う。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FutTimeout
+    from web_searcher import _wikipedia_image_url, _page_main_image
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return jsonify({"error": "ジョブが見つかりません"}), 404
+    snap = load_json(job_dir / "rows_progress.json", {"rows": []})
+    row = next((r for r in snap.get("rows", []) if r.get("no") == no), None)
+    cands = (row or {}).get("web_candidates") or []
+    if not cands:
+        return jsonify({"items": [], "current": ""})
+
+    def _resolve(c):
+        u = c.get("url", "")
+        img = _wikipedia_image_url(u) if "wikipedia.org/wiki/" in u else _page_main_image(u)
+        return {"page_url": u, "title": c.get("title", ""), "image_url": img}
+
+    items = []
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = [ex.submit(_resolve, c) for c in cands[:4]]
+        try:
+            for f in as_completed(futs, timeout=20):
+                try:
+                    it = f.result()
+                except Exception:
+                    continue
+                if it.get("image_url"):
+                    items.append(it)
+        except _FutTimeout:
+            pass  # 解決できた分だけ返す
+    order = {c.get("url", ""): i for i, c in enumerate(cands)}
+    items.sort(key=lambda it: order.get(it["page_url"], 99))
+    return jsonify({"items": items, "current": (row or {}).get("web_source_url", "")})
+
+
+@app.route("/api/web_pick/<job_id>/<int:no>", methods=["POST"])
+@login_required
+def api_web_pick(job_id, no):
+    """候補から選んだWeb写真をその文の画像として採用する（DL→差し替え→出典更新）。"""
+    from web_searcher import download_thumbnail, _wikipedia_image_url, _page_main_image
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return jsonify({"error": "ジョブが見つかりません"}), 404
+    page_url = (request.form.get("page_url") or "").strip()
+    image_url = (request.form.get("image_url") or "").strip()
+    title = (request.form.get("title") or "").strip()
+    if not page_url:
+        return jsonify({"error": "候補ページが指定されていません"}), 400
+    if not image_url:
+        image_url = (_wikipedia_image_url(page_url) if "wikipedia.org/wiki/" in page_url
+                     else _page_main_image(page_url))
+    if not image_url:
+        return jsonify({"error": "このページから画像を取得できませんでした"}), 422
+    fname = f"{no}.jpg"
+    if not download_thumbnail(image_url, job_dir / "images" / fname):
+        return jsonify({"error": "画像のダウンロードに失敗しました"}), 502
+    _update_regen_snapshot(job_dir, no, True, filename=fname, extra={
+        "web_source_url": page_url,
+        "web_source_title": title,
+        "web_thumb_url": image_url,
+        "web_local_file": fname,
+        "web_picked": True,
+    })
+    return jsonify({"ok": True, "no": no, "filename": fname,
+                    "source_url": page_url,
+                    "ts": datetime.now().strftime("%H%M%S")})
+
+
 @app.route("/progress/<job_id>")
 @login_required
 def progress_page(job_id):

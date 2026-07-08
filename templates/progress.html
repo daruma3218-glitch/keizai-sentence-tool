@@ -190,6 +190,19 @@
   </div>
 
   <!-- 拡大表示モーダル -->
+  <!-- Web写真の候補選択モーダル -->
+  <div id="webPickModal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6" onclick="closeWebPick(event)">
+    <div class="max-w-4xl w-full bg-white rounded-2xl overflow-hidden shadow-2xl" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+        <p class="text-sm font-semibold text-gray-900">Web写真の候補から選ぶ <span id="webPickNo" class="text-xs text-gray-400 font-normal"></span></p>
+        <button onclick="closeWebPick()" class="text-gray-400 hover:text-gray-700 text-2xl leading-none flex-shrink-0">&times;</button>
+      </div>
+      <div id="webPickList" class="p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 max-h-[70vh] overflow-y-auto">
+        <p class="col-span-full text-sm text-gray-400 text-center py-8">候補を読み込み中...</p>
+      </div>
+    </div>
+  </div>
+
   <div id="modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6" onclick="closeModal(event)">
     <div class="max-w-6xl w-full bg-white rounded-2xl overflow-hidden shadow-2xl" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200">
@@ -343,16 +356,21 @@
       const sourceType = row.web_source_type || '';
       if (!src) return `<div class="text-gray-300 text-[10px] text-center">―</div>`;
       // ローカル DL 画像があればそれを優先（確実に表示・ZIP同梱）、なければリモートサムネ
-      const imgSrc = local ? `/results/${JOB_ID}/images/${local}` : (thumb ? escapeHtml(thumb) : '');
+      const imgSrc = local ? `/results/${JOB_ID}/images/${local}?t=${Date.now()}` : (thumb ? escapeHtml(thumb) : '');
       const thumbHtml = imgSrc
         ? `<img src="${imgSrc}" class="thumb-img pop-in" alt="" loading="lazy" onerror="this.style.display='none'">`
         : `<div class="w-20 h-[45px] bg-purple-50 rounded flex items-center justify-center mx-auto"><svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/></svg></div>`;
+      // 差し替え候補が2件以上あれば「候補から選ぶ」ボタンを出す
+      const cands = row.web_candidates || [];
+      const pickBtn = cands.length >= 2
+        ? `<button onclick='openWebCandidates(${row.no}, event)' class="mt-0.5 text-[10px] text-purple-500 hover:text-purple-700 hover:underline" title="検索でヒットした他ページの画像から選び直す">🖼 候補(${cands.length})</button>`
+        : '';
       return `
         <a href="${escapeHtml(src)}" target="_blank" rel="noopener" class="block hover:opacity-80" title="${escapeHtml(topic)}: ${escapeHtml(src)}">
           ${thumbHtml}
           ${sourceType ? `<div class="text-[9px] text-emerald-600 truncate mt-0.5">${escapeHtml(sourceType)}</div>` : ''}
           <div class="text-[10px] text-purple-600 truncate mt-0.5">${escapeHtml(topic.substring(0, 18))}</div>
-        </a>`;
+        </a>${pickBtn}`;
     }
 
     function isImageCandidate(row) {
@@ -932,6 +950,67 @@
       }
       await pollRows();
       alert(`再生成完了: 成功 ${ok} 件 / 失敗 ${ng} 件`);
+    }
+
+    // ===== Web写真: 候補から選び直す =====
+    async function openWebCandidates(no, ev) {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      const modal = document.getElementById('webPickModal');
+      const list = document.getElementById('webPickList');
+      document.getElementById('webPickNo').textContent = `（№${no}）`;
+      list.innerHTML = `<p class="col-span-full text-sm text-gray-400 text-center py-8">候補の画像を取得中...（数秒かかります）</p>`;
+      modal.classList.remove('hidden');
+      try {
+        const res = await fetch(`/api/web_candidates/${JOB_ID}/${no}`);
+        const data = await res.json();
+        const items = data.items || [];
+        if (!items.length) {
+          list.innerHTML = `<p class="col-span-full text-sm text-gray-400 text-center py-8">画像を取得できる候補がありませんでした</p>`;
+          return;
+        }
+        list.innerHTML = items.map(it => {
+          const isCurrent = it.page_url === data.current;
+          let domain = '';
+          try { domain = new URL(it.page_url).hostname.replace('www.', ''); } catch (e) {}
+          return `
+            <button type="button" onclick='pickWebCandidate(${no}, this)'
+                    data-page-url="${escapeHtml(it.page_url)}" data-image-url="${escapeHtml(it.image_url)}" data-title="${escapeHtml(it.title || '')}"
+                    class="text-left rounded-xl border-2 ${isCurrent ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50'} p-2 transition">
+              <img src="${escapeHtml(it.image_url)}" class="w-full h-28 object-cover rounded-lg mb-1.5" loading="lazy"
+                   onerror="this.closest('button').style.display='none'">
+              <p class="text-[11px] text-gray-800 line-clamp-2">${escapeHtml(it.title || '(タイトルなし)')}</p>
+              <p class="text-[10px] text-gray-400 truncate">${escapeHtml(domain)}${isCurrent ? '・使用中' : ''}</p>
+            </button>`;
+        }).join('');
+      } catch (e) {
+        list.innerHTML = `<p class="col-span-full text-sm text-red-400 text-center py-8">候補の取得に失敗しました（${escapeHtml(e.message || '')}）</p>`;
+      }
+    }
+
+    async function pickWebCandidate(no, btn) {
+      const pageUrl = btn.dataset.pageUrl, imageUrl = btn.dataset.imageUrl, title = btn.dataset.title;
+      btn.disabled = true;
+      btn.classList.add('opacity-50');
+      try {
+        const fd = new FormData();
+        fd.append('page_url', pageUrl);
+        fd.append('image_url', imageUrl);
+        fd.append('title', title);
+        const res = await fetch(`/api/web_pick/${JOB_ID}/${no}`, { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || '差し替えに失敗しました');
+        closeWebPick();
+        await pollRows();  // 最新スナップショットで行を再描画（画像・出典が入れ替わる）
+      } catch (e) {
+        alert(e.message || '差し替えに失敗しました');
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
+      }
+    }
+
+    function closeWebPick(e) {
+      if (e && e.target !== e.currentTarget) return;
+      document.getElementById('webPickModal').classList.add('hidden');
     }
 
     // ルート違いを記録 → 次回以降のルーターが few-shot として学習する

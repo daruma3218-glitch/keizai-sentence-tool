@@ -556,25 +556,93 @@ def _lighten(hex_color: str, amt: float = 0.55) -> str:
         return hex_color
 
 
-def _resolve_extent(spec: dict, geo: dict, countries: list):
-    ext = (spec.get("extent") or "").strip()
-    if ext in _EXTENTS:
-        return _EXTENTS[ext]
-    # custom / 未知 → focus+secondary の bbox から自動算出（余白付き）
+def _country_bbox(info):
+    """1国の外接矩形 (x0, x1, y0, y1)。リングが無ければ None。"""
     xs0, xs1, ys0, ys1 = 180, -180, 90, -90
+    for ring in info.get("rings") or []:
+        for x, y in ring:
+            xs0, xs1 = min(xs0, x), max(xs1, x)
+            ys0, ys1 = min(ys0, y), max(ys1, y)
+    if xs0 > xs1:
+        return None
+    return (xs0, xs1, ys0, ys1)
+
+
+def _auto_extent(geo: dict, countries: list):
+    """対象国群にフィットする表示範囲を計算する（余白・最小スパンつき）。
+
+    ロシアのように日付変更線をまたぐ超巨大国は、全リングを含めると
+    (-180..180) の無意味な範囲になるため、他の対象国の近傍にある部分だけを
+    取り込む（例: RUS+BLR+DEU → 西ロシア〜欧州の回廊にフィット）。
+    """
+    boxes = []
+    giants = []
     for iso in countries:
         info = geo.get(iso)
         if not info:
             continue
-        for ring in info["rings"]:
-            for x, y in ring:
-                xs0, xs1 = min(xs0, x), max(xs1, x)
-                ys0, ys1 = min(ys0, y), max(ys1, y)
-    if xs0 > xs1:
-        return _EXTENTS["world"]
+        b = _country_bbox(info)
+        if b is None:
+            continue
+        if (b[1] - b[0]) > 180:  # 日付変更線またぎ（ロシア等）
+            giants.append(info)
+        else:
+            boxes.append(b)
+    if not boxes and not giants:
+        return None
+    if boxes:
+        xs0 = min(b[0] for b in boxes); xs1 = max(b[1] for b in boxes)
+        ys0 = min(b[2] for b in boxes); ys1 = max(b[3] for b in boxes)
+        # 巨大国は「他の対象国の近傍」にある頂点だけ取り込む
+        for info in giants:
+            wx0, wx1 = xs0 - 35.0, xs1 + 35.0
+            wy0, wy1 = ys0 - 25.0, ys1 + 25.0
+            found = False
+            for ring in info.get("rings") or []:
+                for x, y in ring:
+                    if wx0 <= x <= wx1 and wy0 <= y <= wy1:
+                        xs0, xs1 = min(xs0, x), max(xs1, x)
+                        ys0, ys1 = min(ys0, y), max(ys1, y)
+                        found = True
+            if not found:
+                p = _rep_point(info)
+                xs0, xs1 = min(xs0, p[0] - 15), max(xs1, p[0] + 15)
+                ys0, ys1 = min(ys0, p[1] - 8), max(ys1, p[1] + 8)
+    else:
+        # 巨大国のみ（例: ロシア単体）→ 自動ズームは不適。呼び出し側でプリセットに任せる
+        return None
     padx = max(4.0, (xs1 - xs0) * 0.25)
     pady = max(4.0, (ys1 - ys0) * 0.25)
-    return (xs0 - padx, xs1 + padx, ys0 - pady, ys1 + pady)
+    x0, x1 = xs0 - padx, xs1 + padx
+    y0, y1 = ys0 - pady, ys1 + pady
+    # 寄りすぎ防止（最小スパン）と世界範囲へのクランプ
+    if (x1 - x0) < 24:
+        cx = (x0 + x1) / 2
+        x0, x1 = cx - 12, cx + 12
+    if (y1 - y0) < 14:
+        cy = (y0 + y1) / 2
+        y0, y1 = cy - 7, cy + 7
+    return (max(-180.0, x0), min(190.0, x1), max(-60.0, y0), min(84.0, y1))
+
+
+def _resolve_extent(spec: dict, geo: dict, countries: list):
+    ext = (spec.get("extent") or "").strip()
+    preset = _EXTENTS.get(ext)
+    auto = _auto_extent(geo, countries)
+    if preset is not None:
+        # プリセット指定でも、対象国が十分小さい（プリセット面積の35%未満）なら
+        # 自動ズームを優先する。「世界地図の隅に対象国が小さく」を防ぐ。
+        # 対象が1国だけの場合はプリセット尊重（大国のクロップ事故を避ける）。
+        if auto is not None and len(countries) >= 2:
+            pa = (preset[1] - preset[0]) * (preset[3] - preset[2])
+            aa = (auto[1] - auto[0]) * (auto[3] - auto[2])
+            if aa < pa * 0.35:
+                return auto
+        return preset
+    # custom / 未知 → 自動フィット（従来挙動）
+    if auto is None:
+        return _EXTENTS["world"]
+    return auto
 
 
 def _shift_text_px(ax, t, dx, dy):

@@ -1026,6 +1026,11 @@ class SentencePipeline:
                 license=info.get("license", ""),
                 attribution=info.get("attribution", ""),
                 commons_page_url=info.get("commons_page_url", ""),
+                # 差し替え候補（検索でヒットした他ページ）。UIの「候補から選ぶ」で使う
+                web_candidates=[
+                    {"url": u.get("url", ""), "title": u.get("title", "")}
+                    for u in (info.get("all_urls") or [])[:4] if u.get("url")
+                ],
             )
             if local_file:
                 # Web写真も「画像1枚」として扱う。これを入れないと画面上は画像が見えても
@@ -1400,6 +1405,12 @@ class SentencePipeline:
                 self._verify_and_fix(results, generation_targets, gemini_key, openai_key, theme=theme)
             except Exception as e:
                 self._log("error", f"検証フェーズをスキップしました（{str(e)[:80]}）。生成画像はそのまま使えます。")
+            # イラスト/実写風は「⚠要確認フラグのみ」の軽量検品（自動再生成はしない）。
+            # 編集者は⚠の行だけ目視→気になれば🔄すればよく、全数目視が不要になる。
+            try:
+                self._flag_check_ai_images(results, generation_targets, theme=theme)
+            except Exception as e:
+                self._log("verify", f"軽量検品をスキップ（{str(e)[:80]}）")
 
         # Web 検索の完了を待つ。
         # 通常チャンネルで長く待ちすぎると「画像生成は終わったのに止まった」ように見える。
@@ -1927,13 +1938,97 @@ class SentencePipeline:
         )
         self._log("verify", f"再生成完了（{len(fix_targets)} 枚を作り直しました）")
 
+    def _flag_check_ai_images(self, results, generation_targets, theme=""):
+        """イラスト/実写風の軽量検品（⚠フラグのみ・自動再生成しない）。
+
+        diagram/chart は _verify_and_fix が修正まで行うのに対し、こちらは Haiku で
+        「文とズレていないか・文字化けが無いか」を判定して verify_issue を立てるだけ。
+        既存UIの「失敗・要確認だけ」フィルタ／章バッジがそのまま拾う。
+        時間予算つき・失敗してもジョブを止めない。
+        """
+        import time as _time
+        from concurrent.futures import (
+            ThreadPoolExecutor, as_completed, TimeoutError as _FutTimeout)
+        from verifier import verify_image
+
+        flag_types = ("illustration", "realphoto")
+        targets_by_no = {t["index"]: t for t in generation_targets}
+        checks = []
+        for r in results:
+            if not r.get("success") or not r.get("filename"):
+                continue
+            t = targets_by_no.get(r.get("index"))
+            if not t or t.get("type") not in flag_types:
+                continue
+            checks.append((r, t))
+        if not checks:
+            return
+        try:
+            client = get_anthropic_client(self.anthropic_key).with_options(
+                max_retries=1, timeout=60.0)
+        except Exception as e:
+            self._log("verify", f"軽量検品をスキップ（APIクライアント初期化失敗: {str(e)[:60]}）")
+            return
+
+        budget = min(480.0, max(90.0, len(checks) * 4.0))
+        deadline = _time.monotonic() + budget
+        self._log("verify",
+                  f"軽量検品（⚠フラグのみ・再生成なし）: {len(checks)} 枚（illustration/realphoto）")
+
+        def _do_check(pair):
+            r, t = pair
+            v = verify_image(
+                client, self.images_dir / r["filename"], t.get("excerpt", ""),
+                img_type=t.get("type", "illustration"),
+                allowed_terms=t.get("allowed_terms", []),
+                block_context=t.get("block_text", ""),
+                chapter=t.get("section", ""), theme=theme,
+            )
+            return t, v
+
+        flagged = []
+        checked = 0
+        ex = ThreadPoolExecutor(max_workers=3)
+        try:
+            futs = {ex.submit(_do_check, p): p for p in checks}
+            try:
+                for f in as_completed(futs, timeout=budget):
+                    remaining = deadline - _time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        t, v = f.result(timeout=max(1.0, remaining))
+                        checked += 1
+                        if not v.get("ok", True):
+                            flagged.append(t["index"])
+                            self._update_row(
+                                t["index"],
+                                verify_issue=True,
+                                verify_reason=v.get("reason", ""),
+                                verify_issue_tags=v.get("issue_tags", []),
+                            )
+                    except _FutTimeout:
+                        break
+                    except Exception as e:
+                        self._log("error", f"軽量検品エラー: {str(e)[:80]}")
+            except _FutTimeout:
+                pass
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+            import gc as _gc
+            _gc.collect()
+
+        self._log("verify",
+                  f"軽量検品完了: ⚠{len(flagged)} 枚 / 確認 {checked}/{len(checks)} 枚"
+                  + (f"（要確認 №{', '.join(map(str, flagged[:10]))}）" if flagged else ""))
+
     def _write_csv(self, path: Path, rows: list):
         """CSV を書き出す（スプレッドシートと同構造）"""
         with path.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             # v3: ビート/推定開始/エンジン/重要度/表示/ライセンス/クレジット 列を追加
             w.writerow(["章", "ブロック", "センテンス", "№", "ビート", "推定開始", "ソース",
-                        "エンジン", "重要度", "表示", "画像", "URL", "URL種別", "ライセンス", "クレジット"])
+                        "エンジン", "重要度", "表示", "検品", "画像", "URL", "URL種別", "ライセンス", "クレジット"])
             _disp = {"image": "画像", "hold": "継続", "none": "なし"}
             for r in rows:
                 block_text = ""
@@ -1958,6 +2053,7 @@ class SentencePipeline:
                     r.get("engine", "") or "",
                     r.get("importance", "") or "",
                     disp_label,
+                    ("⚠ " + (r.get("verify_reason") or "要確認")) if r.get("verify_issue") else "",
                     r.get("filename", "") or "",
                     r.get("web_source_url", "") or r.get("commons_page_url", "") or "",
                     r.get("web_source_type", "") or "",
