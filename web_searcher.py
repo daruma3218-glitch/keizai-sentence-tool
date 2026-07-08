@@ -237,6 +237,13 @@ def _select_chunk(
   「年次報告書」「プレスリリース」「大学」「政府」「原典」を含める
 - 人物名・企業名・書籍名など固有名詞を優先
 - YouTube / youtu.be は検索対象・採用対象から除外
+
+【素材タイプ（material_type）を各候補に必ず付ける】クエリはタイプに合わせて作る:
+- scene: 実際の場面・現場（職場・工場・会議・店舗・研究室・イベント会場）
+  → クエリ例:「◯◯社 オフィス 様子」「◯◯ 製造現場 写真」「◯◯ カンファレンス 会場」
+- person: 実在人物 → クエリ例:「氏名 講演 写真」「氏名 インタビュー 公式」
+- document: 書籍・論文・レポート・公式資料 → クエリ例:「書名 表紙」「◯◯ 論文 大学」
+- data: 統計・調査データ → クエリ例:「◯◯ 統計 出典 政府」
 """
     else:
         system = (
@@ -255,6 +262,8 @@ def _select_chunk(
 - 統計データの背景となるもの（GDP、軍事費、原油生産 → 関連写真）
 """
     exclude_note = f"\n\n【除外: 以下の no はすでに選定済みなので絶対に選ばないこと】\n{sorted(exclude_nos)[:200]}" if exclude_nos else ""
+    # primary_media は素材タイプ（scene/person/document/data）も出力させ、検索クエリの的中率を上げる
+    mt_field = ', "material_type": "scene|person|document|data"' if primary_media else ""
     # 固定ルール部（プロファイル毎に一定）を先頭に置き prompt cache 対象にする。
     # 件数・センテンス・除外リストなど毎回変わるものは後段の動的部へ分離。
     fixed_selection_rules = f"""以下のセンテンスから、Web で参考画像（写真・絵画・歴史画像）が見つかりやすい候補を指定件数ぶん選んでください。
@@ -271,7 +280,7 @@ def _select_chunk(
 
 【出力 JSON（必ずこの形式のみ）】
 [
-  {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ(日本語40文字以内、固有名詞含む)"}}
+  {{"no": 元のno, "topic": "短い検索トピック名(10〜30文字)", "query": "Web検索クエリ(日本語40文字以内、固有名詞含む)"{mt_field}}}
 ]
 出力は JSON 配列のみ、前置き禁止。"""
 
@@ -466,6 +475,16 @@ def search_single_sentence(
             "- YouTube / youtu.be のURLは採用しない\n"
             "- ゴシップ、まとめサイト、無断転載、出典不明サムネイルは避ける\n"
         )
+        # 選定時に付与された素材タイプで検索の狙いを絞る（場面写真の的中率向上）
+        material_type = (selection.get("material_type") or "").strip()
+        mt_hints = {
+            "scene": "実際の場面・現場の写真が載ったページ（現地レポート・公式の施設/オフィス紹介・イベントレポート等）を最優先",
+            "person": "本人が写った写真のある公式プロフィール・講演レポート・インタビュー記事を最優先",
+            "document": "書籍の表紙・論文・公式レポートが掲載されたページを最優先",
+            "data": "出典の明確な統計・調査データの掲載ページ（政府・研究機関・企業IR）を最優先",
+        }
+        if material_type in mt_hints:
+            priority += f"- 素材タイプ [{material_type}]: {mt_hints[material_type]}\n"
     else:
         system = (
             "あなたはリサーチャーです。Web 検索で指定トピックの参考画像が掲載されたページを探します。"
@@ -560,6 +579,7 @@ def search_single_sentence(
         "source_url": best_url,
         "source_title": best_title,
         "source_type": source_type,
+        "material_type": (selection.get("material_type") or ""),  # 資料パックの分類用
         "thumb_url": thumb_url,
         "all_urls": urls[:5],  # 候補も残す
     }

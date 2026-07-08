@@ -124,6 +124,8 @@
         "web_search_profile": "primary_media",
         "max_web_image_reuse": 2,
         "type_providers": {},
+        "build_source_pack": true,
+        "source_videos_per_chapter": 3,
         "beat_mode": true,
         "chars_per_sec": 5.5,
         "realphoto_watermark": true,

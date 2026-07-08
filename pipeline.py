@@ -79,11 +79,15 @@ class SentencePipeline:
         title_override: str = "",           # v3 Step7: final.json の tentative_title
         fact_context: str = "",             # v3 Step7: final.json の検証済み数値・出典
         resume: bool = False,               # 途中で止まったジョブの再開（ディスク上の成果物を再利用）
+        build_source_pack: bool = False,    # 制作資料パック（元ネタ動画+一次資料の sources.html/md）を作る
+        source_videos_per_chapter: int = 3,  # 章ごとの元ネタ動画の最大収集数
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
     ):
         self.resume = bool(resume)
+        self.build_source_pack = bool(build_source_pack)
+        self.source_videos_per_chapter = max(1, min(int(source_videos_per_chapter or 3), 5))
         self.manuscript_text = manuscript_text
         self.output_dir = Path(output_dir)
         self.user_instructions = user_instructions
@@ -1026,6 +1030,7 @@ class SentencePipeline:
                 license=info.get("license", ""),
                 attribution=info.get("attribution", ""),
                 commons_page_url=info.get("commons_page_url", ""),
+                web_material_type=info.get("material_type", ""),  # 資料パックの分類用
                 # 差し替え候補（検索でヒットした他ページ）。UIの「候補から選ぶ」で使う
                 web_candidates=[
                     {"url": u.get("url", ""), "title": u.get("title", "")}
@@ -1157,6 +1162,35 @@ class SentencePipeline:
 
         if web_thread:
             web_thread.start()
+
+        # ===== 制作資料パック: 元ネタ動画の収集（画像生成と並行・ベストエフォート） =====
+        # 章ごとに「内容の元ネタになり得る実在の動画」（講演/インタビュー/公式ch等）を
+        # Web検索で収集し、完成時に sources.html/md へまとめる（裏取り・演出参考用。動画内素材には使わない）。
+        source_videos: dict = {}
+        source_videos_done = threading.Event()
+        if self.build_source_pack:
+            cached_videos = load_json(self.output_dir / "source_videos.json", None) if self.resume else None
+            if isinstance(cached_videos, dict) and cached_videos:
+                source_videos.update({int(k): v for k, v in cached_videos.items() if str(k).isdigit()})
+                source_videos_done.set()
+                self._log("resume", f"再開: 元ネタ動画 {sum(len(v) for v in source_videos.values())} 本を再利用")
+            else:
+                def _collect_videos():
+                    try:
+                        from source_collector import collect_source_videos
+                        got = collect_source_videos(
+                            client, title, chapters, rows,
+                            per_chapter=self.source_videos_per_chapter, log=self._log)
+                        source_videos.update(got)
+                        save_json(self.output_dir / "source_videos.json", source_videos)
+                    except Exception as e:
+                        self._log("sources", f"元ネタ動画の収集をスキップ（{str(e)[:80]}）")
+                    finally:
+                        source_videos_done.set()
+                self._log("sources", "元ネタ動画（講演/インタビュー/公式ch等）を並行収集します")
+                threading.Thread(target=_collect_videos, daemon=True).start()
+        else:
+            source_videos_done.set()
 
         # ===== Phase 3: 画像生成（全文均等配置で選定） =====
         # Step A: skip_decorative なら decorative 行を先に除外（候補から外す）
@@ -1602,10 +1636,29 @@ class SentencePipeline:
             },
         }
 
+        # ===== 制作資料パック（sources.html / sources.md）を書き出す =====
+        has_source_pack = False
+        if self.build_source_pack:
+            # 元ネタ動画の収集完了を待つ（最大5分・ベストエフォート）
+            if not source_videos_done.wait(timeout=300):
+                self._log("sources", "元ネタ動画の収集が終わらないため、集まった分だけで資料を作ります")
+            try:
+                with self._rows_lock:
+                    rows_for_pack = sorted(self._rows_state.values(), key=lambda x: x.get("no", 0))
+                self._write_source_pack(
+                    title, chapters, rows_for_pack, source_videos,
+                    list(web_results_accumulator),
+                )
+                has_source_pack = True
+                self._log("sources", "制作資料パック（sources.html / sources.md）を書き出しました")
+            except Exception as e:
+                self._log("sources", f"資料パックの書き出しに失敗（{str(e)[:80]}）")
+
         manifest = {
             "title": title,
             "summary": analysis.get("summary", ""),
             "keywords": analysis.get("keywords", []),
+            "has_source_pack": has_source_pack,
             "user_instructions": self.user_instructions,
             "provider": self.provider,
             "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
@@ -2021,6 +2074,119 @@ class SentencePipeline:
         self._log("verify",
                   f"軽量検品完了: ⚠{len(flagged)} 枚 / 確認 {checked}/{len(checks)} 枚"
                   + (f"（要確認 №{', '.join(map(str, flagged[:10]))}）" if flagged else ""))
+
+    def _write_source_pack(self, title, chapters, rows, source_videos, web_infos):
+        """制作資料パック（sources.html / sources.md）を書き出す。
+
+        章ごとに「元ネタ・参考動画」「一次資料・記事（採用写真の出典＋未採用候補）」
+        「採用した実写・Web写真」をまとめ、編集者が“この資料だけで”裏取り・素材差し替え・
+        演出参考までできる形にする。
+        """
+        import html as _html
+
+        by_ch_rows: dict = {}
+        for r in rows:
+            ci = r.get("chapter_index")
+            if ci is None:
+                continue
+            by_ch_rows.setdefault(ci, []).append(r)
+        info_by_no: dict = {}
+        for it in web_infos:
+            no = it.get("no")
+            if no is not None and no not in info_by_no:
+                info_by_no[no] = it
+
+        _MT_LABEL = {"scene": "場面", "person": "人物", "document": "資料", "data": "データ"}
+
+        md: list = [f"# 制作資料パック: {title}",
+                    "",
+                    f"生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} / センテンスつくーる",
+                    "",
+                    "元ネタ動画は裏取り・演出参考用です（動画内への転用は権利確認のうえで）。",
+                    ""]
+        hsec: list = []
+
+        for ci, ch in enumerate(chapters):
+            ch_title = ch.get("title", f"第{ci + 1}章")
+            ch_rows = by_ch_rows.get(ci, [])
+            vids = source_videos.get(ci, []) or []
+            web_rows = [r for r in ch_rows if r.get("web_source_url")]
+            if not vids and not web_rows:
+                continue
+
+            md.append(f"## {ch_title}")
+            h_items: list = [f"<h2>{_html.escape(ch_title)}</h2>"]
+
+            if vids:
+                md.append("")
+                md.append("### 🎬 元ネタ・参考動画")
+                h_items.append("<h3>🎬 元ネタ・参考動画</h3><ul>")
+                for v in vids:
+                    mark = "" if v.get("verified") else "（URL要確認）"
+                    md.append(f"- [{v.get('title') or v['url']}]({v['url']}) — {v.get('reason', '')}{mark}")
+                    h_items.append(
+                        f"<li><a href='{_html.escape(v['url'])}' target='_blank' rel='noopener'>"
+                        f"{_html.escape(v.get('title') or v['url'])}</a>"
+                        f" <span class='reason'>{_html.escape(v.get('reason', ''))}{mark}</span></li>")
+                h_items.append("</ul>")
+
+            if web_rows:
+                md.append("")
+                md.append("### 📄 一次資料・記事と採用写真")
+                h_items.append("<h3>📄 一次資料・記事と採用写真</h3><ul>")
+                for r in web_rows:
+                    no = r.get("no")
+                    src = r.get("web_source_url", "")
+                    stitle = r.get("web_source_title") or src
+                    mt = _MT_LABEL.get(r.get("web_material_type", ""), "")
+                    mt_tag = f"［{mt}］" if mt else ""
+                    photo = r.get("web_local_file") or ""
+                    photo_note = f" / 採用写真: images/{photo}" if photo else ""
+                    sent = (r.get("sentence") or "")[:40]
+                    md.append(f"- №{no} {mt_tag}[{stitle}]({src}) — 「{sent}」{photo_note}")
+                    img_html = (f"<img src='images/{_html.escape(photo)}' loading='lazy'>" if photo else "")
+                    h_items.append(
+                        f"<li>{img_html}<div><b>№{no}</b> {mt_tag}"
+                        f"<a href='{_html.escape(src)}' target='_blank' rel='noopener'>{_html.escape(stitle)}</a>"
+                        f"<div class='sent'>「{_html.escape(sent)}」{_html.escape(photo_note)}</div>")
+                    # 未採用候補（差し替え用の控え）
+                    cands = [c for c in (r.get("web_candidates") or []) if c.get("url") and c.get("url") != src][:3]
+                    if cands:
+                        md.append(f"  - 差し替え候補: " + " / ".join(f"[{c.get('title') or c['url']}]({c['url']})" for c in cands))
+                        h_items.append("<div class='cands'>差し替え候補: " + " / ".join(
+                            f"<a href='{_html.escape(c['url'])}' target='_blank' rel='noopener'>{_html.escape(c.get('title') or c['url'])}</a>"
+                            for c in cands) + "</div>")
+                    h_items.append("</div></li>")
+                h_items.append("</ul>")
+
+            md.append("")
+            hsec.append("\n".join(h_items))
+
+        (self.output_dir / "sources.md").write_text("\n".join(md), encoding="utf-8")
+
+        html_doc = f"""<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
+<title>制作資料パック - {_html.escape(title)}</title>
+<style>
+body{{font-family:'Hiragino Sans','Noto Sans JP',sans-serif;max-width:960px;margin:24px auto;padding:0 16px;color:#1f2937;background:#fafaf8}}
+h1{{font-size:22px;border-bottom:3px solid #0f766e;padding-bottom:8px}}
+h2{{font-size:18px;margin-top:28px;background:#0f766e;color:#fff;padding:6px 12px;border-radius:8px}}
+h3{{font-size:14px;margin:14px 0 6px;color:#0f766e}}
+ul{{list-style:none;padding:0;margin:0}}
+li{{display:flex;gap:10px;align-items:flex-start;padding:8px;border-bottom:1px solid #e5e7eb}}
+li img{{width:120px;height:68px;object-fit:cover;border-radius:6px;flex-shrink:0}}
+a{{color:#0e7490;text-decoration:none}} a:hover{{text-decoration:underline}}
+.sent{{color:#6b7280;font-size:12px;margin-top:2px}}
+.cands{{color:#9333ea;font-size:11px;margin-top:2px}}
+.reason{{color:#6b7280;font-size:12px}}
+.note{{color:#92400e;background:#fef3c7;padding:8px 12px;border-radius:8px;font-size:12px}}
+</style></head><body>
+<h1>📚 制作資料パック: {_html.escape(title)}</h1>
+<p class="note">元ネタ動画は裏取り・演出参考用です（動画内への転用は権利確認のうえで）。
+写真の差し替えは進捗ページの「🖼候補」からワンクリックでできます。</p>
+{''.join(hsec)}
+<p style="color:#9ca3af;font-size:11px;margin-top:24px">生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} / センテンスつくーる</p>
+</body></html>"""
+        (self.output_dir / "sources.html").write_text(html_doc, encoding="utf-8")
 
     def _write_csv(self, path: Path, rows: list):
         """CSV を書き出す（スプレッドシートと同構造）"""

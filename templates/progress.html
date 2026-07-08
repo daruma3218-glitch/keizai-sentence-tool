@@ -112,6 +112,10 @@
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
           画像ギャラリーを開く
         </a>
+        <a id="sourcesBtn" href="" target="_blank" class="hidden inline-flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-teal-600 text-teal-700 font-medium rounded-xl hover:bg-teal-50 transition" title="元ネタ動画・一次資料・採用写真を章ごとにまとめた制作用資料">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
+          📚 制作資料パック
+        </a>
         <a id="downloadCsvBtn" href="" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-cyan-600 text-cyan-700 font-medium rounded-xl hover:bg-cyan-50 transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
           CSV ダウンロード（スプレッドシート用）
@@ -702,6 +706,15 @@
           els.downloadCsvBtn.href = `/download/csv/${JOB_ID}`;
           const gb = document.getElementById('galleryBtn');
           if (gb) gb.href = `/results/${JOB_ID}/result.html`;
+          // 制作資料パック（成功の法則など build_source_pack が有効なチャンネルのみ生成される）
+          try {
+            const mres = await fetch(`/api/manifest/${JOB_ID}`);
+            const mani = await mres.json();
+            if (mani && mani.has_source_pack) {
+              const sb = document.getElementById('sourcesBtn');
+              if (sb) { sb.href = `/results/${JOB_ID}/sources.html`; sb.classList.remove('hidden'); }
+            }
+          } catch (e) {}
         }
         if (state.status === 'error') stopped = true;
       } catch (e) { console.error('status error', e); }

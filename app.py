@@ -327,6 +327,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             title_override=title_override,
             fact_context=fact_context,
             resume=resume,
+            build_source_pack=bool(defaults.get("build_source_pack", False)),
+            source_videos_per_chapter=defaults.get("source_videos_per_chapter", 3),
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,
@@ -2073,6 +2075,9 @@ def download_zip(job_id):
                     zf.write(img, f"images/{img.name}")
         for extra, arc in [("result.csv", "result.csv"),
                            ("result.html", "result.html"),
+                           ("sources.html", "sources.html"),
+                           ("sources.md", "sources.md"),
+                           ("credits.txt", "credits.txt"),
                            ("manifest.json", "manifest.json"),
                            ("manuscript.txt", "manuscript.txt")]:
             p = result_dir / extra
