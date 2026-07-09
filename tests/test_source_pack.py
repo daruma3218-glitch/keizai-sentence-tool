@@ -76,11 +76,11 @@ def test_collect_chapter_source_videos_filters_and_verifies(monkeypatch):
     assert out[2]["url"] == "https://youtu.be/hallucinated" and out[2]["verified"] is False
 
 
-def test_collect_source_videos_digest_per_chapter(monkeypatch):
+def test_collect_source_videos_digest_and_entities_per_chapter(monkeypatch):
     seen = {}
 
-    def fake_one(client, title, ch_title, digest, per_chapter=3, timeout=75.0):
-        seen[ch_title] = digest
+    def fake_one(client, title, ch_title, digest, per_chapter=3, timeout=75.0, entities=None):
+        seen[ch_title] = {"digest": digest, "entities": entities or []}
         return [{"url": "https://y/1", "title": ch_title, "reason": "r", "verified": True}]
     monkeypatch.setattr(source_collector, "collect_chapter_source_videos", fake_one)
 
@@ -90,10 +90,32 @@ def test_collect_source_videos_digest_per_chapter(monkeypatch):
         {"no": 2, "chapter_index": 1, "sentence": "本論の文その1。"},
         {"no": 3, "chapter_index": 1, "sentence": "本論の文その2。"},
     ]
-    res = source_collector.collect_source_videos(None, "T", chapters, rows, per_chapter=3)
+    # ルーターの固有名詞: 章の「途中」の文にだけ登場する人物も検索材料に入ること
+    routes = {
+        2: {"entities": ["アダム・グラント"]},
+        3: {"entities": ["ペンシルベニア大学", "アダム・グラント"]},  # 重複は1回
+    }
+    res = source_collector.collect_source_videos(None, "T", chapters, rows, per_chapter=3, routes=routes)
     assert set(res.keys()) == {0, 1}
-    assert "最初の文。" in seen["序章"]
-    assert "本論の文その1。" in seen["本論"]
+    assert "最初の文。" in seen["序章"]["digest"]
+    assert seen["本論"]["entities"] == ["アダム・グラント", "ペンシルベニア大学"]
+
+
+def test_video_prompt_includes_entities_with_english_conversion(monkeypatch):
+    """章の途中に出る人物名（例: アダム・グラント）が検索指示に入り、英語変換の指示もある。"""
+    captured = {}
+
+    def fake_research(client, query, system, **kw):
+        captured["query"] = query
+        return "[]", []
+    monkeypatch.setattr(source_collector, "_claude_research_call", fake_research)
+    source_collector.collect_chapter_source_videos(
+        None, "T", "本論", "章の冒頭には出ない。", per_chapter=3,
+        entities=["アダム・グラント"])
+    q = captured["query"]
+    assert "アダム・グラント" in q, "固有名詞が検索材料に入る"
+    assert "Adam Grant" in q and "直接検索" in q, "人物名の英語変換・直接検索の指示"
+    assert "本人" in q and "TED" in q
 
 
 # ---------- _write_source_pack ----------

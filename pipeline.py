@@ -1180,7 +1180,8 @@ class SentencePipeline:
                         from source_collector import collect_source_videos
                         got = collect_source_videos(
                             client, title, chapters, rows,
-                            per_chapter=self.source_videos_per_chapter, log=self._log)
+                            per_chapter=self.source_videos_per_chapter, log=self._log,
+                            routes=routes)
                         source_videos.update(got)
                         save_json(self.output_dir / "source_videos.json", source_videos)
                     except Exception as e:
