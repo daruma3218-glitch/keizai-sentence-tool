@@ -41,6 +41,9 @@
         "map_engine": "render",
         "allow_maps": false,
         "photo_source": "commons",
+        "type_providers": {
+          "diagram": "gpt-image"
+        },
         "beat_mode": true,
         "chars_per_sec": 5.5,
         "realphoto_watermark": true,
@@ -123,7 +126,9 @@
         "photo_source": "web",
         "web_search_profile": "primary_media",
         "max_web_image_reuse": 2,
-        "type_providers": {},
+        "type_providers": {
+          "diagram": "gpt-image"
+        },
         "build_source_pack": true,
         "source_videos_per_chapter": 3,
         "beat_mode": true,

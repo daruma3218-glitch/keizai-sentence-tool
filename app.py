@@ -93,6 +93,25 @@ def resolve_channel_keys(channel: dict) -> dict:
     }
 
 
+def _effective_type_providers(defaults: dict, ch_keys: dict):
+    """タイプ別プロバイダのうち、キー未設定のものを外して主プロバイダ代替にする。
+
+    例: 図解=gpt-image 設定でも OPENAI キーが無いチャンネルでは、その指定だけ外して
+    主プロバイダ（nanobanana等）で生成する。ジョブをエラーで止めない。
+    戻り値: (有効な type_providers, 代替が発生した説明メモのリスト)
+    """
+    tp = dict((defaults or {}).get("type_providers") or {})
+    notes = []
+    for t, p in list(tp.items()):
+        if p == PROVIDER_GPT_IMAGE and not (ch_keys or {}).get("openai"):
+            notes.append(f"{t}: gpt-image 指定だが OPENAI キー未設定 → 主プロバイダで代替")
+            tp.pop(t)
+        elif p == PROVIDER_NANOBANANA and not (ch_keys or {}).get("gemini"):
+            notes.append(f"{t}: nanobanana 指定だが GEMINI キー未設定 → 主プロバイダで代替")
+            tp.pop(t)
+    return tp, notes
+
+
 def _resolve_secret_key() -> str:
     """安定した SECRET_KEY を取得する。
 
@@ -286,6 +305,10 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             pass  # rows_progress.json 経由でフロントへ
 
         defaults = get_channel(channel_id).get("defaults") or {}
+        # タイプ別プロバイダ: キー未設定の指定は主プロバイダに自動代替（ジョブを止めない）
+        _effective_tp, _tp_notes = _effective_type_providers(defaults, ch_keys)
+        for _n in _tp_notes:
+            _add_log(job_id, "system", f"タイプ別プロバイダ代替: {_n}")
         pipeline = SentencePipeline(
             manuscript_text=manuscript_text,
             output_dir=job_dir,
@@ -316,7 +339,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             photo_source=defaults.get("photo_source", "web"),
             web_search_profile=defaults.get("web_search_profile", ""),
             max_web_image_reuse=defaults.get("max_web_image_reuse", 2),
-            type_providers=defaults.get("type_providers", {}),
+            type_providers=_effective_tp,
             beat_mode=bool(defaults.get("beat_mode", False)),
             chars_per_sec=defaults.get("chars_per_sec", 5.5),
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
@@ -569,7 +592,7 @@ def api_scene_fix():
 
     provider = (request.form.get("provider") or "auto").strip()
     if provider == "auto":
-        type_providers = defaults.get("type_providers") or {}
+        type_providers, _ = _effective_type_providers(defaults, ch_keys)  # キー未設定指定は代替
         provider = type_providers.get(route) or defaults.get("provider") or PROVIDER_NANOBANANA
     if provider not in VALID_PROVIDERS:
         provider = PROVIDER_NANOBANANA
@@ -916,17 +939,15 @@ def start_job():
     max_diagrams = max(1, min(max_diagrams, 300))
 
     # API キー確認（チャンネルのキー＝個別 or 共通フォールバック）
+    # ※タイプ別プロバイダ（例: 図解だけ gpt-image）はここでは必須にしない。
+    #   キーが無い場合は _effective_type_providers が主プロバイダに自動代替し、ジョブを止めない。
     missing = []
     if not ch_keys["anthropic"]:
         missing.append("ANTHROPIC_API_KEY")
     defaults = channel.get("defaults", {}) or {}
-    required_providers = {provider}
-    for p in (defaults.get("type_providers", {}) or {}).values():
-        if p in VALID_PROVIDERS:
-            required_providers.add(p)
-    if PROVIDER_NANOBANANA in required_providers and not ch_keys["gemini"]:
+    if provider == PROVIDER_NANOBANANA and not ch_keys["gemini"]:
         missing.append("GEMINI_API_KEY")
-    if PROVIDER_GPT_IMAGE in required_providers and not ch_keys["openai"]:
+    if provider == PROVIDER_GPT_IMAGE and not ch_keys["openai"]:
         missing.append("OPENAI_API_KEY")
     if missing:
         pfx = channel.get("api_env_prefix", "")
@@ -1741,7 +1762,8 @@ def api_regenerate(job_id, no):
             + prompt_text
         )
 
-    type_providers = params.get("type_providers") or defaults.get("type_providers") or {}
+    _tp_saved = {"type_providers": params.get("type_providers") or defaults.get("type_providers") or {}}
+    type_providers, _ = _effective_type_providers(_tp_saved, ch_keys)  # キー未設定指定は代替
     provider = type_providers.get(route) or params.get("provider", PROVIDER_NANOBANANA)
     if provider not in VALID_PROVIDERS:
         provider = PROVIDER_NANOBANANA
