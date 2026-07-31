@@ -14,6 +14,7 @@ route 種別:
 """
 
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from typing import Callable, Optional
@@ -23,7 +24,11 @@ import anthropic
 from utils import cached_user_content, claude_query, parse_json_array
 
 
-CLAUDE_MODEL = "claude-sonnet-5"
+CLAUDE_MODEL = "claude-sonnet-5"  # ルート判定（件数が多い分類系なので Sonnet 据え置き）
+# chart の数値・map の地図データ抽出は「事実の正確さ」がそのまま画像になるため Opus 5。
+# 対象文は1ジョブ数十件・呼び出しは数回なのでコスト影響は小さい。
+# 環境変数 EXTRACT_MODEL で変更可（例: EXTRACT_MODEL=claude-sonnet-5 で従来に戻す）。
+EXTRACT_MODEL = os.environ.get("EXTRACT_MODEL", "").strip() or "claude-opus-5"
 CHUNK_SIZE = 40  # 1 リクエストで分類する文数
 ROUTER_CHUNK_TIMEOUT_SECONDS = 90
 ROUTER_OVERALL_TIMEOUT_SECONDS = 240
@@ -440,6 +445,7 @@ JSON 配列のみ。"""
             query,
             system,
             max_tokens=6000,
+            model=EXTRACT_MODEL,
             max_retries=1,
             timeout_seconds=SPEC_EXTRACTION_TIMEOUT_SECONDS,
         )
@@ -525,6 +531,7 @@ JSON 配列のみ。"""
             query,
             system,
             max_tokens=5000,
+            model=EXTRACT_MODEL,
             max_retries=1,
             timeout_seconds=SPEC_EXTRACTION_TIMEOUT_SECONDS,
         )

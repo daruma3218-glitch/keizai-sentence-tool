@@ -6,6 +6,7 @@
 """
 
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from typing import Callable, Optional
@@ -15,7 +16,10 @@ import anthropic
 from utils import cached_user_content, claude_query, parse_json_array
 
 
-CLAUDE_MODEL = "claude-sonnet-5"
+# 画像プロンプト・図解設計（blueprint）は品質最優先で Opus 5 を使う。
+# 「図解の内容が文とズレる」対策の本丸はこの工程のため、上位モデルの効果が最も大きい。
+# 環境変数 PROMPTER_MODEL で変更可（例: PROMPTER_MODEL=claude-sonnet-5 で従来に戻す）。
+CLAUDE_MODEL = os.environ.get("PROMPTER_MODEL", "").strip() or "claude-opus-5"
 BATCH_SIZE = 8
 PROMPTER_BATCH_TIMEOUT_SECONDS = 90
 PROMPTER_OVERALL_TIMEOUT_SECONDS = 360

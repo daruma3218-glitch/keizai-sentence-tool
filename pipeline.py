@@ -18,9 +18,9 @@ from typing import Callable, Optional
 
 from utils import get_anthropic_client, save_json, load_json, SNAPSHOT_IO_LOCK
 from splitter import split_manuscript
-from prompter import generate_all_prompts
+from prompter import generate_all_prompts, CLAUDE_MODEL as PROMPTER_MODEL
 from web_searcher import run_web_search, run_web_search_for_selections
-from router import route_all_sentences, AI_ROUTES
+from router import route_all_sentences, AI_ROUTES, EXTRACT_MODEL
 from generator import (
     run_parallel_generation,
     DEFAULT_CONCURRENCY,
@@ -1634,6 +1634,8 @@ class SentencePipeline:
                 "programmatic_render_saved_images": rendered_ok_count,
                 "commons_or_web_images_saved_ai": web_local_count,
                 "verify_model": "claude-haiku-4-5" if self.verify_diagrams else "",
+                "prompter_model": PROMPTER_MODEL,   # 画像プロンプト・図解設計
+                "extract_model": EXTRACT_MODEL,     # chart数値・map地図データ抽出
             },
         }
 
