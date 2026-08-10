@@ -193,6 +193,14 @@ def version():
         upload_html = (PROJECT_ROOT / "templates" / "upload.html").read_text(encoding="utf-8")
     except Exception:
         upload_html = ""
+    # サブスクLLMゲートウェイの状態 (2026-08-10)。真偽値のみ・秘密は返さない。
+    try:
+        from subsk_gateway import _conf, _worker_alive
+        subsk_enabled = _conf() is not None
+        subsk_worker = _worker_alive() if subsk_enabled else False
+    except Exception:
+        subsk_enabled = False
+        subsk_worker = False
     return jsonify({
         "service": "keizai-sentence-tool",
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
@@ -203,6 +211,8 @@ def version():
         "output_storage_mode": OUTPUT_STORAGE_MODE,
         "output_is_persistent": OUTPUT_IS_PERSISTENT,
         "data_dir_env": os.environ.get("DATA_DIR", ""),
+        "subsk_gateway_enabled": subsk_enabled,
+        "subsk_worker_alive": subsk_worker,
         "checked_at": datetime.now().isoformat(),
     })
 
