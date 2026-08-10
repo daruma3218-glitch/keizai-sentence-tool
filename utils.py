@@ -97,6 +97,20 @@ def log_prompt_cache_usage(response, label: str = "Claude") -> None:
         print(f"  [CACHE] {label}: read={cache_read} create={cache_create}", flush=True)
 
 
+def _flatten_query_for_gateway(query) -> str:
+    """str または content blocks リストをプレーンテキスト化 (ゲートウェイ転送用)"""
+    if isinstance(query, str):
+        return query
+    if isinstance(query, list):
+        parts = []
+        for b in query:
+            t = b.get("text") if isinstance(b, dict) else getattr(b, "text", None)
+            if t:
+                parts.append(t)
+        return "\n".join(parts)
+    return str(query)
+
+
 def claude_query(
     client: anthropic.Anthropic,
     query: "str | list",  # list = cached_user_content() が作る content blocks
@@ -107,6 +121,22 @@ def claude_query(
     timeout_seconds: Optional[float] = None,
 ) -> str:
     """Claude API（Web 検索なし）でクエリを実行"""
+    # サブスク経路優先 (社長PCワーカー経由・API課金ゼロ / 2026-08-10)。
+    # ワーカー不在・未設定なら None が返り、従来どおり下の API 直呼びへ。
+    # haiku (検品など多数回の小呼び出し) は 1回あたりの API 額が微小で、CLI 起動
+    # オーバーヘッドの方が高くつくため API 側に残す。
+    if "haiku" not in (model or "").lower():
+        try:
+            from subsk_gateway import gateway_generate
+            _gw_text = gateway_generate(
+                "query", system, _flatten_query_for_gateway(query), max_tokens,
+                model=model, tool="sentence",
+            )
+            if _gw_text is not None:
+                return _gw_text
+        except Exception:
+            pass
+
     for attempt in range(max_retries):
         try:
             response = client.messages.create(

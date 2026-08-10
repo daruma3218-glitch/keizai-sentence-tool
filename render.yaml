@@ -14,6 +14,13 @@ services:
         value: /data
       - key: ANTHROPIC_API_KEY
         sync: false
+      # サブスクLLMゲートウェイ (2026-08-10)。両方設定すると opus/sonnet の Claude 呼び出しが
+      # 社長PCワーカー経由 (サブスク枠・課金ゼロ) になる。未設定なら従来どおり。
+      # 値は otona-manabi-tv の SUPABASE_URL / SUPABASE_KEY と同じもの。
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: OPENAI_API_KEY

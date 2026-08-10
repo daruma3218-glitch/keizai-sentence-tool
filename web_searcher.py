@@ -33,6 +33,27 @@ def _claude_research_call(
     timeout: float = 60.0,
 ) -> tuple:
     """Claude Web Search を実行して (text, real_urls) を返す"""
+    # サブスク経路優先 (社長PCワーカー経由・API課金ゼロ / 2026-08-10)。
+    # CLI の WebSearch は本文末尾に「Sources: - [title](url)」を出すため、
+    # そこから real_urls を復元して従来の (text, real_urls) 契約を保つ。
+    try:
+        from subsk_gateway import gateway_generate
+        _gw_text = gateway_generate(
+            "research", system, query, max_tokens, max_uses,
+            model=CLAUDE_MODEL, tool="sentence",
+        )
+        if _gw_text is not None:
+            _md_links = re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _gw_text)
+            _urls = [{"url": u, "title": t} for t, u in _md_links]
+            if not _urls:
+                _urls = [
+                    {"url": u.rstrip(".,;:)」"), "title": ""}
+                    for u in re.findall(r"https?://[^\s'\"<>\]）」]+", _gw_text)
+                ]
+            return _gw_text, _urls
+    except Exception:
+        pass
+
     real_urls = []
     text_parts = []
     try:
