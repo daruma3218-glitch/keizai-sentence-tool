@@ -111,6 +111,24 @@ def _flatten_query_for_gateway(query) -> str:
     return str(query)
 
 
+# チャンネル別使用量台帳のコンテキスト (2026-08-11 社長指示「チャンネルごとの管理」)。
+# app.py がジョブ開始時に set_subsk_channel(channel_id) で設定し、ゲートウェイ投函
+# payload に乗ってワーカー側の台帳 (usage_ledger.jsonl) に記録される。
+# 注: モジュールグローバルのため、異なるチャンネルのジョブが同時並走した場合は
+# 後勝ちで混ざりうる (月次のチャンネル別把握という目的には十分な精度)。
+_SUBSK_CHANNEL = ""
+
+
+def set_subsk_channel(channel_id: str) -> None:
+    """現在処理中ジョブのチャンネル id (channels.json の id) を設定する。"""
+    global _SUBSK_CHANNEL
+    _SUBSK_CHANNEL = (channel_id or "").strip().lower()
+
+
+def get_subsk_channel() -> str:
+    return _SUBSK_CHANNEL
+
+
 def claude_query(
     client: anthropic.Anthropic,
     query: "str | list",  # list = cached_user_content() が作る content blocks
@@ -130,7 +148,7 @@ def claude_query(
             from subsk_gateway import gateway_generate
             _gw_text = gateway_generate(
                 "query", system, _flatten_query_for_gateway(query), max_tokens,
-                model=model, tool="sentence",
+                model=model, tool="sentence", channel=_SUBSK_CHANNEL,
             )
             if _gw_text is not None:
                 return _gw_text

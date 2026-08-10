@@ -38,9 +38,10 @@ def _claude_research_call(
     # そこから real_urls を復元して従来の (text, real_urls) 契約を保つ。
     try:
         from subsk_gateway import gateway_generate
+        from utils import get_subsk_channel
         _gw_text = gateway_generate(
             "research", system, query, max_tokens, max_uses,
-            model=CLAUDE_MODEL, tool="sentence",
+            model=CLAUDE_MODEL, tool="sentence", channel=get_subsk_channel(),
         )
         if _gw_text is not None:
             _md_links = re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _gw_text)

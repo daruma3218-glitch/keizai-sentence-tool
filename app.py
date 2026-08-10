@@ -299,6 +299,9 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
                       else f"gpt-image ({openai_quality})")
     try:
+        # サブスク使用量台帳用のチャンネルコンテキスト (2026-08-11 チャンネル別管理)
+        from utils import set_subsk_channel
+        set_subsk_channel(channel_id)
         _set_job_state(job_id, status="running", phase=0,
                        message="再開しています..." if resume else "開始しています...", percent=0)
         _add_log(job_id, "system",

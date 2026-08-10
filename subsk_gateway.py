@@ -87,8 +87,12 @@ def gateway_generate(
     max_uses: int = 0,
     model: str = "claude-sonnet-5",
     tool: str = "sentence",
+    channel: str = "",
 ) -> "str | None":
     """ワーカー経由 (サブスク枠) でテキスト生成。
+
+    channel はチャンネル別使用量台帳用 (2026-08-11)。keizai/roshia/seikou 等の
+    channels.json の id を渡す。空ならワーカー側が tool 既定値で埋める。
 
     Returns:
         str  … 生成テキスト (API課金なし)
@@ -106,6 +110,7 @@ def gateway_generate(
             "id": req_id,
             "tool": tool,
             "kind": kind,                 # "research" (web検索あり) | "query" (なし)
+            "channel": channel,           # チャンネル別台帳用 (空可)
             "model": model,
             "system": system,
             "query": query,
