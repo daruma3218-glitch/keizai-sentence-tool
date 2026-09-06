@@ -7,6 +7,12 @@ Wikipedia 等のソース URL とサムネイル画像 URL を取得する。
 ユーザーはこの URL を見て手動で画像を選定・ダウンロードする想定。
 """
 
+try:
+    from . import subscription_runtime as _subscription
+except ImportError:
+    import subscription_runtime as _subscription
+
+
 import json
 import re
 import time
@@ -32,60 +38,13 @@ def _claude_research_call(
     max_uses: int = 5,
     timeout: float = 60.0,
 ) -> tuple:
-    """Claude Web Search を実行して (text, real_urls) を返す"""
-    # サブスク経路優先 (社長PCワーカー経由・API課金ゼロ / 2026-08-10)。
-    # CLI の WebSearch は本文末尾に「Sources: - [title](url)」を出すため、
-    # そこから real_urls を復元して従来の (text, real_urls) 契約を保つ。
-    try:
-        from subsk_gateway import gateway_generate
-        from utils import get_subsk_channel
-        _gw_text = gateway_generate(
-            "research", system, query, max_tokens, max_uses,
-            model=CLAUDE_MODEL, tool="sentence", channel=get_subsk_channel(),
-        )
-        if _gw_text is not None:
-            _md_links = re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", _gw_text)
-            _urls = [{"url": u, "title": t} for t, u in _md_links]
-            if not _urls:
-                _urls = [
-                    {"url": u.rstrip(".,;:)」"), "title": ""}
-                    for u in re.findall(r"https?://[^\s'\"<>\]）」]+", _gw_text)
-                ]
-            return _gw_text, _urls
-    except Exception:
-        pass
-
-    real_urls = []
-    text_parts = []
-    try:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            system=cached_system_param(system),
-            tools=[{
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": max_uses,
-            }],
-            messages=[{"role": "user", "content": query}],
-            timeout=timeout,
-        )
-        log_prompt_cache_usage(response, "web_search")
-        for block in response.content:
-            block_type = getattr(block, "type", "")
-            if hasattr(block, "text"):
-                text_parts.append(block.text)
-            if block_type == "web_search_tool_result":
-                content = getattr(block, "content", [])
-                for r in content:
-                    if getattr(r, "type", "") == "web_search_result":
-                        u = getattr(r, "url", "")
-                        t = getattr(r, "title", "")
-                        if u:
-                            real_urls.append({"url": u, "title": t})
-    except Exception as e:
-        print(f"  [WebSearch ERROR] {e}", flush=True)
-    return "\n".join(text_parts), real_urls
+    text = _subscription.generate(system, query, model=CLAUDE_MODEL, use_search=True,
+        tool="sentence-web-search", timeout=900, max_tokens=max_tokens)[0]
+    links = re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", text)
+    urls = [{"url":u,"title":t} for t,u in links]
+    if not urls:
+        urls = [{"url":u.rstrip(".,;:)」"),"title":""} for u in re.findall(r"https?://[^\s<>]+",text)]
+    return text, urls
 
 
 def _wikipedia_image_url(article_url: str) -> str:

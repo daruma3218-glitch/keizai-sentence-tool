@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """共通ユーティリティ - JSON パースと Claude API 呼び出し"""
 
+try:
+    from . import subscription_runtime as _subscription
+except ImportError:
+    import subscription_runtime as _subscription
+
+
 import json
 import os
 import threading
@@ -39,14 +45,7 @@ def load_env(project_root: Path) -> None:
 
 
 def get_anthropic_client(api_key: str = "") -> anthropic.Anthropic:
-    """Anthropic クライアントを取得（API キー未設定時はエラー）。
-
-    api_key を渡すとそれを使う（チャンネル別キー用）。空なら環境変数を使う。
-    """
-    api_key = (api_key or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key or api_key == "your_api_key_here":
-        raise RuntimeError("ANTHROPIC_API_KEY が設定されていません。.env を確認してください。")
-    return anthropic.Anthropic(api_key=api_key)
+    return _subscription.SubscriptionClient(tool='sentence')
 
 
 # ===== Prompt cache（API代削減。中山さんの monorepo 改修 97346ca を移植）=====
@@ -138,50 +137,7 @@ def claude_query(
     max_retries: int = 3,
     timeout_seconds: Optional[float] = None,
 ) -> str:
-    """Claude API（Web 検索なし）でクエリを実行"""
-    # サブスク経路優先 (社長PCワーカー経由・API課金ゼロ / 2026-08-10)。
-    # ワーカー不在・未設定なら None が返り、従来どおり下の API 直呼びへ。
-    # haiku (検品など多数回の小呼び出し) は 1回あたりの API 額が微小で、CLI 起動
-    # オーバーヘッドの方が高くつくため API 側に残す。
-    if "haiku" not in (model or "").lower():
-        try:
-            from subsk_gateway import gateway_generate
-            _gw_text = gateway_generate(
-                "query", system, _flatten_query_for_gateway(query), max_tokens,
-                model=model, tool="sentence", channel=_SUBSK_CHANNEL,
-            )
-            if _gw_text is not None:
-                return _gw_text
-        except Exception:
-            pass
-
-    for attempt in range(max_retries):
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=cached_system_param(system),
-                messages=[{"role": "user", "content": query}],
-                timeout=timeout_seconds,
-            )
-            log_prompt_cache_usage(response, model)
-            if not response or not response.content:
-                if attempt == max_retries - 1:
-                    return ""
-                time.sleep(3)
-                continue
-            text_parts = [getattr(b, "text", "") for b in response.content if hasattr(b, "text")]
-            return "\n".join(text_parts)
-        except anthropic.RateLimitError:
-            wait = 15 * (attempt + 1)
-            print(f"  [RATE LIMIT] {wait}s 待機します...", flush=True)
-            time.sleep(wait)
-        except Exception as e:
-            print(f"  [ERROR] Claude API: {e}", flush=True)
-            if attempt == max_retries - 1:
-                return ""
-            time.sleep(3)
-    return ""
+    return _subscription.generate(system, query, tool='sentence', model=model, max_tokens=max_tokens)[0]
 
 
 def parse_json_array(text: str) -> list:

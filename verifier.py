@@ -6,6 +6,12 @@
 ズレている場合は改善指示（fix_hint）を返し、パイプラインが再生成に使う。
 """
 
+try:
+    from . import subscription_runtime as _subscription
+except ImportError:
+    import subscription_runtime as _subscription
+
+
 import base64
 import json
 from pathlib import Path
@@ -141,17 +147,23 @@ def verify_image(
                 ],
             }],
         )
+    except _subscription.SubscriptionUnavailable:
+        raise
+    except _subscription.SubscriptionUnavailable:
+        raise
+    except _subscription.SubscriptionUnavailable:
+        raise
     except Exception as e:
         print(f"  [verifier ERROR] {str(e)[:120]}", flush=True)
-        return {"ok": True, "reason": "検証API失敗（スキップ）", "fix_hint": ""}
+        return {"ok": False, "reason": "検証を完了できませんでした", "fix_hint": ""}
 
     text = "".join(getattr(b, "text", "") for b in response.content if hasattr(b, "text"))
     data = parse_json_object(text)
     if not data:
-        return {"ok": True, "reason": "検証パース失敗（スキップ）", "fix_hint": ""}
+        return {"ok": False, "reason": "検証結果を読み取れませんでした", "fix_hint": ""}
 
     return {
-        "ok": bool(data.get("ok", True)),
+        "ok": data.get("ok") is True,
         "reason": str(data.get("reason", ""))[:60],
         "issue_tags": [str(x)[:40] for x in data.get("issue_tags", []) if isinstance(x, str)][:5],
         "fix_hint": str(data.get("fix_hint", ""))[:200],

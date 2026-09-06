@@ -12,3 +12,5 @@ venv/
 # キャラ固定の参照画像はコミットする
 !references/
 !references/*.png
+
+.subscription-state/

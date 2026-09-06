@@ -955,8 +955,7 @@ def start_job():
     # ※タイプ別プロバイダ（例: 図解だけ gpt-image）はここでは必須にしない。
     #   キーが無い場合は _effective_type_providers が主プロバイダに自動代替し、ジョブを止めない。
     missing = []
-    if not ch_keys["anthropic"]:
-        missing.append("ANTHROPIC_API_KEY")
+    pass  # Subscription CLI does not require an Anthropic API key.
     defaults = channel.get("defaults", {}) or {}
     if provider == PROVIDER_NANOBANANA and not ch_keys["gemini"]:
         missing.append("GEMINI_API_KEY")
