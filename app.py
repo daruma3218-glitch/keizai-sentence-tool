@@ -20,6 +20,7 @@ from pathlib import Path
 from flask import (
     Flask,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -185,6 +186,7 @@ def login_required(f):
     return decorated
 
 
+@app.route("/settings/api-usage")
 @app.route("/api/key-attribution")
 @login_required
 def key_attribution():
@@ -210,7 +212,11 @@ def key_attribution():
             "shared_with_channels": [other for other, value in resolved.items()
                                      if other != channel_id and key and value == key],
         })
-    response = jsonify({"service": "keizai-sentence-tool", "provider": "gemini", "channels": rows})
+    data = {"service": "keizai-sentence-tool", "provider": "gemini", "channels": rows}
+    if request.path == "/settings/api-usage":
+        response = make_response(render_template("api_usage.html", audit=data))
+    else:
+        response = jsonify(data)
     response.headers["Cache-Control"] = "no-store"
     return response
 

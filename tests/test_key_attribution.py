@@ -38,6 +38,11 @@ def test_audit_reports_effective_keys_and_shared_fallback_without_secrets(monkey
     assert rows["seikou"]["shared_with_channels"] == ["default"]
     assert "fake-common-ABCD" not in response.get_data(as_text=True)
     assert "fake-keizai-EFGH" not in response.get_data(as_text=True)
+    page = client.get("/settings/api-usage")
+    assert page.status_code == 200
+    assert "text/html" in page.content_type
+    assert "…EFGH" in page.get_data(as_text=True)
+    assert "fake-keizai-EFGH" not in page.get_data(as_text=True)
     monkeypatch.setenv("KEIZAI_GEMINI_API_KEY", " ")
     rows = {row["channel_id"]: row for row in client.get("/api/key-attribution").get_json()["channels"]}
     assert rows["keizai"]["key_suffix"] == "ABCD"

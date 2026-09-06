@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemini APIの利用先 | センテンスつくーる</title>
+<style>
+body{font-family:system-ui,sans-serif;color:#243447;background:#f6f8fb;margin:0;padding:36px 24px}main{max-width:1000px;margin:auto}h1{font-size:25px}p{line-height:1.8}table{border-collapse:collapse;width:100%;background:white}th,td{padding:14px;text-align:left;border-bottom:1px solid #dce3eb}th{background:#eaf0f7}code{overflow-wrap:anywhere}.warn{color:#9e5200}a{color:#1755a6}
+</style>
+<main>
+<a href="/">← ツールに戻る</a>
+<h1>Gemini APIの利用先</h1>
+<p>現在の本番設定です。キー本体は表示しません。AI Studioのキー一覧と末尾4文字を照合してください。</p>
+<table>
+<thead><tr><th>チャンネル</th><th>キー末尾</th><th>設定元</th><th>共用の状態</th></tr></thead>
+<tbody>{% for row in audit.channels %}
+<tr><td>{{ row.channel_name }}</td><td>{{ '…' ~ row.key_suffix if row.configured else '未設定' }}</td>
+<td><code>{{ row.source_env or '—' }}</code></td><td>
+{% if row.common_fallback %}<span class="warn">専用キーがなく共通キーを使用</span><br>{% endif %}
+{% if row.shared_with_channels %}同じキー: {{ row.shared_with_channels | join(', ') }}{% elif row.configured %}このサービス内での共用なし{% else %}—{% endif %}
+</td></tr>{% endfor %}</tbody></table>
+<p>費用は <a href="https://aistudio.google.com/spend" target="_blank" rel="noopener">Google AI Studioの利用額</a> でプロジェクトとAPIキーを選んで確認します。別サービスでも同じキーを使っている場合、その分も合算されます。</p>
+</main>
+</html>
