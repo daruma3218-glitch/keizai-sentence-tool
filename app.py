@@ -185,6 +185,36 @@ def login_required(f):
     return decorated
 
 
+@app.route("/api/key-attribution")
+@login_required
+def key_attribution():
+    """ログイン後の課金先診断。キー本体は返さず、末尾と参照元だけを返す。"""
+    if not APP_PASSWORD:
+        return jsonify({"error": "診断にはアプリのログイン設定が必要です。"}), 403
+    channels = load_channels()
+    resolved = {c["id"]: resolve_channel_keys(c)["gemini"] for c in channels}
+    rows = []
+    for channel in channels:
+        channel_id = channel["id"]
+        prefix = (channel.get("api_env_prefix") or "").strip()
+        dedicated_env = f"{prefix}_GEMINI_API_KEY" if prefix else "GEMINI_API_KEY"
+        has_dedicated = bool(os.environ.get(dedicated_env, "").strip())
+        key = resolved[channel_id]
+        rows.append({
+            "channel_id": channel_id,
+            "channel_name": channel.get("name", channel_id),
+            "configured": bool(key),
+            "key_suffix": key[-4:] if len(key) > 4 else "",
+            "source_env": dedicated_env if has_dedicated else ("GEMINI_API_KEY" if key else None),
+            "common_fallback": bool(prefix and key and not has_dedicated),
+            "shared_with_channels": [other for other, value in resolved.items()
+                                     if other != channel_id and key and value == key],
+        })
+    response = jsonify({"service": "keizai-sentence-tool", "provider": "gemini", "channels": rows})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.route("/version")
 def version():
     """Render が実際にどの版を読んでいるか確認するための軽量診断。"""
