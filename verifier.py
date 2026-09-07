@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 3b: 図解の意味を Claude Vision で自動検証
+"""Phase 3b: 図解の意味を ASTRA CLI で自動検証
 
 生成された画像（主に diagram / chart）が、対応するセンテンスの意味を
-正しく・分かりやすく表せているかを Claude のビジョン機能で判定する。
+正しく・分かりやすく表せているかを ASTRA の画像入力で判定する。
 ズレている場合は改善指示（fix_hint）を返し、パイプラインが再生成に使う。
 """
 
@@ -14,6 +14,7 @@ except ImportError:
 
 import base64
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -23,8 +24,8 @@ from utils import parse_json_object
 
 
 # v3 Step5: chart/map が renderer 化されたため、Vision 検品は diagram のみに縮小。
-# モデルも Haiku に変更してコストを約 1/5 に（判定失敗時 ok=True の安全設計は維持）。
-CLAUDE_MODEL = "claude-haiku-4-5"
+# 原稿と完成図の意味・ラベルをASTRAのサブスクCLIで検品する。
+CLAUDE_MODEL = os.environ.get("VERIFY_MODEL", "").strip() or "gpt-6-astra"
 
 # 検証対象にするデフォルトの type（chart は決定論レンダリングのため検品不要）
 DEFAULT_VERIFY_TYPES = ("diagram",)
@@ -48,16 +49,16 @@ def verify_image(
 
     戻り値: {"ok": bool, "reason": str, "fix_hint": str}
         ok=False のとき fix_hint（英語の改善指示）が入る。
-    判定に失敗した場合は安全側に倒して ok=True（再生成しない）。
+    判定できない場合は未確認として返し、合格扱いにしない。
     """
     p = Path(image_path)
     try:
         img_bytes = p.read_bytes()
     except Exception:
-        return {"ok": True, "reason": "画像読込失敗（検証スキップ）", "fix_hint": ""}
+        return {"ok": False, "verified": False, "reason": "画像読込失敗（未確認）", "fix_hint": ""}
 
     if not img_bytes or len(img_bytes) < 200:
-        return {"ok": True, "reason": "画像が空（スキップ）", "fix_hint": ""}
+        return {"ok": False, "verified": False, "reason": "画像が空（未確認）", "fix_hint": ""}
 
     # 検証用に縮小（長辺1024px・JPEG）してから送る。
     # メモリ・アップロード時間・Vision のトークン/コストを大幅に削減する。
@@ -138,7 +139,7 @@ def verify_image(
             model=CLAUDE_MODEL,
             max_tokens=500,
             system=system,
-            timeout=45,  # 検証が固まって全体を止めないようタイムアウト（短めに）
+            timeout=180, effort="high", workload="assets_review",
             messages=[{
                 "role": "user",
                 "content": [
@@ -149,21 +150,18 @@ def verify_image(
         )
     except _subscription.SubscriptionUnavailable:
         raise
-    except _subscription.SubscriptionUnavailable:
-        raise
-    except _subscription.SubscriptionUnavailable:
-        raise
     except Exception as e:
         print(f"  [verifier ERROR] {str(e)[:120]}", flush=True)
-        return {"ok": False, "reason": "検証を完了できませんでした", "fix_hint": ""}
+        return {"ok": False, "verified": False, "reason": "検証を完了できませんでした（未確認）", "fix_hint": ""}
 
     text = "".join(getattr(b, "text", "") for b in response.content if hasattr(b, "text"))
     data = parse_json_object(text)
-    if not data:
-        return {"ok": False, "reason": "検証結果を読み取れませんでした", "fix_hint": ""}
+    if not isinstance(data, dict) or type(data.get("ok")) is not bool or not isinstance(data.get("reason"), str):
+        return {"ok": False, "verified": False, "reason": "検証結果を読み取れませんでした（未確認）", "fix_hint": ""}
 
     return {
         "ok": data.get("ok") is True,
+        "verified": True,
         "reason": str(data.get("reason", ""))[:60],
         "issue_tags": [str(x)[:40] for x in data.get("issue_tags", []) if isinstance(x, str)][:5],
         "fix_hint": str(data.get("fix_hint", ""))[:200],

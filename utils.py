@@ -136,8 +136,12 @@ def claude_query(
     model: str = "claude-sonnet-5",
     max_retries: int = 3,
     timeout_seconds: Optional[float] = None,
+    effort: Optional[str] = None,
+    workload: str = "",
 ) -> str:
-    return _subscription.generate(system, query, tool='sentence', model=model, max_tokens=max_tokens)[0]
+    return _subscription.generate(system, query, tool='sentence', channel=get_subsk_channel(),
+        model=model, max_tokens=max_tokens, timeout=timeout_seconds or 900,
+        effort=effort, workload=workload)[0]
 
 
 def parse_json_array(text: str) -> list:

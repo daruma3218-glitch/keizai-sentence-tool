@@ -1853,12 +1853,12 @@ class SentencePipeline:
         self._log("renderer", f"map レンダリング完了: {done} 枚（正確な国境）")
 
     def _verify_and_fix(self, results, generation_targets, gemini_key, openai_key, theme=""):
-        """生成済み diagram/chart を Claude Vision で検証し、ズレてたら1回だけ再生成する。
+        """生成済み図解をASTRA CLIで検証し、修正点が明確なら従来どおり1回だけ再生成する。
 
         検証は「あれば嬉しい」機能なので、絶対にジョブ完了をブロックしない:
         - 全体に時間予算（budget）を設け、超過したら残りはスキップして先へ進む
         - 1 枚ごとにもタイムアウト（固まった検証で全体が止まらない）
-        - チャンネル別 Anthropic キーを使い、リトライを抑えて素早く諦める
+        - サブスクCLIのみ使用。未確認は画像の再生成対象にしない
         """
         import time as _time
         from concurrent.futures import (
@@ -1886,11 +1886,14 @@ class SentencePipeline:
         if not verify_list:
             return
 
+        for t in verify_list:
+            self._update_row(t["index"], verify_issue=True, verify_status="unverified", verify_reason="内容検査は未確認")
+
         # 時間予算: 1 枚 ~12 秒 ÷ 4 並列 を目安に、最大 10 分。超えたら打ち切って先へ進む。
         budget = min(600, max(90, int(len(verify_list) / 4 * 12) + 60))
         self._progress(3, f"図解の意味を検証中（0/{len(verify_list)} 枚）...", 90)
         self._log("verify",
-                  f"diagram/chart {len(verify_list)} 枚の意味を Claude Vision で検証します"
+                  f"diagram/chart {len(verify_list)} 枚の意味を ASTRA CLI で検証します"
                   f"（最大 {budget // 60} 分・超過分はスキップ）")
 
         # 並列で検証（原稿の文脈＝テーマ・章・前後段落 を渡す）
@@ -1926,15 +1929,21 @@ class SentencePipeline:
                         checked += 1
                         if checked % 20 == 0:
                             self._progress(3, f"図解の意味を検証中（{checked}/{len(verify_list)} 枚）...", 90)
-                        if not v.get("ok"):
-                            ng.append((t, v))
+                        if v.get("verified") is False:
+                            self._update_row(t["index"], verify_issue=True, verify_status="unverified", verify_reason=v.get("reason", "未確認"))
+                        elif not v.get("ok"):
+                            if v.get("fix_hint", "").strip():
+                                ng.append((t, v))
                             self._update_row(
                                 t["index"],
                                 verify_issue=True,
+                                verify_status="needs_fix",
                                 verify_reason=v.get("reason", ""),
                                 verify_issue_tags=v.get("issue_tags", []),
                             )
                             self._log("verify", f"№{t['index']} 要修正: {v.get('reason','')}")
+                        else:
+                            self._update_row(t["index"], verify_issue=False, verify_status="pass", verify_reason=v.get("reason", ""))
                     except _FutTimeout:
                         timed_out = True
                         break
@@ -1955,7 +1964,7 @@ class SentencePipeline:
 
         if not ng:
             if not timed_out:
-                self._log("verify", "検証完了: 全て意味OK ✓")
+                self._log("verify", "検証完了。各画像の合格・要修正・未確認を確認してください")
             return
 
         # 改善指示を付けて再生成（1回）
@@ -1976,7 +1985,9 @@ class SentencePipeline:
             if st == "ok":
                 upd["filename"] = info.get("filename")
                 upd["verify_fixed"] = True
-                upd["verify_issue"] = False
+                upd["verify_issue"] = True
+                upd["verify_status"] = "unverified"
+                upd["verify_reason"] = "再生成後の内容は未確認"
             self._update_row(no, **upd)
 
         run_parallel_generation(
@@ -2019,6 +2030,8 @@ class SentencePipeline:
             checks.append((r, t))
         if not checks:
             return
+        for _, t in checks:
+            self._update_row(t["index"], verify_issue=True, verify_status="unverified", verify_reason="内容検査は未確認")
         try:
             client = get_anthropic_client(self.anthropic_key).with_options(
                 max_retries=1, timeout=60.0)
@@ -2060,9 +2073,12 @@ class SentencePipeline:
                             self._update_row(
                                 t["index"],
                                 verify_issue=True,
+                                verify_status="unverified" if v.get("verified") is False else "needs_fix",
                                 verify_reason=v.get("reason", ""),
                                 verify_issue_tags=v.get("issue_tags", []),
                             )
+                        else:
+                            self._update_row(t["index"], verify_issue=False, verify_status="pass", verify_reason=v.get("reason", ""))
                     except _FutTimeout:
                         break
                     except Exception as e:

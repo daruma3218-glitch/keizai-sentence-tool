@@ -224,6 +224,10 @@ def key_attribution():
 @app.route("/version")
 def version():
     """Render が実際にどの版を読んでいるか確認するための軽量診断。"""
+    import subscription_runtime
+    from router import CLAUDE_MODEL as routing_model, EXTRACT_MODEL
+    from prompter import CLAUDE_MODEL as design_model
+    from verifier import CLAUDE_MODEL as review_model
     upload_html = ""
     try:
         upload_html = (PROJECT_ROOT / "templates" / "upload.html").read_text(encoding="utf-8")
@@ -249,6 +253,10 @@ def version():
         "data_dir_env": os.environ.get("DATA_DIR", ""),
         "subsk_gateway_enabled": subsk_enabled,
         "subsk_worker_alive": subsk_worker,
+        "routing_version": subscription_runtime.ROUTING_VERSION,
+        "editorial_models": {"selection": routing_model, "data_extraction": EXTRACT_MODEL,
+                             "design": design_model, "image_review": review_model},
+        "llm_billing": "subscription_cli_only", "llm_api_fallback": False,
         "checked_at": datetime.now().isoformat(),
     })
 

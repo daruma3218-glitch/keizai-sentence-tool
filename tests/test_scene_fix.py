@@ -185,7 +185,7 @@ def test_scene_fix_revise_generated_variant(tmp_path, monkeypatch):
     body = resp.get_json()
     assert body["ok"] is True
     assert body["revision"]["filename"] == "1_rev1.png"
-    assert calls[-1]["kwargs"]["edit_image_path"].endswith("/images/1.png")
+    assert Path(calls[-1]["kwargs"]["edit_image_path"]).as_posix().endswith("/images/1.png")
     assert calls[-1]["prompts"][0]["edit_source"] is True
     manifest = json.loads((out_root / created["job_id"] / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["variants"][0]["filename"] == "1_rev1.png"
