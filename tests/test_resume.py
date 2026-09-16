@@ -45,8 +45,9 @@ def test_build_resume_args_restores_and_falls_back(tmp_path, monkeypatch):
     (job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
      skip_decorative, style_preset, web_image_count, max_diagrams, route_mode,
      worldview_desc, verify_diagrams, channel_id, ch_keys, character_ref_path,
-     title_override, fact_context, resume) = args
+     title_override, fact_context, resume, openai_model) = args
     assert resume is True
+    assert openai_model in ('gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst')
     assert channel_id == "keizai" and provider == "nanobanana"
     assert concurrency == 24  # クランプ
     assert route_mode in ("auto", "all_ai")
@@ -111,6 +112,7 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
 
     def fake_generate(**kw):
         captured["targets"] = [t["index"] for t in kw.get("prompts", [])]
+        captured["openai_model"] = kw.get("openai_model")
         return [{"index": t["index"], "filename": f"{t['index']}.png", "success": True,
                  "type": t.get("type"), "prompt": t.get("prompt"), "error": ""}
                 for t in kw.get("prompts", [])]
@@ -120,11 +122,12 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
         manuscript_text="て" * 200, output_dir=job_dir,
         provider="nanobanana", gemini_key="dummy",
         verify_diagrams=False, web_image_count=0, route_mode="auto",
-        resume=True,
+        resume=True, openai_model="gpt-image-2.5-flare",
     )
     manifest = pipe.run()
 
     assert captured["targets"] == [1, 3], "生成済み№2はスキップされるべき"
+    assert captured["openai_model"] == "gpt-image-2.5-flare", "選択した OpenAI 画像モデルが generator まで届く"
     assert manifest.get("generated") == 3, "再利用分を含めて3枚が完成扱い"
     snap = json.loads((job_dir / "rows_progress.json").read_text(encoding="utf-8"))
     row2 = next(r for r in snap["rows"] if r["no"] == 2)

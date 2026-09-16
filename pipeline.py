@@ -45,6 +45,7 @@ class SentencePipeline:
         concurrency: int = DEFAULT_CONCURRENCY,
         provider: str = PROVIDER_NANOBANANA,
         openai_quality: str = "medium",
+        openai_model: Optional[str] = None,   # gpt-image を使う工程の OpenAI 画像モデル
         style_preset: str = "flat_infographic",
         worldview_desc: str = "",
         verify_diagrams: bool = True,
@@ -94,6 +95,7 @@ class SentencePipeline:
         self.concurrency = concurrency
         self.provider = provider if provider in VALID_PROVIDERS else PROVIDER_NANOBANANA
         self.openai_quality = openai_quality
+        self.openai_model = (openai_model or "").strip() or None  # None=generator側の既定(環境変数)
         self.style_preset = style_preset if style_preset in VALID_STYLES else "flat_infographic"
         self.worldview_desc = worldview_desc or ""
         self.verify_diagrams = bool(verify_diagrams)
@@ -1396,6 +1398,7 @@ class SentencePipeline:
                     gemini_api_key=gemini_key,
                     openai_api_key=openai_key,
                     openai_quality=self.openai_quality,
+                    openai_model=self.openai_model,
                     concurrency=eff_concurrency,
                     style_preset=self.style_preset,
                     progress_callback=on_item_event,
@@ -1565,6 +1568,7 @@ class SentencePipeline:
                         gemini_api_key=gemini_key,
                         openai_api_key=openai_key,
                         openai_quality=self.openai_quality,
+                        openai_model=self.openai_model,
                         concurrency=fb_concurrency,
                         style_preset=self.style_preset,
                         progress_callback=on_web_fallback_event,
@@ -1609,6 +1613,7 @@ class SentencePipeline:
             "base_provider": self.provider,
             "type_providers": self.type_providers,
             "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
+            "openai_model": self.openai_model,
             "chart_engine": self.chart_engine,
             "allow_charts": self.allow_charts,
             "map_engine": self.map_engine,
@@ -1665,6 +1670,7 @@ class SentencePipeline:
             "user_instructions": self.user_instructions,
             "provider": self.provider,
             "openai_quality": self.openai_quality if self.provider == PROVIDER_GPT_IMAGE else None,
+            "openai_model": self.openai_model,
             "type_providers": self.type_providers,
             "style_preset": self.style_preset,
             "channel_id": self.channel_id,
@@ -1997,6 +2003,7 @@ class SentencePipeline:
             gemini_api_key=gemini_key,
             openai_api_key=openai_key,
             openai_quality=self.openai_quality,
+            openai_model=self.openai_model,
             concurrency=self.concurrency,
             style_preset=self.style_preset,
             progress_callback=on_fix_event,

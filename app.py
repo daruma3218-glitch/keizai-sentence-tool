@@ -32,7 +32,8 @@ from flask import (
 
 from utils import load_env, load_json, SNAPSHOT_IO_LOCK
 from pipeline import SentencePipeline, VALID_STYLES
-from generator import PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS
+from generator import (PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS,
+                       OPENAI_IMAGE_MODEL_CHOICES, resolve_openai_image_model)
 
 
 PROJECT_ROOT = Path(__file__).parent
@@ -337,7 +338,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
                          channel_id: str = "default", ch_keys: dict = None,
                          character_ref_path: str = "",
                          title_override: str = "", fact_context: str = "",
-                         resume: bool = False):
+                         resume: bool = False, openai_model: str = ""):
     job_dir = OUTPUT_DIR / job_id
     ch_keys = ch_keys or {}
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
@@ -373,6 +374,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             concurrency=concurrency,
             provider=provider,
             openai_quality=openai_quality,
+            openai_model=openai_model or None,
             style_preset=style_preset,
             worldview_desc=worldview_desc,
             verify_diagrams=verify_diagrams,
@@ -487,6 +489,7 @@ def index():
         c["_has_anthropic"] = bool(keys["anthropic"])
     return render_template(
         "upload.html",
+        openai_image_models=[{"id": m, "label": l} for m, l in OPENAI_IMAGE_MODEL_CHOICES],
         past_jobs=past_jobs[:30],
         channels=channels,
         has_anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
@@ -656,6 +659,7 @@ def api_scene_fix():
     openai_quality = (request.form.get("openai_quality") or defaults.get("openai_quality") or "medium").strip()
     if openai_quality not in ("low", "medium", "high"):
         openai_quality = "medium"
+    openai_model = resolve_openai_image_model(request.form.get("openai_model"), defaults.get("openai_image_model"))
     fix_mode = (request.form.get("fix_mode") or "balanced").strip()
     if fix_mode not in ("balanced", "more_clear", "less_text", "more_real", "same_style"):
         fix_mode = "balanced"
@@ -695,6 +699,7 @@ def api_scene_fix():
             gemini_api_key=ch_keys.get("gemini") or None,
             openai_api_key=ch_keys.get("openai") or None,
             openai_quality=openai_quality,
+            openai_model=openai_model,
             concurrency=min(variant_count, 3),
             style_preset=style_preset,
             progress_callback=on_progress,
@@ -716,6 +721,7 @@ def api_scene_fix():
                 gemini_api_key=ch_keys.get("gemini") or None,
                 openai_api_key=ch_keys.get("openai") or None,
                 openai_quality=openai_quality,
+                openai_model=openai_model,
                 concurrency=min(variant_count, 3),
                 style_preset=style_preset,
                 progress_callback=on_progress,
@@ -808,6 +814,7 @@ def api_scene_fix_revise(job_id):
     openai_quality = defaults.get("openai_quality", "medium")
     if openai_quality not in ("low", "medium", "high"):
         openai_quality = "medium"
+    openai_model = resolve_openai_image_model(manifest.get("openai_model"), defaults.get("openai_image_model"))
 
     revisions = manifest.get("revisions", [])
     revision_no = 1 + sum(1 for r in revisions if int(r.get("source_index") or 0) == source_index)
@@ -850,6 +857,7 @@ def api_scene_fix_revise(job_id):
             gemini_api_key=ch_keys.get("gemini") or None,
             openai_api_key=ch_keys.get("openai") or None,
             openai_quality=openai_quality,
+            openai_model=openai_model,
             concurrency=1,
             style_preset=style_preset,
             edit_image_path=str(source_image),
@@ -960,6 +968,8 @@ def start_job():
     openai_quality = request.form.get("openai_quality", "medium")
     if openai_quality not in ("low", "medium", "high"):
         openai_quality = "medium"
+    openai_model = resolve_openai_image_model(request.form.get("openai_model"),
+                                             (channel.get("defaults", {}) or {}).get("openai_image_model"))
     skip_decorative = request.form.get("skip_decorative", "off") == "on"
     style_preset = (channel.get("defaults", {}) or {}).get("style_preset", "flat_infographic")
     if style_preset not in VALID_STYLES:
@@ -1094,6 +1104,7 @@ def start_job():
         concurrency=concurrency,
         provider=provider,
         openai_quality=openai_quality if provider == PROVIDER_GPT_IMAGE else None,
+        openai_model=openai_model,
         skip_decorative=skip_decorative,
         style_preset=style_preset,
         web_image_count=web_image_count,
@@ -1111,6 +1122,7 @@ def start_job():
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
               skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
               channel_id, ch_keys, character_ref_path, title_override, fact_context),
+        kwargs={"openai_model": openai_model},
         daemon=True,
     )
     thread.start()
@@ -1184,6 +1196,7 @@ def _build_resume_args(job_id: str):
     max_diagrams = _int_of("max_diagrams", defaults.get("max_diagrams", 150), 1, 300)
     title_override = job_state.get("title_override") or ""
     fact_context = job_state.get("fact_context") or ""
+    openai_model = resolve_openai_image_model(job_state.get("openai_model"), defaults.get("openai_image_model"))
 
     character_ref_path = ""
     _cref = (defaults.get("character_ref") or "").strip()
@@ -1195,7 +1208,7 @@ def _build_resume_args(job_id: str):
     args = (job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
             skip_decorative, style_preset, web_image_count, max_diagrams, route_mode,
             worldview_desc, bool(verify_diagrams), channel_id, ch_keys, character_ref_path,
-            title_override, fact_context, True)  # resume=True
+            title_override, fact_context, True, openai_model)  # resume=True
     return args, None
 
 
@@ -1824,6 +1837,7 @@ def api_regenerate(job_id, no):
     if provider not in VALID_PROVIDERS:
         provider = PROVIDER_NANOBANANA
     openai_quality = params.get("openai_quality") or "medium"
+    openai_model = resolve_openai_image_model(params.get("openai_model"), defaults.get("openai_image_model"))
     style_preset = params.get("style_preset", "flat_infographic")
 
     # キャラ固定の参照画像（チャンネル設定）。先生が描かれる illustration のみ使用。
@@ -1871,6 +1885,7 @@ def api_regenerate(job_id, no):
             gemini_api_key=ch_keys.get("gemini") or None,
             openai_api_key=ch_keys.get("openai") or None,
             openai_quality=openai_quality,
+            openai_model=openai_model,
             concurrency=1,
             reference_image_path=character_ref_path,
             edit_image_path=str(edit_image_path) if edit_image_path else None,
