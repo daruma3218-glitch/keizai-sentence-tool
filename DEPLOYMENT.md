@@ -1,5 +1,7 @@
 # 本番更新
 
+スタッフ用URLは `https://sentence.apprendre.jp`。サーバーの契約アカウント名に依存しない入口を使用する。
+
 本番の通常ブランチは `main`。移行確認後、Render を `After CI Checks Pass` にする。
 GitHub Actions で認証・保存済み結果のダウンロード・再開・更新ガードを検査し、
 Render のビルドでも同じテストを実行する。API生成やCLI呼び出しは行わない。
