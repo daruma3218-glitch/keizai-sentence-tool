@@ -150,3 +150,17 @@ def test_predeploy_fails_closed_on_endpoint_error(monkeypatch):
     monkeypatch.setattr(urllib.request, "build_opener", lambda *args: opener)
     with pytest.raises(SystemExit, match="keeping existing instance"):
         predeploy()
+
+
+@pytest.mark.parametrize("status", [200, 202])
+def test_hook_accepts_started_or_queued_without_ref(monkeypatch, status):
+    import urllib.request
+    from deploy_guard import call_hook
+    response = Mock(status=status)
+    opener = Mock()
+    opener.open.return_value.__enter__ = Mock(return_value=response)
+    opener.open.return_value.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *args: opener)
+    call_hook("https://api.render.com/deploy/srv-test?key=fixture")
+    with pytest.raises(ValueError):
+        call_hook("https://api.render.com/deploy/srv-test?key=fixture&ref=" + SHA)

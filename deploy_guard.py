@@ -38,7 +38,7 @@ def call_hook(url):
             return None
     req = urllib.request.Request(url, data=b"", method="POST")
     with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as response:
-        if response.status != 200:
+        if response.status not in {200, 202}:
             raise RuntimeError("Render did not accept the deployment retry")
 
 
