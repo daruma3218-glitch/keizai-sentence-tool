@@ -1,3 +1,5 @@
+# Legacy blueprint for the original service. The migrated production service is
+# managed in Render Settings; use DEPLOYMENT.md. Do not apply this file to it.
 services:
   - type: web
     name: keizai-sentence-tool

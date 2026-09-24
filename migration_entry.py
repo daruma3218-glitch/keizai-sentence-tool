@@ -53,8 +53,9 @@ def create_app():
     mode = os.environ.get("MIGRATION_ACCESS", "readonly")
     if mode not in {"readonly", "active"}:
         raise RuntimeError("Invalid MIGRATION_ACCESS")
-    original = importlib.import_module("app").app
-    return MigrationGate(original, root, mode)
+    module = importlib.import_module("app")
+    from deploy_guard import install
+    return MigrationGate(install(module, root), root, mode)
 
 
 # Gunicorn's factory syntax migration_entry:create_app() avoids import-time
