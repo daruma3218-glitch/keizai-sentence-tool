@@ -6,7 +6,9 @@ import sys
 import tempfile
 
 TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
-         "recent_jobs", "key_attribution", "resume"]
+         "recent_jobs", "key_attribution", "resume",
+         # 2026-09-25 世界観ロック（カラクリ経済学の画風統一）: 渡し忘れ・判定の読み違いを本番前に止める
+         "style_lock", "style_check", "flag_check"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

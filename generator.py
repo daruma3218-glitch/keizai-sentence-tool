@@ -231,16 +231,34 @@ _EDIT_SOURCE_INSTRUCTION = (
 )
 
 
+# 世界観ロック（チャンネル設定 style_lock）を掛ける画像タイプ。
+# 実写(realphoto)・地図(map)はそれぞれ固有の見た目を指定しているので対象外。
+STYLE_LOCK_TYPES = ("illustration", "diagram", "chart", "decorative")
+
+# 世界観ロック中の illustration / decorative は「何を描くか」だけを伝える。
+# 通常時の「内容に合う画風を水彩・3D・コミック等から選ぶ」指示は、1枚ごとに
+# 画風が変わる原因になるため、ロック中は使わない（2026-09-25 カラクリ経済学の指摘）。
+_STYLE_LOCK_SCENE_HINTS = {
+    "illustration": "Draw the scene described below as one clear illustration. ",
+    "decorative": "Draw a simple, calm background image for the scene described below. ",
+}
+
+
 def _build_full_prompt(
     user_prompt: str,
     prompt_type: str = "illustration",
     allowed_terms: Optional[list] = None,
     style_preset: str = "",
+    style_lock: str = "",
 ) -> str:
     """画像生成用のシステム接頭辞を付与
 
     allowed_terms には「画像内に入れて良い日本語の語句」のホワイトリストを渡す。
     リストに無い文字・ラベル・数値はすべて画像から除外するよう AI に厳格指示する。
+
+    style_lock にチャンネルの世界観の設定文を渡すと、STYLE_LOCK_TYPES の画像では
+    それを先頭に必ず入れ、画風を選ばせる指示とプリセットの配色（カラーコード付き）を外す。
+    空なら従来どおり（他チャンネルの出力は変わらない）。
     """
     style_hints = {
         "illustration": (
@@ -279,7 +297,11 @@ def _build_full_prompt(
             "Style: clean chart (bar / pie / line graph) with 3-5 data elements. "
         ),
     }
-    style = style_hints.get(prompt_type, style_hints["illustration"])
+    lock = (style_lock or "").strip() if prompt_type in STYLE_LOCK_TYPES else ""
+    if lock:
+        style = _STYLE_LOCK_SCENE_HINTS.get(prompt_type) or style_hints.get(prompt_type, "")
+    else:
+        style = style_hints.get(prompt_type, style_hints["illustration"])
     preset_hints = {
         "flat_infographic": (
             "PRESET STYLE: flat educational infographic. Use simple icons, clean boxes, "
@@ -316,7 +338,9 @@ def _build_full_prompt(
             "violence, cute anime styling, modern realism, smiles, or visible color codes. "
         ),
     }
-    preset = preset_hints.get(style_preset, "")
+    # 世界観ロック中はプリセットの画風・配色を重ねない。設定文の配色と食い違い、
+    # プリセットのカラーコードが画像に描き込まれる原因にもなっていた。
+    preset = "" if lock else preset_hints.get(style_preset, "")
 
     # 画像内テキストのホワイトリスト指示（最重要）
     terms = [t for t in (allowed_terms or []) if isinstance(t, str) and t.strip()]
@@ -380,7 +404,18 @@ def _build_full_prompt(
         "- For diagrams, every label must support the visual argument; omit decorative or redundant labels.\n"
         "- Avoid duplicate labels, overlapping text, and repeated words.\n"
     )
-    return f"{style}\n{preset}\n{text_policy}{common}\nContent to visualize:\n{user_prompt}"
+    body = f"{style}\n{preset}\n{text_policy}{common}\nContent to visualize:\n{user_prompt}"
+    if not lock:
+        return body
+    return (
+        "CHANNEL ART STYLE (mandatory for every image of this channel; it overrides any style, "
+        "medium, lighting or color words in the content below):\n"
+        f"{lock}\n\n{body}\n\n"
+        "STYLE CHECK: The finished image must follow the CHANNEL ART STYLE above, with the same "
+        "look, outlines, palette and character design as every other image of this channel. "
+        "If the content above asks for a different look (photo, 3D, painterly, anime, watercolor "
+        "or anything else), ignore that and keep the channel style."
+    )
 
 
 # ===== Gemini (nanobanana) =====
@@ -553,6 +588,7 @@ class ParallelImageGenerator:
         reference_image_path: Optional[str] = None,  # キャラ固定の参照画像パス
         edit_image_path: Optional[str] = None,       # 個別再生成: 元画像を微調整する参照
         realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
+        style_lock_text: str = "",  # 世界観ロック: チャンネルの設定文を全イラスト/図解に固定
     ):
         if provider not in VALID_PROVIDERS:
             raise ValueError(f"unknown provider: {provider} (valid: {VALID_PROVIDERS})")
@@ -561,6 +597,7 @@ class ParallelImageGenerator:
         self.openai_size = openai_size
         self.style_preset = style_preset
         self.realphoto_watermark = bool(realphoto_watermark)
+        self.style_lock_text = (style_lock_text or "").strip()
 
         # 参照画像（キャラ固定用）。character=True のシーンでのみ使用。
         # ファイルが無ければ None（=テキスト方式に自動フォールバック、壊れない）。
@@ -698,7 +735,8 @@ class ParallelImageGenerator:
                 "provider": self.provider,
             })
 
-            full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms, style_preset=row_style)
+            full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
+                                             style_preset=row_style, style_lock=self.style_lock_text)
             # キャラ固定: character=True かつ参照画像があるシーンだけ参照モードで生成
             use_reference = bool(prompt_entry.get("character")) and self.reference_bytes is not None
             if use_reference:
@@ -898,6 +936,7 @@ def run_parallel_generation(
     reference_image_path: Optional[str] = None,  # キャラ固定の参照画像
     edit_image_path: Optional[str] = None,       # 個別再生成: 元画像を微調整する参照
     realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
+    style_lock_text: str = "",  # 世界観ロック（空なら従来どおり）
 ) -> list:
     """同期エントリポイント: pipeline から呼び出す"""
     # 環境変数からデフォルト補完
@@ -924,5 +963,6 @@ def run_parallel_generation(
         reference_image_path=reference_image_path,
         edit_image_path=edit_image_path,
         realphoto_watermark=realphoto_watermark,
+        style_lock_text=style_lock_text,
     )
     return asyncio.run(generator.generate_all(prompts, output_dir))

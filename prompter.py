@@ -292,11 +292,46 @@ def _blueprint_prompt_fragment(blueprint: dict) -> str:
     )
 
 
-def _build_user_block(user_instructions: str, style_preset: str) -> str:
+# 世界観ロック中（チャンネル設定 style_lock）に使う図解の組み立てルール。
+# 画風・配色はチャンネルの世界観の設定文が決めるため、プリセットの配色（カラーコード）は入れない。
+LOCKED_STRUCTURE_RULES_JA = (
+    "【図解の組み立て（画風・配色はチャンネルの世界観ロックに従う）】\n"
+    "- アイコン・記号ベース（人型、矢印、囲み、比較パネルなど）\n"
+    "- キーワードの羅列は禁止。必ず因果・比較・時系列・関係性のどれか1つの構造にする。ただし『原因』『結果』『流れ』などの抽象ラベルを画像内に表示しない\n"
+    "- 図解は読む順番を明確にし、ラベルと矢印を追えば内容が入ってくる構成にする\n"
+    "- 図解の画像内テキストは最大6語まで。同じ語を重複表示しない\n"
+    "- 情報を整理し、誤字・脱字・重複文字を出さない\n"
+    "- 寓意（動物の擬人化）は避ける"
+)
+
+
+def _style_lock_block(worldview_desc: str) -> str:
+    """世界観ロック中のプロンプター向け指示（何を描くか・誰を描くか）。"""
+    return f"""
+
+【世界観ロック（このチャンネルは画風を固定・最重要）】
+次の世界観の設定文は、システムが illustration / diagram / chart / decorative のすべての画像指示へ自動で付けます:
+---
+{worldview_desc.strip()}
+---
+- prompt には「何を描くか」（人物・物・動作・表情・構図・背景に置く物）だけを英語で書く。画風・画材・色・照明を指定する語（photorealistic, photo, cinematic, 3D, watercolor, anime, flat vector, oil painting, lighting など）は書かない。
+- 人物: 設定文の THE PROFESSOR（先生）がこのチャンネル唯一の固定キャラ。次のような文の illustration では先生を描き、"character": true にする:
+  視聴者への語りかけ（あなた・皆さん）／問いかけ／まとめ・結論／意見・感想／「私」「僕」の体験談／話題の切り替え。
+  先生は説明する・指さす・考える・驚く・うなずく等の動作で、文の内容を表す物や簡単な図と一緒に描いてよい。
+- 客・店員・店主・大家・会社員・群衆などが必要な文では、同じ画風の一般的な大人を脇役として描く（"character": false）。若い学生・パーカー姿など、別の固定キャラを作らない。
+- 事実・仕組み・物が主役の文は、物・場所・図を主役にしてよい（毎回先生を出す必要はない）。"""
+
+
+def _build_user_block(user_instructions: str, style_preset: str, style_lock: bool = False) -> str:
     blocks = []
     if user_instructions.strip():
         blocks.append(f"""【ユーザーからの画像指示（最優先で従うこと）】
 {user_instructions.strip()}""")
+
+    if style_lock:
+        # 世界観ロック中はプリセットの画風説明を重ねない（世界観の設定文と食い違うため）
+        blocks.append(LOCKED_STRUCTURE_RULES_JA)
+        return "\n\n".join(blocks)
 
     style_descriptions = {
         "flat_infographic": (
@@ -398,13 +433,17 @@ def generate_prompts_batch(
     user_instructions: str = "",
     style_preset: str = "flat_infographic",
     worldview_desc: str = "",
+    style_lock: bool = False,
 ) -> list:
     """1 バッチのセンテンスを英文プロンプト化"""
-    user_block = _build_user_block(user_instructions, style_preset)
+    style_lock = bool(style_lock and worldview_desc.strip())
+    user_block = _build_user_block(user_instructions, style_preset, style_lock=style_lock)
     kaizen_block = f"\n\n{ROSHIA_KAIZEN_BLOCK_JA}" if _is_roshia_instruction(user_instructions) else ""
     # 世界観・キャラ統一の指示（illustration/diagram/decorative に適用）
     worldview_block = ""
-    if worldview_desc.strip():
+    if style_lock:
+        worldview_block = _style_lock_block(worldview_desc)
+    elif worldview_desc.strip():
         worldview_block = f"""
 
 【世界観・キャラクター統一（最重要・illustration / diagram / decorative にのみ適用）】
@@ -667,6 +706,7 @@ def generate_all_prompts(
     worldview_desc: str = "",
     max_workers: int = 6,
     log: Optional[Callable] = None,
+    style_lock: bool = False,
 ) -> list:
     """全センテンスを並列バッチで英文プロンプト化"""
     log = log or (lambda *a, **kw: None)
@@ -678,14 +718,15 @@ def generate_all_prompts(
     diagram_count = sum(1 for r in rows if (r.get("route") or r.get("type")) == "diagram")
     log("prompter", f"{len(rows)} センテンスを {len(batches)} バッチに分割（同時 {max_workers} 並列）/ style={style_preset}"
                     + (f"／図解設計JSON {diagram_count} 件" if diagram_count else "")
-                    + ("／世界観統一ON" if worldview_desc.strip() else ""))
+                    + (("／世界観ロックON" if style_lock else "／世界観統一ON") if worldview_desc.strip() else ""))
 
     prompts_by_no = {}
     completed = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
-            executor.submit(generate_prompts_batch, client, batch, title, user_instructions, style_preset, worldview_desc): i
+            executor.submit(generate_prompts_batch, client, batch, title, user_instructions, style_preset,
+                            worldview_desc, style_lock): i
             for i, batch in enumerate(batches)
         }
         batches_by_idx = {i: batch for i, batch in enumerate(batches)}

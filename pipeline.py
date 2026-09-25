@@ -82,6 +82,9 @@ class SentencePipeline:
         resume: bool = False,               # 途中で止まったジョブの再開（ディスク上の成果物を再利用）
         build_source_pack: bool = False,    # 制作資料パック（元ネタ動画+一次資料の sources.html/md）を作る
         source_videos_per_chapter: int = 3,  # 章ごとの元ネタ動画の最大収集数
+        style_lock: bool = False,           # 世界観の設定文を全イラスト/図解の生成指示に固定する
+        allow_ai_realphoto: bool = True,    # False: AI実写風(realphoto)を作らず世界観イラストにする
+        style_check: bool = False,          # 検品で画風も判定し、外れた画像を1回だけ作り直す
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
@@ -132,6 +135,13 @@ class SentencePipeline:
         self.router_concurrency = max(1, min(int(router_concurrency or 2), 4))
         self.title_override = (title_override or "").strip()   # v3 Step7
         self.fact_context = (fact_context or "").strip()       # v3 Step7
+        # 世界観ロック: 世界観モードOFF（設定文が空）のジョブではロックも掛けない
+        self.style_lock = bool(style_lock) and bool(self.worldview_desc.strip())
+        self.style_lock_text = self.worldview_desc.strip() if self.style_lock else ""
+        self.allow_ai_realphoto = bool(allow_ai_realphoto)
+        # 画風チェックは「基準画像（先生キャラ）と世界観ロックの設定文」が揃うときだけ
+        self.style_check = (bool(style_check) and self.style_lock and bool(self.character_ref_path)
+                            and Path(self.character_ref_path).exists())
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
         self.log_callback = log_callback or (lambda *a, **kw: None)
         self.item_callback = item_callback or (lambda info: None)
@@ -327,6 +337,36 @@ class SentencePipeline:
                 "router",
                 f"実写/Web写真ブースト: {changed} 件を web_photo/realphoto へ補正",
                 f"realistic_route_min={self.realistic_route_min}"
+            )
+        return changed
+
+    def _realphoto_fallback_route(self) -> str:
+        """AI実写風を作らないチャンネルでは、実写風の代わりに世界観イラストを使う。"""
+        return "realphoto" if self.allow_ai_realphoto else "illustration"
+
+    def _apply_realphoto_policy(self, routes: dict) -> int:
+        """allow_ai_realphoto=False のチャンネルで、realphoto を世界観イラストへ変える。
+
+        本物の写真が必要な文は web_photo（Commons/Web）のまま残す。AIの実写風は
+        フラットなイラストと混ざるとタッチの差が大きく、人物は違和感も出やすい
+        （2026-09-25 カラクリ経済学: 実写風は本物の写真かフラットなイラストへ差し替えられていた）。
+        boost 等の後処理のあとに呼ぶ（後処理が realphoto を足しても必ず変換される）。
+        """
+        if self.allow_ai_realphoto:
+            return 0
+        changed = 0
+        for no, rt in routes.items():
+            if rt.get("route") != "realphoto":
+                continue
+            rt["route"] = "illustration"
+            rt["engine"] = "ai"
+            rt["reason"] = f"{rt.get('reason', '')}（AI実写風なし設定→世界観イラスト）".strip()
+            changed += 1
+        if changed:
+            self._log(
+                "router",
+                f"AI実写風なし設定: realphoto {changed} 件を世界観イラストへ変換",
+                "本物の写真が必要な文は Web写真（Commons）のまま使います",
             )
         return changed
 
@@ -600,6 +640,48 @@ class SentencePipeline:
         """画像タイプ別 provider。未指定ならジョブ全体の provider を使う。"""
         return self.type_providers.get(target.get("type", ""), self.provider)
 
+    def _group_by_provider(self, targets: list) -> list:
+        """作り直し等を、最初の生成と同じ provider ごとにまとめる（順序は保つ）。"""
+        groups: dict = {}
+        for t in targets:
+            groups.setdefault(self._provider_for_target(t), []).append(t)
+        return list(groups.items())
+
+    # ===== 世界観ロックの画風チェック =====
+    # 1ジョブで画風のために作り直す上限。判定がずれても費用が膨らまないようにする。
+    STYLE_FIX_MAX = 30
+
+    def _style_check_kwargs(self) -> dict:
+        """verify_image に渡す画風チェックの引数（無効なら空）。"""
+        if not self.style_check:
+            return {}
+        return {"style_reference_path": self.character_ref_path, "style_rules": self.style_lock_text}
+
+    @staticmethod
+    def _style_fix_hint(verdict: dict) -> str:
+        issue = (verdict.get("style_issue") or "").strip()
+        return ("The previous image did not match the channel art style"
+                + (f" (reviewer note in Japanese: {issue})" if issue else "")
+                + ". Redraw this scene strictly in the CHANNEL ART STYLE.")
+
+    @staticmethod
+    def _verdict_reason(verdict: dict) -> str:
+        """一覧の⚠に出す理由。画風の指摘は「画風:」を付けて意味の指摘と分ける。"""
+        parts = []
+        if verdict.get("style_ok") is False:
+            score = verdict.get("style_score")
+            parts.append(f"画風{f'（{score}/5点）' if score else ''}: {verdict.get('style_issue') or '世界観と違う'}")
+        if not verdict.get("ok", True) and verdict.get("reason"):
+            parts.append(verdict["reason"])
+        return " / ".join(parts)[:120]
+
+    @staticmethod
+    def _verdict_tags(verdict: dict) -> list:
+        tags = list(verdict.get("issue_tags") or [])
+        if verdict.get("style_ok") is False and "style_mismatch" not in tags:
+            tags.append("style_mismatch")
+        return tags[:6]
+
     def _save_generation_checkpoint(self, batch_idx: int, total_batches: int, batch_targets: list, batch_results: list):
         """章/ブロック単位の生成完了をディスクへ保存する。途中停止時の確認材料にする。"""
         with self._rows_lock:
@@ -786,6 +868,7 @@ class SentencePipeline:
                         converted += 1
                 if converted:
                     self._log("router", f"グラフなし設定: chart {converted} 件を diagram に変換")
+            self._apply_realphoto_policy(routes)
 
         save_json(self.output_dir / "routes.json", routes)
 
@@ -963,7 +1046,7 @@ class SentencePipeline:
                 client, ai_rows_for_prompts, title=title,
                 user_instructions=self.user_instructions,
                 style_preset=self.style_preset, worldview_desc=self.worldview_desc,
-                max_workers=6, log=self._log,
+                max_workers=6, log=self._log, style_lock=self.style_lock,
             )
             self._remove_image_text_terms(rows_with_prompts)
         save_json(self.output_dir / "prompts.json", {"rows": rows_with_prompts})
@@ -1404,6 +1487,7 @@ class SentencePipeline:
                     progress_callback=on_item_event,
                     reference_image_path=self.character_ref_path,
                     realphoto_watermark=self.realphoto_watermark,
+                    style_lock_text=self.style_lock_text,
                 )
                 batch_results.extend(provider_results)
                 generation_done_offset += len(provider_targets)
@@ -1446,7 +1530,8 @@ class SentencePipeline:
             # イラスト/実写風は「⚠要確認フラグのみ」の軽量検品（自動再生成はしない）。
             # 編集者は⚠の行だけ目視→気になれば🔄すればよく、全数目視が不要になる。
             try:
-                self._flag_check_ai_images(results, generation_targets, theme=theme)
+                self._flag_check_ai_images(results, generation_targets, theme=theme,
+                                           keys=(gemini_key, openai_key))
             except Exception as e:
                 self._log("verify", f"軽量検品をスキップ（{str(e)[:80]}）")
 
@@ -1479,7 +1564,11 @@ class SentencePipeline:
         # ルーターが web_photo に振った行は通常 AI 生成から外れるため、Commons/Web が0件だと
         # 「待機」のまま画像枚数が大きく減る。画像化対象(display=image)なのにローカル画像が無い
         # 行だけを realphoto に降格して、AI実写風で代替生成する。
+        # AI実写風なしのチャンネル（allow_ai_realphoto=False）は世界観イラストで代替する。
         web_fallback_results = []
+        fallback_targets = []
+        fallback_route = self._realphoto_fallback_route()
+        fallback_label = "AI実写風" if fallback_route == "realphoto" else "世界観イラスト"
         if self.route_mode == "auto" and web_photo_rows:
             missing_web_rows = []
             with self._rows_lock:
@@ -1493,8 +1582,8 @@ class SentencePipeline:
                 if has_local_web or has_ai_file:
                     continue
                 rr = dict(r)
-                rr["route"] = "realphoto"
-                rr["route_reason"] = "Web画像取得失敗→AI実写風で代替"
+                rr["route"] = fallback_route
+                rr["route_reason"] = f"Web画像取得失敗→{fallback_label}で代替"
                 rr["engine"] = "ai"
                 missing_web_rows.append(rr)
 
@@ -1502,13 +1591,13 @@ class SentencePipeline:
                 self._progress(3, f"Web未取得分をAI代替生成中（0/{len(missing_web_rows)}）...", 93)
                 self._log(
                     "websearch",
-                    f"Web/Commonsで取得できなかった {len(missing_web_rows)} 件をAI実写風で代替生成します",
+                    f"Web/Commonsで取得できなかった {len(missing_web_rows)} 件を{fallback_label}で代替生成します",
                     "50枚指定時にWeb取得失敗分が待機のまま残る問題を防ぎます",
                 )
                 for r in missing_web_rows:
                     self._update_row(
                         r["no"],
-                        route="realphoto",
+                        route=fallback_route,
                         route_reason=r["route_reason"],
                         engine="ai",
                         status="pending",
@@ -1519,28 +1608,28 @@ class SentencePipeline:
                     client, fallback_rows_for_prompts, title=title,
                     user_instructions=self.user_instructions,
                     style_preset=self.style_preset, worldview_desc=self.worldview_desc,
-                    max_workers=4, log=self._log,
+                    max_workers=4, log=self._log, style_lock=self.style_lock,
                 )
                 self._remove_image_text_terms(fallback_prompts)
-                fallback_targets = []
                 for r in fallback_prompts:
                     self._update_row(
                         r["no"],
                         prompt=r.get("prompt", ""),
                         allowed_terms=r.get("allowed_terms", []),
-                        type="realphoto",
+                        type=fallback_route,
                     )
                     fallback_targets.append({
                         "index": r["no"],
                         "prompt": r.get("prompt", ""),
-                        "type": "realphoto",
+                        "type": fallback_route,
                         "section": r.get("chapter_title", ""),
                         "excerpt": r.get("sentence", ""),
                         "block_text": r.get("block_text", ""),
                         "keypoint": r.get("sentence", "")[:30],
                         "allowed_terms": r.get("allowed_terms", []),
                         "style": self.style_preset,
-                        "character": False,
+                        # 世界観イラストで代替する時は、先生が描かれる行だけ参照画像を使う
+                        "character": bool(r.get("character", False)) and fallback_route == "illustration",
                     })
 
                 def on_web_fallback_event(info: dict):
@@ -1574,6 +1663,7 @@ class SentencePipeline:
                         progress_callback=on_web_fallback_event,
                         reference_image_path=self.character_ref_path,
                         realphoto_watermark=self.realphoto_watermark,
+                        style_lock_text=self.style_lock_text,
                     )
                     fb_success = sum(1 for r in web_fallback_results if r.get("success"))
                     fb_fail = len(web_fallback_results) - fb_success
@@ -1581,6 +1671,17 @@ class SentencePipeline:
                     fail_count += fb_fail
                     results.extend(web_fallback_results)
                     self._log("websearch", f"AI代替生成完了: 成功 {fb_success} / 失敗 {fb_fail}")
+                    # 世界観イラストで代替した分も、ほかのイラストと同じ検品（画風チェック）を通す
+                    if self.verify_diagrams and fallback_route == "illustration" and fb_success:
+                        summary = analysis.get("summary", "")
+                        try:
+                            self._flag_check_ai_images(
+                                web_fallback_results, fallback_targets,
+                                theme=f"{title}（{summary}）" if summary else title,
+                                keys=(gemini_key, openai_key),
+                            )
+                        except Exception as e:
+                            self._log("verify", f"代替イラストの検品をスキップ（{str(e)[:80]}）")
 
         # ===== マニフェスト =====
         with self._rows_lock:
@@ -1624,6 +1725,9 @@ class SentencePipeline:
             "photo_source": self.photo_source,
             "web_search_profile": self.web_search_profile,
             "verify_diagrams": self.verify_diagrams,
+            "style_lock": self.style_lock,
+            "allow_ai_realphoto": self.allow_ai_realphoto,
+            "style_check": self.style_check,
             "provider_generated_counts": dict(provider_counts),
             "provider_failed_counts": dict(provider_failed_counts),
             "generated_type_counts": dict(generated_type_counts),
@@ -1673,6 +1777,11 @@ class SentencePipeline:
             "openai_model": self.openai_model,
             "type_providers": self.type_providers,
             "style_preset": self.style_preset,
+            # 個別の作り直しでも、このジョブと同じ世界観・ロックで描くために残す
+            "worldview_desc": self.worldview_desc,
+            "style_lock": self.style_lock,
+            "allow_ai_realphoto": self.allow_ai_realphoto,
+            "style_check": self.style_check,
             "channel_id": self.channel_id,
             "route_mode": self.route_mode,
             "concurrency": self.concurrency,
@@ -1996,29 +2105,36 @@ class SentencePipeline:
                 upd["verify_reason"] = "再生成後の内容は未確認"
             self._update_row(no, **upd)
 
-        run_parallel_generation(
-            prompts=fix_targets,
-            output_dir=self.images_dir,
-            provider=self.provider,
-            gemini_api_key=gemini_key,
-            openai_api_key=openai_key,
-            openai_quality=self.openai_quality,
-            openai_model=self.openai_model,
-            concurrency=self.concurrency,
-            style_preset=self.style_preset,
-            progress_callback=on_fix_event,
-            reference_image_path=self.character_ref_path,
-            realphoto_watermark=self.realphoto_watermark,
-        )
+        # 作り直しも最初と同じ画像モデルで描く（type_providers。例: 図解は gpt-image）。
+        # 以前は主プロバイダで作り直していたため、作り直した図解だけ別モデルのタッチになり得た。
+        for provider, group in self._group_by_provider(fix_targets):
+            run_parallel_generation(
+                prompts=group,
+                output_dir=self.images_dir,
+                provider=provider,
+                gemini_api_key=gemini_key,
+                openai_api_key=openai_key,
+                openai_quality=self.openai_quality,
+                openai_model=self.openai_model,
+                concurrency=self.concurrency,
+                style_preset=self.style_preset,
+                progress_callback=on_fix_event,
+                reference_image_path=self.character_ref_path,
+                realphoto_watermark=self.realphoto_watermark,
+                style_lock_text=self.style_lock_text,
+            )
         self._log("verify", f"再生成完了（{len(fix_targets)} 枚を作り直しました）")
 
-    def _flag_check_ai_images(self, results, generation_targets, theme=""):
-        """イラスト/実写風の軽量検品（⚠フラグのみ・自動再生成しない）。
+    def _flag_check_ai_images(self, results, generation_targets, theme="", keys=None):
+        """イラスト/実写風の軽量検品（⚠フラグのみ・意味のズレでは自動再生成しない）。
 
-        diagram/chart は _verify_and_fix が修正まで行うのに対し、こちらは Haiku で
+        diagram/chart は _verify_and_fix が修正まで行うのに対し、こちらは
         「文とズレていないか・文字化けが無いか」を判定して verify_issue を立てるだけ。
         既存UIの「失敗・要確認だけ」フィルタ／章バッジがそのまま拾う。
         時間予算つき・失敗してもジョブを止めない。
+
+        画風チェック（style_check）が有効なチャンネルでは、同じ判定で画風も見て、
+        世界観から外れた画像だけ 1 回作り直す（keys=(gemini_key, openai_key) が必要）。
         """
         import time as _time
         from concurrent.futures import (
@@ -2046,23 +2162,31 @@ class SentencePipeline:
             self._log("verify", f"軽量検品をスキップ（APIクライアント初期化失敗: {str(e)[:60]}）")
             return
 
-        budget = min(480.0, max(90.0, len(checks) * 4.0))
+        # 画風チェック中は画像2枚を見るぶん1枚あたりが長い（実測 約10〜17秒・3並列）
+        per_image = 6.0 if self.style_check else 4.0
+        budget = min(720.0 if self.style_check else 480.0, max(90.0, len(checks) * per_image))
         deadline = _time.monotonic() + budget
         self._log("verify",
-                  f"軽量検品（⚠フラグのみ・再生成なし）: {len(checks)} 枚（illustration/realphoto）")
+                  (f"軽量検品（意味・文字は⚠のみ／画風は外れたイラストだけ1回作り直し）: {len(checks)} 枚"
+                   if self.style_check else
+                   f"軽量検品（⚠フラグのみ・再生成なし）: {len(checks)} 枚（illustration/realphoto）"))
 
         def _do_check(pair):
             r, t = pair
+            # 画風チェックはイラストだけ（基準画像＝人物イラストと比べる。実写は作り直しても実写のまま）
+            style_kwargs = self._style_check_kwargs() if t.get("type") == "illustration" else {}
             v = verify_image(
                 client, self.images_dir / r["filename"], t.get("excerpt", ""),
                 img_type=t.get("type", "illustration"),
                 allowed_terms=t.get("allowed_terms", []),
                 block_context=t.get("block_text", ""),
                 chapter=t.get("section", ""), theme=theme,
+                **style_kwargs,
             )
             return t, v
 
         flagged = []
+        style_failures = []
         checked = 0
         ex = ThreadPoolExecutor(max_workers=3)
         try:
@@ -2075,14 +2199,17 @@ class SentencePipeline:
                     try:
                         t, v = f.result(timeout=max(1.0, remaining))
                         checked += 1
-                        if not v.get("ok", True):
+                        style_bad = v.get("style_ok") is False
+                        if style_bad:
+                            style_failures.append((t, v))
+                        if not v.get("ok", True) or style_bad:
                             flagged.append(t["index"])
                             self._update_row(
                                 t["index"],
                                 verify_issue=True,
                                 verify_status="unverified" if v.get("verified") is False else "needs_fix",
-                                verify_reason=v.get("reason", ""),
-                                verify_issue_tags=v.get("issue_tags", []),
+                                verify_reason=self._verdict_reason(v) or v.get("reason", ""),
+                                verify_issue_tags=self._verdict_tags(v),
                             )
                         else:
                             self._update_row(t["index"], verify_issue=False, verify_status="pass", verify_reason=v.get("reason", ""))
@@ -2100,6 +2227,117 @@ class SentencePipeline:
         self._log("verify",
                   f"軽量検品完了: ⚠{len(flagged)} 枚 / 確認 {checked}/{len(checks)} 枚"
                   + (f"（要確認 №{', '.join(map(str, flagged[:10]))}）" if flagged else ""))
+
+        if style_failures and self.style_check and keys:
+            try:
+                self._regenerate_style_failures(style_failures, keys, client, theme=theme)
+            except Exception as e:
+                self._log("verify", f"画風の作り直しをスキップ（{str(e)[:80]}）。元の画像はそのまま使えます")
+
+    def _regenerate_style_failures(self, failures, keys, client, theme=""):
+        """画風チェックで世界観から外れた画像を 1 回だけ作り直し、もう一度だけ判定する。
+
+        - 最初と同じ画像モデル・同じ世界観ロック・先生シーンは参照画像つきで描く
+        - 作り直す前の画像を退避し、作り直しの点数が上がらなければ元に戻す（作り直しで悪くしない）
+        - 作り直しに失敗しても元の画像を残す（行は ok のまま・理由に記録）
+        - 作り直し後も外れていれば ⚠ で人の確認に回す（2回目の作り直しはしない）
+        """
+        import shutil
+        from verifier import verify_image
+
+        gemini_key, openai_key = keys
+        # 点数の低い（はっきり外れた）ものから作り直す
+        failures = sorted(failures, key=lambda tv: tv[1].get("style_score") or 0)
+        if len(failures) > self.STYLE_FIX_MAX:
+            self._log("verify",
+                      f"画風の作り直しは上限 {self.STYLE_FIX_MAX} 枚まで（{len(failures)} 枚が対象・残りは⚠のまま）")
+        failures = failures[:self.STYLE_FIX_MAX]
+        backup_dir = self.output_dir / "style_before"  # images/ の外（ZIP・一覧に混ぜない）
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        entries = []
+        for t, v in failures:
+            entry = dict(t)
+            entry["prompt"] = f"{t.get('prompt', '')}\n\nIMPROVE: {self._style_fix_hint(v)}"
+            entries.append(entry)
+            src = self.images_dir / f"{t['index']}.png"
+            if src.exists():
+                shutil.copy2(src, backup_dir / src.name)
+            self._update_row(t["index"], status="generating", verify_issue=True)
+        self._log("verify", f"画風が世界観から外れた {len(entries)} 枚を作り直します",
+                  "、".join(f"№{t['index']}: {v.get('style_issue') or '画風違い'}" for t, v in failures[:8]))
+
+        regenerated = []
+
+        def on_event(info):
+            no = info.get("index", 0)
+            st = info.get("status", "")
+            if st == "ok":
+                regenerated.append(no)
+                self._update_row(no, status="ok", filename=info.get("filename"), style_fixed=True)
+            elif st == "failed":
+                # 元の画像ファイルは残っている（生成成功時だけ上書きされる）
+                self._update_row(no, status="ok", verify_issue=True, verify_status="needs_fix",
+                                 verify_reason="画風の作り直しに失敗（元の画像のまま・要確認）")
+            elif st == "generating":
+                self._update_row(no, status="generating")
+
+        for provider, group in self._group_by_provider(entries):
+            run_parallel_generation(
+                prompts=group,
+                output_dir=self.images_dir,
+                provider=provider,
+                gemini_api_key=gemini_key,
+                openai_api_key=openai_key,
+                openai_quality=self.openai_quality,
+                openai_model=self.openai_model,
+                concurrency=min(self.concurrency, 3),
+                style_preset=self.style_preset,
+                progress_callback=on_event,
+                reference_image_path=self.character_ref_path,
+                realphoto_watermark=self.realphoto_watermark,
+                style_lock_text=self.style_lock_text,
+            )
+
+        # 作り直した画像をもう一度だけ判定する。点数が上がらなければ元の画像に戻す。
+        passed = restored = 0
+        by_no = {t["index"]: (t, v) for t, v in failures}
+        for no in regenerated:
+            t, before = by_no.get(no, ({}, {}))
+            try:
+                v = verify_image(
+                    client, self.images_dir / f"{no}.png", t.get("excerpt", ""),
+                    img_type=t.get("type", "illustration"),
+                    allowed_terms=t.get("allowed_terms", []),
+                    block_context=t.get("block_text", ""),
+                    chapter=t.get("section", ""), theme=theme,
+                    **self._style_check_kwargs(),
+                )
+            except Exception:
+                v = {"ok": False, "verified": False, "reason": "作り直し後の確認を完了できませんでした（未確認）"}
+            old_score = before.get("style_score") or 0
+            new_score = v.get("style_score")
+            backup = backup_dir / f"{no}.png"
+            # 点数が読めない時は作り直した方を残す（元は外れと分かっている）。未確認として⚠に回す
+            if new_score is not None and new_score <= old_score and backup.exists():
+                shutil.copy2(backup, self.images_dir / f"{no}.png")
+                restored += 1
+                self._update_row(no, style_fixed=False, verify_issue=True, verify_status="needs_fix",
+                                 verify_reason=("作り直しても画風が良くならず元の画像のまま: "
+                                                + (self._verdict_reason(before) or "画風"))[:120],
+                                 verify_issue_tags=self._verdict_tags(before))
+            elif v.get("verified") is not False and v.get("ok") and v.get("style_ok") is not False:
+                passed += 1
+                self._update_row(no, verify_issue=False, verify_status="pass",
+                                 verify_reason="画風を合わせて作り直し済み")
+            else:
+                self._update_row(no, verify_issue=True,
+                                 verify_status="unverified" if v.get("verified") is False else "needs_fix",
+                                 verify_reason=("作り直し後も要確認: " + (self._verdict_reason(v) or v.get("reason", "")))[:120],
+                                 verify_issue_tags=self._verdict_tags(v))
+        self._log("verify",
+                  f"画風の作り直し完了: 作り直し {len(regenerated)}/{len(entries)} 枚・再判定で合格 {passed} 枚"
+                  + (f"・良くならず元に戻した {restored} 枚" if restored else "")
+                  + ("（残りは⚠で確認してください）" if passed < len(entries) else ""))
 
     def _write_source_pack(self, title, chapters, rows, source_videos, web_infos):
         """制作資料パック（sources.html / sources.md）を書き出す。

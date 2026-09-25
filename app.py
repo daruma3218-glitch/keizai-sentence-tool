@@ -16,6 +16,7 @@ import threading
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 from flask import (
     Flask,
@@ -411,6 +412,9 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             resume=resume,
             build_source_pack=bool(defaults.get("build_source_pack", False)),
             source_videos_per_chapter=defaults.get("source_videos_per_chapter", 3),
+            style_lock=bool(defaults.get("style_lock", False)),
+            allow_ai_realphoto=bool(defaults.get("allow_ai_realphoto", True)),
+            style_check=bool(defaults.get("style_check", False)),
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,
@@ -552,8 +556,32 @@ def _scene_fix_allowed_terms(sentence: str, route: str) -> list:
         return []
 
 
-def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: str, defaults: dict, fix_mode: str = "balanced") -> str:
-    """1シーン修正用の複数案プロンプト。制約は軽く、でも事実は増やさない。"""
+def _style_lock_text_for(defaults: dict, manifest: Optional[dict] = None, job_state: Optional[dict] = None) -> str:
+    """世界観ロックの設定文（チャンネル設定 style_lock が無ければ空）。
+
+    ロック付きで作ったジョブは、そのジョブに保存した世界観で描き直す（同じ回の画像と揃える）。
+    世界観モードOFFで作ったジョブ（保存値が空）にはロックを掛けない。
+    ロック導入前のジョブは、チャンネルの現在の世界観で描き直す。
+    """
+    defaults = defaults or {}
+    if not defaults.get("style_lock"):
+        return ""
+    sources = [s for s in (manifest, job_state) if isinstance(s, dict)]
+    saved = next(((s.get("worldview_desc") or "").strip() for s in sources if "worldview_desc" in s), None)
+    if saved == "":
+        return ""
+    if saved and any(s.get("style_lock") for s in sources):
+        return saved
+    return (defaults.get("worldview_desc") or "").strip()
+
+
+def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: str, defaults: dict,
+                            fix_mode: str = "balanced", style_locked: bool = False) -> str:
+    """1シーン修正用の複数案プロンプト。制約は軽く、でも事実は増やさない。
+
+    style_locked=True（世界観ロック）のときは、画風・色の指定を generator が世界観の設定文で
+    付けるため、ここでは画風の語を足さない（「真面目・可愛くしない」等は世界観と食い違う）。
+    """
     hint = _scene_fix_variant_hint(route, variant_no)
     worldview = (defaults.get("worldview_desc") or "").strip()
     user_instructions = (defaults.get("user_instructions") or "").strip()
@@ -568,6 +596,8 @@ def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: s
             "no flat illustration. It should look like a usable editorial/video material still."
         ),
         "illustration": (
+            "Create one clear educational illustration of the scene. It can use symbols and simple arrows."
+            if style_locked else
             "Create a serious educational illustration. It can use symbols and simple arrows, "
             "but should not become cute, childish, or decorative."
         ),
@@ -586,7 +616,7 @@ def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: s
         )
     if user_instructions:
         parts.append("Channel quality instructions: " + user_instructions[:1000])
-    if worldview and route in ("diagram", "illustration"):
+    if worldview and route in ("diagram", "illustration") and not style_locked:
         parts.append("Visual world / tone: " + worldview[:1000])
     if extra:
         parts.append("Editor request: " + extra[:800])
@@ -664,6 +694,8 @@ def api_scene_fix():
     if fix_mode not in ("balanced", "more_clear", "less_text", "more_real", "same_style"):
         fix_mode = "balanced"
     extra = (request.form.get("extra_instruction") or "").strip()
+    # 世界観ロック（チャンネル設定）。実写(realphoto)には generator 側で掛からない。
+    style_lock_text = _style_lock_text_for(defaults)
 
     job_id = f"scene_fix_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
     job_dir = OUTPUT_DIR / job_id
@@ -676,7 +708,8 @@ def api_scene_fix():
     for i in range(1, variant_count + 1):
         prompts.append({
             "index": i,
-            "prompt": _build_scene_fix_prompt(sentence, route, i, extra, defaults, fix_mode=fix_mode),
+            "prompt": _build_scene_fix_prompt(sentence, route, i, extra, defaults, fix_mode=fix_mode,
+                                              style_locked=bool(style_lock_text)),
             "type": route,
             "section": "シーン直し",
             "excerpt": sentence,
@@ -705,6 +738,7 @@ def api_scene_fix():
             progress_callback=on_progress,
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
             edit_image_path=str(reference_image_path) if reference_image_path else None,
+            style_lock_text=style_lock_text,
         )
         # 参照画像つきの編集生成は provider 側の制約で全滅することがある。
         # 生成ボタン自体は止めず、通常生成へ自動フォールバックする。
@@ -726,6 +760,7 @@ def api_scene_fix():
                 style_preset=style_preset,
                 progress_callback=on_progress,
                 realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
+                style_lock_text=style_lock_text,
             )
     except Exception as e:
         return jsonify({"ok": False, "error": f"生成に失敗しました: {str(e)[:180]}"}), 500
@@ -750,6 +785,7 @@ def api_scene_fix():
         "route": route,
         "provider": provider,
         "style_preset": style_preset,
+        "style_lock": bool(style_lock_text),
         "fix_mode": fix_mode,
         "reference_image": f"reference/{reference_image_path.name}" if reference_image_path else "",
         "sentence": sentence,
@@ -822,6 +858,8 @@ def api_scene_fix_revise(job_id):
     sentence = manifest.get("sentence", "")
     base_extra = manifest.get("extra_instruction", "")
     extra = (base_extra + "\n" + "Further editor revision: " + instruction).strip()
+    # 世界観ロック: ロック導入前に作った案（manifest に style_lock が無い）は従来どおり
+    style_lock_text = _style_lock_text_for(defaults) if manifest.get("style_lock", False) else ""
     prompt = _build_scene_fix_prompt(
         sentence,
         route,
@@ -829,6 +867,7 @@ def api_scene_fix_revise(job_id):
         extra,
         defaults,
         fix_mode="same_style",
+        style_locked=bool(style_lock_text),
     )
     prompt = (
         "Refine the attached generated image. Keep the useful parts of the current composition, "
@@ -862,6 +901,7 @@ def api_scene_fix_revise(job_id):
             style_preset=style_preset,
             edit_image_path=str(source_image),
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)) and route == "realphoto",
+            style_lock_text=style_lock_text,
         )
     except Exception as e:
         return jsonify({"ok": False, "error": f"再修正に失敗しました: {str(e)[:180]}"}), 500
@@ -1112,6 +1152,7 @@ def start_job():
         # 途中再開用に全パラメータを保存（サーバー再起動でメモリが消えても復元できる）
         route_mode=route_mode,
         worldview_desc=worldview_desc,
+        style_lock=bool(defaults.get("style_lock", False)) and bool(worldview_desc),
         verify_diagrams=verify_diagrams,
         title_override=title_override,
         fact_context=fact_context,
@@ -1675,6 +1716,8 @@ def api_regenerate(job_id, no):
     ch_keys = resolve_channel_keys(channel)
     defaults = channel.get("defaults", {}) or {}
     allow_maps = bool(defaults.get("allow_maps", False))
+    # 世界観ロック（1枚の作り直しでも、同じ回の画像と同じ世界観で描く）
+    style_lock_text = _style_lock_text_for(defaults, manifest, job_state)
 
     # 対象行のルート/エンジン（snapshot 優先：chart/map は render エンジン）
     route = (snap_row or {}).get("route") or (target or {}).get("route") or (target or {}).get("type") or ""
@@ -1753,7 +1796,8 @@ def api_regenerate(job_id, no):
                 or ""
             )
             regen_worldview_desc = (
-                params.get("worldview_desc")
+                style_lock_text
+                or params.get("worldview_desc")
                 or defaults.get("worldview_desc", "")
                 or ""
             )
@@ -1766,6 +1810,7 @@ def api_regenerate(job_id, no):
                 worldview_desc=regen_worldview_desc,
                 max_workers=1,
                 log=lambda *args, **kwargs: None,
+                style_lock=bool(style_lock_text),
             )
         except Exception as e:
             generated_prompts = []
@@ -1890,6 +1935,7 @@ def api_regenerate(job_id, no):
             reference_image_path=character_ref_path,
             edit_image_path=str(edit_image_path) if edit_image_path else None,
             realphoto_watermark=bool(defaults.get("realphoto_watermark", False)),
+            style_lock_text=style_lock_text,
         )
     except Exception as e:
         msg = f"再生成に失敗: {str(e)[:150]}"
