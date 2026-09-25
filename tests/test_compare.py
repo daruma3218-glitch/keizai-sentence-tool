@@ -75,3 +75,21 @@ def test_compare_hides_sentences_only_one_version_has(tmp_path, monkeypatch):
     assert "片方にしかない 1 件は省略" in html
     html_all = client.get("/compare?jobs=20260723_000000,20260925_000001&all=1").get_data(as_text=True)
     assert "古い版だけの文です。" in html_all
+
+
+def test_thumbnails_are_small_cached_and_stay_inside_the_job(tmp_path, monkeypatch):
+    from PIL import Image
+    root = tmp_path / "output"
+    _job(root, "20260925_000001", [{"no": 1, "sentence": "文。", "filename": "1.png"}])
+    Image.new("RGB", (1536, 864), (200, 210, 220)).save(root / "20260925_000001" / "images" / "1.png")
+    client = _client(monkeypatch, root)
+    html = client.get("/compare?jobs=20260925_000001&all=1").get_data(as_text=True)
+    assert 'src="/thumb/20260925_000001/1.png"' in html and 'href="/results/20260925_000001/images/1.png"' in html
+    resp = client.get("/thumb/20260925_000001/1.png")
+    assert resp.status_code == 200 and resp.mimetype == "image/jpeg"
+    import io
+    assert Image.open(io.BytesIO(resp.data)).size[0] == 480
+    cached = list((root / "20260925_000001" / "thumbs").glob("*.jpg"))
+    assert len(cached) == 1  # 2回目以降は作らずに返す
+    assert client.get("/thumb/20260925_000001/../manifest.json").status_code in (400, 404)
+    assert client.get("/thumb/../x/1.png").status_code == 404

@@ -1426,17 +1426,18 @@ def _compare_job_label(manifest: dict, state: dict) -> str:
 def _compare_cell(job_id: str, row: dict) -> dict:
     local = row.get("web_local_file") or ""
     filename = row.get("filename") or ""
-    src = ""
-    if local:
-        src = f"/results/{job_id}/images/{local}"
-    elif filename:
-        src = f"/results/{job_id}/images/{filename}"
+    src = thumb = ""
+    if local or filename:
+        name = local or filename
+        src = f"/results/{job_id}/images/{name}"
+        thumb = f"/thumb/{job_id}/{name}"  # 一覧は縮小版（原寸は1枚1MB超で78枚並ぶと重い）
     elif row.get("web_thumb_url"):
-        src = row.get("web_thumb_url")
+        src = thumb = row.get("web_thumb_url")
     route = row.get("route") or row.get("type") or ""
     return {
         "no": row.get("no"),
         "src": src,
+        "thumb": thumb,
         "type": _COMPARE_TYPE_LABELS.get(route, route),
         "status": row.get("status") or "",
         "issue": (row.get("verify_reason") or "") if row.get("verify_issue") else "",
@@ -1462,6 +1463,42 @@ def _compare_table(jobs: list) -> list:
             cells.append(_compare_cell(job["id"], match) if match else None)
         table.append({"sentence": base.get("sentence", ""), "cells": cells})
     return table
+
+
+_THUMB_WIDTH = 480
+
+
+@app.route("/thumb/<job_id>/<path:filename>")
+@login_required
+def serve_thumb(job_id, filename):
+    """一覧用の縮小画像（幅480pxのJPEG）。初回に作ってジョブの thumbs/ に置き、元画像が
+    作り直されたら作り直す。images/ の外なので ZIP や一覧の画像には混ざらない。"""
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return "結果が見つかりません", 404
+    images_dir = (job_dir / "images").resolve()
+    src = (images_dir / filename).resolve()
+    try:
+        src.relative_to(images_dir)
+    except ValueError:
+        return "不正なパスです", 400
+    if not src.is_file() or src.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+        return "画像が見つかりません", 404
+    thumbs = job_dir / "thumbs"
+    thumbs.mkdir(parents=True, exist_ok=True)
+    dst = thumbs / f"{src.stem}_{src.suffix.lstrip('.').lower()}_w{_THUMB_WIDTH}.jpg"
+    try:
+        if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+            from PIL import Image
+            with Image.open(src) as im:
+                im = im.convert("RGB")
+                im.thumbnail((_THUMB_WIDTH, _THUMB_WIDTH))
+                tmp = dst.with_suffix(".tmp")
+                im.save(tmp, format="JPEG", quality=82)
+            tmp.replace(dst)
+    except Exception:
+        return send_from_directory(str(images_dir), src.name)  # 縮小に失敗しても原寸で見せる
+    return send_file(str(dst), mimetype="image/jpeg", max_age=300)
 
 
 @app.route("/compare")
