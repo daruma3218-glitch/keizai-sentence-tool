@@ -53,7 +53,7 @@ def test_start_persists_and_passes_openai_model(monkeypatch, tmp_path):
     state = json.loads((tmp_path / job_id / "job.json").read_text(encoding="utf-8"))
     assert state["openai_model"] == "gpt-image-2.5-sunburst"
 
-    # 未知IDは既定に丸める（本番で即エラーにしない）
+    # 未知IDはチャンネル既定（無ければ gpt-image-2）に丸める（本番で即エラーにしない）
     captured.clear()
     res = c.post("/start", data={"channel_id": "keizai", "manuscript_text": "こ" * 200,
                                  "openai_model": "gpt-image-9-nonexistent"})
@@ -62,7 +62,8 @@ def test_start_persists_and_passes_openai_model(monkeypatch, tmp_path):
         if "kwargs" in captured:
             break
         time.sleep(0.05)
-    assert captured["kwargs"].get("openai_model") == "gpt-image-2"
+    expected = appmod.get_channel("keizai")["defaults"].get("openai_image_model") or "gpt-image-2"
+    assert captured["kwargs"].get("openai_model") == expected
 
 
 def test_upload_page_lists_models(monkeypatch):

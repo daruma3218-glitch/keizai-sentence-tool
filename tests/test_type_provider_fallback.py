@@ -41,9 +41,11 @@ def test_channels_diagram_uses_gpt_image():
     by_id = {c["id"]: c["defaults"] for c in d["channels"]}
     assert by_id["keizai"]["type_providers"]["diagram"] == "gpt-image"
     assert by_id["seikou"]["type_providers"]["diagram"] == "gpt-image"
-    # 主プロバイダは nanobanana のまま（実写風・イラストは従来どおり）
-    assert by_id["keizai"]["provider"] == "nanobanana"
+    # 成功の法則の主プロバイダは nanobanana のまま（実写風・イラストは従来どおり）。
+    # カラクリ経済学は 2026-09-25 の本番比較で、全画像 gpt-image-2.5 Flare を既定にした
     assert by_id["seikou"]["provider"] == "nanobanana"
+    assert by_id["keizai"]["provider"] == "gpt-image"
+    assert by_id["keizai"]["openai_image_model"] == "gpt-image-2.5-flare"
 
 
 def test_start_not_blocked_by_type_provider_key(monkeypatch, tmp_path):
