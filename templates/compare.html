@@ -47,13 +47,19 @@
     </details>
 
     {% if jobs %}
+    {% if hidden or show_all %}
+    <p class="text-xs text-gray-500 mb-2">
+      {% if show_all %}すべての文を表示中。<a class="text-cyan-700 underline" href="/compare?jobs={{ selected | join(',') }}">共通の文だけにする</a>
+      {% else %}2つ以上の版にある文 {{ table | length }} 件を表示中（片方にしかない {{ hidden }} 件は省略）。<a class="text-cyan-700 underline" href="/compare?jobs={{ selected | join(',') }}&all=1">すべて表示</a>{% endif %}
+    </p>
+    {% endif %}
     <div class="overflow-x-auto bg-white rounded-xl border border-gray-200">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-50 sticky top-14 z-10">
+        <thead class="bg-gray-50">
           <tr>
-            <th class="text-left font-semibold text-gray-600 px-3 py-2 w-56">文</th>
+            <th class="text-left font-semibold text-gray-600 px-3 py-2 w-44">文</th>
             {% for j in jobs %}
-            <th class="text-left align-top px-3 py-2 min-w-[18rem]">
+            <th class="text-left align-top px-3 py-2 min-w-[15rem]">
               <a href="/progress/{{ j.id }}" class="font-semibold text-gray-900 hover:underline">{{ j.title }}</a>
               <div class="text-xs text-gray-400">{{ j.id }}{% if j.status and j.status != 'completed' %}・{{ j.status }}{% endif %}</div>
               <div class="text-xs text-cyan-800 mt-0.5">{{ j.label }}</div>

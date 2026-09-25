@@ -1501,7 +1501,15 @@ def compare_jobs():
                 continue
             recent.append({"id": d.name, "title": m.get("title") or s.get("title") or d.name,
                            "channel": m.get("channel_id") or s.get("channel_id") or ""})
-    return render_template("compare.html", jobs=jobs, table=_compare_table(jobs),
+    table = _compare_table(jobs)
+    # 既定では2つ以上の版にある文だけを出す（長い本番の回と短い試験を並べた時に空欄だらけにしない）
+    show_all = request.args.get("all") == "1"
+    hidden = 0
+    if len(jobs) >= 2 and not show_all:
+        shared = [row for row in table if sum(c is not None for c in row["cells"]) >= 2]
+        hidden = len(table) - len(shared)
+        table = shared
+    return render_template("compare.html", jobs=jobs, table=table, hidden=hidden, show_all=show_all,
                            recent=recent, selected=ids, max_jobs=_COMPARE_MAX_JOBS)
 
 

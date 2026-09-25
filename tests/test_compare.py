@@ -42,7 +42,7 @@ def test_compare_lines_up_the_same_sentences(tmp_path, monkeypatch):
         {"no": 6, "sentence": "中身は まったく同じなのに。", "filename": "6.png", "route": "illustration",
          "verify_issue": True, "verify_reason": "画風（3/5点）: つやのある塗り"},
     ], provider="gpt-image", openai_model="gpt-image-2.5-flare", style_lock=True)
-    html = _client(monkeypatch, root).get("/compare?jobs=20260723_000000,20260925_000001,../etc").get_data(as_text=True)
+    html = _client(monkeypatch, root).get("/compare?jobs=20260723_000000,20260925_000001,../etc&all=1").get_data(as_text=True)
     assert "すべて gpt-image｜旧設定（世界観ロック前）" in html
     assert "すべて gpt-image-2.5-flare｜世界観ロック" in html
     # 含み合う文（2文が1文になった版）と、空白の違いだけの文が並ぶ
@@ -60,3 +60,18 @@ def test_compare_without_jobs_shows_the_picker(tmp_path, monkeypatch):
     html = _client(monkeypatch, root).get("/compare").get_data(as_text=True)
     assert 'value="20260925_000001"' in html and "scene_fix_" not in html
     assert "<table" not in html
+
+
+def test_compare_hides_sentences_only_one_version_has(tmp_path, monkeypatch):
+    root = tmp_path / "output"
+    _job(root, "20260723_000000", [
+        {"no": 1, "sentence": "共通の文です。", "filename": "1.png"},
+        {"no": 2, "sentence": "古い版だけの文です。", "filename": "2.png"},
+    ])
+    _job(root, "20260925_000001", [{"no": 1, "sentence": "共通の文です。", "filename": "1.png"}])
+    client = _client(monkeypatch, root)
+    html = client.get("/compare?jobs=20260723_000000,20260925_000001").get_data(as_text=True)
+    assert "共通の文です。" in html and "古い版だけの文です。" not in html
+    assert "片方にしかない 1 件は省略" in html
+    html_all = client.get("/compare?jobs=20260723_000000,20260925_000001&all=1").get_data(as_text=True)
+    assert "古い版だけの文です。" in html_all
