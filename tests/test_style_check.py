@@ -280,3 +280,28 @@ def test_diagram_fix_uses_the_same_provider_and_no_style_check(tmp_path, monkeyp
     assert calls[0]["provider"] == "gpt-image"  # type_providers の図解モデルで作り直す
     assert calls[0]["style_lock_text"] == LOCK
     assert "IMPROVE: Reverse the arrow." in calls[0]["prompts"][0]["prompt"]
+
+
+def test_worker_blink_is_retried_once(tmp_path, monkeypatch):
+    """PCワーカーの生存確認が一瞬途切れた（worker_unavailable）判定は、20秒後に1回だけやり直す。"""
+    import time
+    import subscription_runtime
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    pipe, results, targets, gen_calls, seen_verify = _setup_flag_check(tmp_path, monkeypatch, {})
+    real_verify = verifier.verify_image
+    blinked = []
+
+    def flaky(client, image_path, *a, **kw):
+        no = int(Path(image_path).stem)
+        if no == 1 and not blinked:
+            blinked.append(no)
+            raise subscription_runtime.SubscriptionUnavailable("worker_unavailable", request_id="x")
+        if no == 2:
+            raise subscription_runtime.SubscriptionUnavailable("both_cli_unavailable", request_id="y")
+        return real_verify(client, image_path, *a, **kw)
+
+    monkeypatch.setattr(verifier, "verify_image", flaky)
+    pipe._flag_check_ai_images(results, targets, theme="T", keys=("g", "o"))
+    assert blinked == [1]
+    assert pipe._rows_state[1]["verify_status"] == "pass"       # やり直しで判定できた
+    assert pipe._rows_state[2]["verify_status"] == "unverified"  # 別の理由の失敗はやり直さない

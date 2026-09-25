@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>版を比べる | センテンスつくーる</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', 'Noto Sans JP', sans-serif; }
+    .cmp-img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #f3f4f6; border-radius: 0.5rem; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <nav class="bg-white/90 backdrop-blur border-b border-gray-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+      <a href="/" class="font-bold text-gray-900">センテンスつくーる</a>
+      <div class="flex items-center gap-3 text-sm">
+        <span class="font-semibold text-cyan-700">版を比べる</span>
+        <a href="/" class="text-gray-500 hover:text-gray-800">新しく作る</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    <h1 class="text-2xl font-bold text-gray-900 mb-1">版を比べる</h1>
+    <p class="text-sm text-gray-500 mb-4">同じ原稿を別の設定・モデルで作ったジョブを、文ごとに横に並べます（最大{{ max_jobs }}つ・左から選んだ順）。画像をクリックすると大きく開きます。</p>
+
+    <details class="bg-white rounded-xl border border-gray-200 mb-6" {% if not jobs %}open{% endif %}>
+      <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-gray-700">比べるジョブを選ぶ{% if jobs %}（選び直す）{% endif %}</summary>
+      <form id="pickForm" method="get" action="/compare" class="px-4 pb-4 border-t border-gray-100">
+        <input type="hidden" name="jobs" id="jobsField" value="{{ selected | join(',') }}">
+        <ul class="divide-y divide-gray-100 max-h-80 overflow-y-auto mt-2">
+          {% for j in recent %}
+          <li class="py-1.5">
+            <label class="flex items-center gap-3 text-sm cursor-pointer">
+              <input type="checkbox" class="pick w-4 h-4" value="{{ j.id }}" {% if j.id in selected %}checked{% endif %}>
+              <span class="min-w-0 flex-1 truncate">{{ j.title }}</span>
+              <span class="text-xs text-gray-400 flex-shrink-0">{{ j.id }}{% if j.channel %}・{{ j.channel }}{% endif %}</span>
+            </label>
+          </li>
+          {% endfor %}
+        </ul>
+        <button type="submit" class="mt-3 px-5 py-2 rounded-lg bg-cyan-600 text-white text-sm font-semibold hover:bg-cyan-700">この版を比べる</button>
+        <span id="pickNote" class="ml-2 text-xs text-gray-400"></span>
+      </form>
+    </details>
+
+    {% if jobs %}
+    <div class="overflow-x-auto bg-white rounded-xl border border-gray-200">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-50 sticky top-14 z-10">
+          <tr>
+            <th class="text-left font-semibold text-gray-600 px-3 py-2 w-56">文</th>
+            {% for j in jobs %}
+            <th class="text-left align-top px-3 py-2 min-w-[18rem]">
+              <a href="/progress/{{ j.id }}" class="font-semibold text-gray-900 hover:underline">{{ j.title }}</a>
+              <div class="text-xs text-gray-400">{{ j.id }}{% if j.status and j.status != 'completed' %}・{{ j.status }}{% endif %}</div>
+              <div class="text-xs text-cyan-800 mt-0.5">{{ j.label }}</div>
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+          {% for row in table %}
+          <tr class="align-top">
+            <td class="px-3 py-3 text-xs text-gray-700 leading-relaxed">{{ row.sentence }}</td>
+            {% for cell in row.cells %}
+            <td class="px-3 py-3">
+              {% if cell is none %}
+                <p class="text-xs text-gray-400">（この版には同じ文がありません）</p>
+              {% else %}
+                {% if cell.src %}
+                <a href="{{ cell.src }}" target="_blank" rel="noopener"><img src="{{ cell.src }}" class="cmp-img" alt="" loading="lazy"></a>
+                {% else %}
+                <div class="cmp-img flex items-center justify-center text-xs text-gray-400">画像なし（{{ cell.status or '—' }}）</div>
+                {% endif %}
+                <div class="mt-1 flex flex-wrap gap-1 text-[11px]">
+                  <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">№{{ cell.no }}・{{ cell.type }}</span>
+                  {% if cell.style_fixed %}<span class="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">画風を作り直し済み</span>{% endif %}
+                  {% if cell.issue %}<span class="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">⚠ {{ cell.issue }}</span>{% endif %}
+                </div>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </main>
+
+  <script>
+    // チェックした順（最大件数まで）を jobs= に入れて送る
+    const MAX = {{ max_jobs }};
+    const field = document.getElementById('jobsField');
+    const note = document.getElementById('pickNote');
+    let order = field.value ? field.value.split(',').filter(Boolean) : [];
+    document.querySelectorAll('.pick').forEach(cb => {
+      cb.addEventListener('change', () => {
+        order = order.filter(v => v !== cb.value);
+        if (cb.checked) {
+          if (order.length >= MAX) { cb.checked = false; note.textContent = `比べられるのは${MAX}つまでです`; return; }
+          order.push(cb.value);
+        }
+        note.textContent = order.length ? `${order.length}つ選択中` : '';
+        field.value = order.join(',');
+      });
+    });
+  </script>
+</body>
+</html>

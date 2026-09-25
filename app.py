@@ -491,11 +491,14 @@ def index():
         c["_has_gemini"] = bool(keys["gemini"])
         c["_has_openai"] = bool(keys["openai"])
         c["_has_anthropic"] = bool(keys["anthropic"])
+    # 選択肢は画像キーのあるチャンネルだけ（「共通」など使えない部屋を最初に出して
+    # 「APIキー未設定」の警告から始まるのを防ぐ）。1つも無ければ全部出して警告を見せる。
+    usable = [c for c in channels if c["_has_gemini"] or c["_has_openai"]]
     return render_template(
         "upload.html",
         openai_image_models=[{"id": m, "label": l} for m, l in OPENAI_IMAGE_MODEL_CHOICES],
         past_jobs=past_jobs[:30],
-        channels=channels,
+        channels=usable or channels,
         has_anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
         has_gemini=bool(os.environ.get("GEMINI_API_KEY")),
         has_openai=bool(os.environ.get("OPENAI_API_KEY")),
@@ -1384,6 +1387,122 @@ def api_logs(job_id):
 def api_manifest(job_id):
     manifest = load_json(OUTPUT_DIR / job_id / "manifest.json", {})
     return jsonify(manifest)
+
+
+# ===== 版を比べる（2026-09-25 社長「実際にどういうイラストが出たか比較してみたい」）=====
+# 同じ原稿を別の設定・モデルで作ったジョブを、文ごとに横へ並べる読み取り専用の画面。
+_COMPARE_MAX_JOBS = 4
+_COMPARE_TYPE_LABELS = {
+    "illustration": "イラスト", "diagram": "図解", "chart": "グラフ", "realphoto": "実写風AI",
+    "web_photo": "Web写真", "map": "地図", "decorative": "装飾", "skip": "なし",
+}
+
+
+def _compare_norm(text: str) -> str:
+    """文の突き合わせ用に、空白と全角/半角の記号の違いを消す。"""
+    table = str.maketrans({"？": "?", "！": "!", "，": ",", "．": "."})
+    return "".join((text or "").translate(table).split())
+
+
+def _compare_job_label(manifest: dict, state: dict) -> str:
+    """列の見出し: 画像モデルと世界観ロックの有無（作った時点の設定）。"""
+    src = manifest or state or {}
+    provider = src.get("provider") or ""
+    model = src.get("openai_model") or ""  # 古いジョブは型番を残していない（推測で書かない）
+    tp = src.get("type_providers") or {}
+    if provider == "gpt-image":
+        engines = f"すべて {model or 'gpt-image'}"
+    elif tp.get("diagram") == "gpt-image":
+        engines = f"イラスト Gemini／図解 {model or 'gpt-image'}"
+    else:
+        engines = "Gemini（nanobanana）" if provider == "nanobanana" else provider
+    if "style_lock" not in src:
+        lock = "旧設定（世界観ロック前）"
+    else:
+        lock = "世界観ロック" if src.get("style_lock") else "ロックなし"
+    return f"{engines}｜{lock}"
+
+
+def _compare_cell(job_id: str, row: dict) -> dict:
+    local = row.get("web_local_file") or ""
+    filename = row.get("filename") or ""
+    src = ""
+    if local:
+        src = f"/results/{job_id}/images/{local}"
+    elif filename:
+        src = f"/results/{job_id}/images/{filename}"
+    elif row.get("web_thumb_url"):
+        src = row.get("web_thumb_url")
+    route = row.get("route") or row.get("type") or ""
+    return {
+        "no": row.get("no"),
+        "src": src,
+        "type": _COMPARE_TYPE_LABELS.get(route, route),
+        "status": row.get("status") or "",
+        "issue": (row.get("verify_reason") or "") if row.get("verify_issue") else "",
+        "style_fixed": bool(row.get("style_fixed")),
+    }
+
+
+def _compare_table(jobs: list) -> list:
+    """1列目のジョブの文の順に、他のジョブの同じ文（または含み合う文）を並べる。"""
+    if not jobs:
+        return []
+    table = []
+    others = [{_compare_norm(r.get("sentence", "")): r for r in j["rows"]} for j in jobs[1:]]
+    for base in jobs[0]["rows"]:
+        key = _compare_norm(base.get("sentence", ""))
+        if not key:
+            continue
+        cells = [_compare_cell(jobs[0]["id"], base)]
+        for job, by_text in zip(jobs[1:], others):
+            match = by_text.get(key)
+            if match is None:  # 分け方が違う文（2文が1文になった等）は含み合う文を探す
+                match = next((r for k, r in by_text.items() if k and (key in k or k in key)), None)
+            cells.append(_compare_cell(job["id"], match) if match else None)
+        table.append({"sentence": base.get("sentence", ""), "cells": cells})
+    return table
+
+
+@app.route("/compare")
+@login_required
+def compare_jobs():
+    """同じ原稿の別の版（設定・モデル違い）を、文ごとに横並びで比べる（読み取りのみ）。"""
+    ids = []
+    for raw in (request.args.get("jobs") or "").split(","):
+        jid = raw.strip()
+        if jid and jid not in ids and _safe_job_dir(jid):
+            ids.append(jid)
+    jobs = []
+    for jid in ids[:_COMPARE_MAX_JOBS]:
+        job_dir = _safe_job_dir(jid)
+        if not job_dir or not job_dir.exists():
+            continue
+        manifest = load_json(job_dir / "manifest.json", {})
+        state = load_json(job_dir / "job.json", {})
+        rows = manifest.get("rows") or load_json(job_dir / "rows_progress.json", {"rows": []}).get("rows", [])
+        jobs.append({
+            "id": jid,
+            "title": manifest.get("title") or state.get("title") or jid,
+            "status": state.get("status", ""),
+            "label": _compare_job_label(manifest, state),
+            "rows": rows,
+        })
+    recent = []
+    if OUTPUT_DIR.exists():
+        for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
+            if len(recent) >= 30:
+                break
+            if not d.is_dir() or d.name.startswith("scene_fix_"):
+                continue
+            m = load_json(d / "manifest.json", {})
+            s = load_json(d / "job.json", {})
+            if not m and not s:
+                continue
+            recent.append({"id": d.name, "title": m.get("title") or s.get("title") or d.name,
+                           "channel": m.get("channel_id") or s.get("channel_id") or ""})
+    return render_template("compare.html", jobs=jobs, table=_compare_table(jobs),
+                           recent=recent, selected=ids, max_jobs=_COMPARE_MAX_JOBS)
 
 
 @app.route("/api/jobs/<job_id>", methods=["DELETE", "POST"])

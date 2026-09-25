@@ -2162,10 +2162,26 @@ class SentencePipeline:
             self._log("verify", f"軽量検品をスキップ（APIクライアント初期化失敗: {str(e)[:60]}）")
             return
 
-        # 画風チェック中は画像2枚を見るぶん1枚あたりが長い（実測 約10〜17秒・3並列）
-        per_image = 6.0 if self.style_check else 4.0
-        budget = min(720.0 if self.style_check else 480.0, max(90.0, len(checks) * per_image))
+        # 画風チェックは本番ではPCワーカー経由で1枚15〜25秒かかる（2026-09-25 本番試験: 90秒の枠では
+        # 12枚中3枚しか判定できなかった）。作り直しの判断に使うので時間を多めに取る。
+        per_image = 15.0 if self.style_check else 4.0
+        budget = (min(900.0, max(180.0, len(checks) * per_image)) if self.style_check
+                  else min(480.0, max(90.0, len(checks) * per_image)))
         deadline = _time.monotonic() + budget
+
+        def _retry_if_worker_blinked(call):
+            """PCワーカーの生存確認が一瞬途切れた（worker_unavailable）時だけ、20秒待って1回やり直す。
+
+            本番試験で、直前まで動いていたワーカーを3件だけ「不在」と判定して画風チェックが抜けた。
+            時間枠が残っている時に限る（ジョブ全体を長引かせない）。
+            """
+            try:
+                return call()
+            except Exception as e:
+                if getattr(e, "reason", "") != "worker_unavailable" or deadline - _time.monotonic() < 60:
+                    raise
+                _time.sleep(20)
+                return call()
         self._log("verify",
                   (f"軽量検品（意味・文字は⚠のみ／画風は外れたイラストだけ1回作り直し）: {len(checks)} 枚"
                    if self.style_check else
@@ -2175,14 +2191,14 @@ class SentencePipeline:
             r, t = pair
             # 画風チェックはイラストだけ（基準画像＝人物イラストと比べる。実写は作り直しても実写のまま）
             style_kwargs = self._style_check_kwargs() if t.get("type") == "illustration" else {}
-            v = verify_image(
+            v = _retry_if_worker_blinked(lambda: verify_image(
                 client, self.images_dir / r["filename"], t.get("excerpt", ""),
                 img_type=t.get("type", "illustration"),
                 allowed_terms=t.get("allowed_terms", []),
                 block_context=t.get("block_text", ""),
                 chapter=t.get("section", ""), theme=theme,
                 **style_kwargs,
-            )
+            ))
             return t, v
 
         flagged = []
@@ -2298,13 +2314,17 @@ class SentencePipeline:
                 style_lock_text=self.style_lock_text,
             )
 
-        # 作り直した画像をもう一度だけ判定する。点数が上がらなければ元の画像に戻す。
+        # 作り直した画像をもう一度だけ判定する（3並列）。点数が上がらなければ元の画像に戻す。
+        import time as _time
+        from concurrent.futures import ThreadPoolExecutor
         passed = restored = 0
         by_no = {t["index"]: (t, v) for t, v in failures}
-        for no in regenerated:
-            t, before = by_no.get(no, ({}, {}))
-            try:
-                v = verify_image(
+
+        def _rejudge(no):
+            t = by_no.get(no, ({}, {}))[0]
+
+            def call():
+                return verify_image(
                     client, self.images_dir / f"{no}.png", t.get("excerpt", ""),
                     img_type=t.get("type", "illustration"),
                     allowed_terms=t.get("allowed_terms", []),
@@ -2312,8 +2332,22 @@ class SentencePipeline:
                     chapter=t.get("section", ""), theme=theme,
                     **self._style_check_kwargs(),
                 )
+            try:
+                try:
+                    return call()
+                except Exception as e:
+                    if getattr(e, "reason", "") != "worker_unavailable":
+                        raise
+                    _time.sleep(20)  # PCワーカーの生存確認が一瞬途切れた時だけ1回やり直す
+                    return call()
             except Exception:
-                v = {"ok": False, "verified": False, "reason": "作り直し後の確認を完了できませんでした（未確認）"}
+                return {"ok": False, "verified": False, "reason": "作り直し後の確認を完了できませんでした（未確認）"}
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            verdicts = dict(zip(regenerated, ex.map(_rejudge, regenerated)))
+        for no in regenerated:
+            before = by_no.get(no, ({}, {}))[1]
+            v = verdicts[no]
             old_score = before.get("style_score") or 0
             new_score = v.get("style_score")
             backup = backup_dir / f"{no}.png"

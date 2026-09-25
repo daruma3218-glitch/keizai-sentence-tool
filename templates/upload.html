@@ -34,6 +34,7 @@
         <span class="hidden md:inline text-xs text-gray-400 ml-2">原稿を1文ずつ図解化</span>
       </div>
       <div class="flex items-center gap-3">
+        <a href="/compare" class="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-lg text-cyan-700 text-sm font-semibold hover:bg-cyan-50">版を比べる</a>
         <a href="/scene-fix" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-50 text-cyan-700 text-sm font-semibold hover:bg-cyan-100">シーン直しつくーる</a>
         <span class="hidden md:inline text-xs text-gray-400">Claude + Gemini/OpenAI</span>
         <a href="/logout" class="text-xs text-gray-400 hover:text-gray-600 transition">ログアウト</a>
@@ -61,28 +62,32 @@
 
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
 
-          <!-- チャンネル選択（部屋） -->
+          <!-- チャンネル選択（部屋）。前回選んだチャンネルを覚えて最初から選ぶ -->
           <div class="bg-indigo-50 rounded-xl border border-indigo-200 p-4">
-            <label class="block text-sm font-bold text-indigo-900 mb-2">📺 チャンネル（部屋）を選択</label>
+            <label for="channelSelect" class="block text-sm font-bold text-indigo-900 mb-2">① チャンネルを選ぶ</label>
             <select name="channel_id" id="channelSelect"
                     class="w-full px-4 py-3 border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm bg-white">
               {% for c in channels %}
               <option value="{{ c.id }}"
                 data-defaults='{{ c.defaults | tojson }}'
-                data-ready="{{ '1' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '0' }}"
+                data-ready="{{ '1' if (c._has_openai or c._has_gemini) else '0' }}"
                 data-has-gemini="{{ '1' if c._has_gemini else '0' }}"
                 data-has-openai="{{ '1' if c._has_openai else '0' }}"
                 data-keys="{{ '1' if c._has_openai or c._has_gemini else '0' }}">
-                {{ c.name }}{% if c.api_env_prefix %}（専用キー: {{ '設定済み' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '未設定' }}）{% else %}（共通キー: {{ '設定済み' if (c._has_anthropic and (c._has_openai or c._has_gemini)) else '未設定' }}）{% endif %}
+                {{ c.name }}
               </option>
               {% endfor %}
             </select>
-            <p class="text-xs text-indigo-700 mt-2">チャンネルを選ぶと、そのチャンネル専用の設定（世界観・スタイル・既定値）と API キーが自動で適用されます。</p>
+            <!-- このチャンネルで実際に使う設定の要約（詳しい設定を開かなくても分かるように） -->
+            <div id="settingsSummary" class="mt-3 bg-white/80 rounded-lg border border-indigo-100 px-3 py-2.5 text-xs text-gray-700 leading-relaxed">
+              <p class="text-[11px] font-semibold text-indigo-800 mb-1">このチャンネルの設定（そのまま使えます）</p>
+              <ul id="settingsSummaryList" class="space-y-0.5"></ul>
+            </div>
           </div>
 
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">
-              原稿
+            <label class="block text-sm font-bold text-gray-800 mb-2">
+              ② 原稿を入れる
               <span class="text-xs text-gray-400 font-normal">（章は3行以上の改行で区切ると認識しやすい）</span>
             </label>
 
@@ -103,6 +108,14 @@
               <span id="charCount">0</span> 文字（目安: 1000 文字 ≒ 20〜40 センテンス ≒ 20〜40 枚生成）
             </div>
           </div>
+
+          <!-- 詳しい設定: チャンネルの既定値が入っているので、ふだんは開かなくてよい -->
+          <details id="advancedSettings" class="group bg-white rounded-xl border border-gray-200">
+            <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between text-sm font-medium text-gray-700">
+              <span>⚙️ 詳しい設定 <span class="text-xs font-normal text-gray-400">（ふだんは変更不要。チャンネルの既定値が入っています）</span></span>
+              <span class="text-gray-400 text-xs group-open:rotate-180 transition">▼</span>
+            </summary>
+            <div class="px-4 pb-4 pt-1 space-y-6 border-t border-gray-100">
 
           <!-- モデル選択 -->
           <div>
@@ -222,7 +235,7 @@
               </label>
               <input type="range" name="concurrency" id="concurrency" min="1" max="8" step="1" value="4" class="w-full">
               <div class="flex justify-between text-xs text-gray-400 mt-1">
-                <span>1</span><span>12</span><span>24</span>
+                <span>1</span><span>4</span><span>8</span>
               </div>
             </div>
 
@@ -290,9 +303,12 @@
             </div>
           </div>
 
+            </div>
+          </details>
+
           <button type="submit" id="submitBtn"
                   class="w-full py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-xl hover:from-cyan-700 hover:to-blue-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
-            <span id="submitText">原稿を分解して図解を一括生成</span>
+            <span id="submitText">③ 図解をまとめて作る</span>
           </button>
 
           <div id="errorBox" class="hidden p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"></div>
@@ -439,13 +455,67 @@
       setRange('concurrency', 'concurrencyLabel', d.concurrency);
       setRange('maxDiagrams', 'maxDiagramsLabel', d.max_diagrams);
       setRange('webImageCount', 'webImageCountLabel', d.web_image_count);
+      // OpenAI 画像モデル: チャンネル既定（openai_image_model）→ 無ければ一覧の先頭（標準）
+      const modelSel = document.querySelector('select[name="openai_model"]');
+      if (modelSel) {
+        const want = d.openai_image_model;
+        modelSel.value = (want && [...modelSel.options].some(o => o.value === want)) ? want : modelSel.options[0].value;
+      }
       // 選択中チャンネルのキー有無で警告を出し分け（バナーは全体ではなく選択ch基準）
       const warn = document.getElementById('keyWarning');
       if (warn) warn.classList.toggle('hidden', opt.getAttribute('data-ready') === '1');
       // 画像モデルの「利用可/キー未設定」バッジも選択中チャンネル基準に更新
       setKeyBadge('nbKeyBadge', opt.getAttribute('data-has-gemini') === '1');
       setKeyBadge('giKeyBadge', opt.getAttribute('data-has-openai') === '1');
+      renderSummary();
     }
+
+    // ===== このチャンネルの設定の要約（詳しい設定を開かなくても分かるように） =====
+    function currentDefaults() {
+      const opt = document.getElementById('channelSelect').selectedOptions[0];
+      try { return JSON.parse((opt && opt.getAttribute('data-defaults')) || '{}'); } catch (e) { return {}; }
+    }
+    function renderSummary() {
+      const list = document.getElementById('settingsSummaryList');
+      if (!list) return;
+      const d = currentDefaults();
+      const fd = new FormData(form);
+      const provider = fd.get('provider');
+      const modelSel = document.querySelector('select[name="openai_model"]');
+      const modelLabel = modelSel && modelSel.selectedOptions[0] ? modelSel.selectedOptions[0].textContent.trim() : 'gpt-image';
+      const quality = { low: 'Low', medium: 'Medium', high: 'High' }[fd.get('openai_quality')] || 'Medium';
+      // 種類ごとの画像モデル（チャンネルの type_providers があればそれ、無ければ上で選んだモデル）
+      const tp = d.type_providers || {};
+      const kinds = [['イラスト', 'illustration'], ['図解', 'diagram']];
+      if (d.allow_ai_realphoto !== false) kinds.push(['実写風', 'realphoto']);
+      const byEngine = new Map();  // 同じモデルの種類はまとめて表示
+      for (const [label, type] of kinds) {
+        const engine = tp[type] || provider;
+        byEngine.set(engine, [...(byEngine.get(engine) || []), label]);
+      }
+      const engineName = (p) => p === 'gpt-image' ? modelLabel : 'Gemini（nanobanana）';
+      let models = byEngine.size === 1
+        ? `すべて ${engineName([...byEngine.keys()][0])}`
+        : [...byEngine].map(([engine, labels]) => `${labels.join('・')}＝${engineName(engine)}`).join('／');
+      if (byEngine.has('gpt-image')) models += `（品質 ${quality}）`;
+      const worldOn = fd.get('worldview_mode') === 'on';
+      const world = !worldOn ? '世界観の統一: オフ（シーンごとに画風が変わります）'
+        : d.style_lock ? '🔒 世界観ロック: チャンネルの絵柄に固定' : '世界観の統一: オン';
+      const verify = fd.get('verify_diagrams') === 'on';
+      const check = !verify ? 'AIの検品: なし'
+        : (d.style_check && worldOn && d.style_lock) ? 'AIの検品: 意味・文字＋画風（外れたイラストは1回作り直し）'
+        : 'AIの検品: 図解の意味・文字';
+      const items = [
+        `画像モデル: ${models}`,
+        world,
+        d.allow_ai_realphoto === false ? '実写: AIの実写風は作らない（本物の写真は Commons から）' : null,
+        check,
+        `枚数: 画像は最大 ${fd.get('max_diagrams')} 枚・Web写真は ${fd.get('web_image_count')} 件まで`,
+      ].filter(Boolean);
+      list.replaceChildren(...items.map(t => { const li = document.createElement('li'); li.textContent = '・' + t; return li; }));
+    }
+    form.addEventListener('change', renderSummary);
+    form.addEventListener('input', (e) => { if (e.target.type === 'range') renderSummary(); });
 
     function setKeyBadge(id, has) {
       const el = document.getElementById(id);
@@ -455,8 +525,17 @@
         + (has ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500');
     }
     const channelSelect = document.getElementById('channelSelect');
+    const LAST_CHANNEL_KEY = 'sentence.lastChannel';
     if (channelSelect) {
-      channelSelect.addEventListener('change', applyChannelDefaults);
+      // 前回選んだチャンネルを最初から選ぶ（保存できない環境でも動くように try/catch）
+      try {
+        const last = localStorage.getItem(LAST_CHANNEL_KEY);
+        if (last && [...channelSelect.options].some(o => o.value === last)) channelSelect.value = last;
+      } catch (e) {}
+      channelSelect.addEventListener('change', () => {
+        try { localStorage.setItem(LAST_CHANNEL_KEY, channelSelect.value); } catch (e) {}
+        applyChannelDefaults();
+      });
       applyChannelDefaults();  // 初期チャンネルの設定を反映
     }
 
@@ -516,7 +595,7 @@
           errorBox.textContent = data.error || 'エラーが発生しました';
           errorBox.classList.remove('hidden');
           submitBtn.disabled = false;
-          submitText.textContent = '原稿を分解して図解を一括生成';
+          submitText.textContent = '③ 図解をまとめて作る';
           return;
         }
         window.location.href = data.redirect;
@@ -524,7 +603,7 @@
         errorBox.textContent = '通信エラー: ' + err.message;
         errorBox.classList.remove('hidden');
         submitBtn.disabled = false;
-        submitText.textContent = '原稿を分解して図解を一括生成';
+        submitText.textContent = '③ 図解をまとめて作る';
       }
     });
   </script>
