@@ -77,7 +77,7 @@
                 <p class="text-xs text-gray-400">（この版には同じ文がありません）</p>
               {% else %}
                 {% if cell.src %}
-                <a href="{{ cell.src }}" target="_blank" rel="noopener"><img src="{{ cell.thumb or cell.src }}" class="cmp-img" alt="" loading="lazy"></a>
+                <a href="{{ cell.src }}" target="_blank" rel="noopener"><img data-src="{{ cell.thumb or cell.src }}" class="cmp-img" alt=""></a>
                 {% else %}
                 <div class="cmp-img flex items-center justify-center text-xs text-gray-400">画像なし（{{ cell.status or '—' }}）</div>
                 {% endif %}
@@ -98,6 +98,24 @@
   </main>
 
   <script>
+    // 縮小画像は4枚ずつ読む。初回は本番が縮小版を作るので、一度に何十枚も頼むと
+    // ほかの画面（進み具合など）まで待たされる（2026-09-25 本番で約40秒止まった）。
+    (function loadThumbs() {
+      const queue = [...document.querySelectorAll('img[data-src]')];
+      let active = 0;
+      const next = () => {
+        while (active < 4 && queue.length) {
+          const img = queue.shift();
+          active++;
+          const done = () => { active--; next(); };
+          img.addEventListener('load', done, { once: true });
+          img.addEventListener('error', done, { once: true });
+          img.src = img.dataset.src;
+        }
+      };
+      next();
+    })();
+
     // チェックした順（最大件数まで）を jobs= に入れて送る
     const MAX = {{ max_jobs }};
     const field = document.getElementById('jobsField');

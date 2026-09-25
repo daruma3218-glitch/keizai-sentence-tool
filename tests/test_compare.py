@@ -84,7 +84,7 @@ def test_thumbnails_are_small_cached_and_stay_inside_the_job(tmp_path, monkeypat
     Image.new("RGB", (1536, 864), (200, 210, 220)).save(root / "20260925_000001" / "images" / "1.png")
     client = _client(monkeypatch, root)
     html = client.get("/compare?jobs=20260925_000001&all=1").get_data(as_text=True)
-    assert 'src="/thumb/20260925_000001/1.png"' in html and 'href="/results/20260925_000001/images/1.png"' in html
+    assert 'data-src="/thumb/20260925_000001/1.png"' in html and 'href="/results/20260925_000001/images/1.png"' in html
     resp = client.get("/thumb/20260925_000001/1.png")
     assert resp.status_code == 200 and resp.mimetype == "image/jpeg"
     import io
