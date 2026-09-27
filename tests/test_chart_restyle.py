@@ -174,3 +174,10 @@ def test_restyle_keeps_code_chart_when_labels_are_reworded(tmp_path):
         model="gpt-image-2.5-flare", quality="medium", reference_path=str(ref))
     assert res["restyled"] is False
     assert (images / "5.png").read_bytes() == original
+
+
+def test_redraw_only_draws_objects_named_in_the_sentence():
+    # 9/27: 「昔は、100グラム。」（何の重さかを伏せている文）にご飯茶碗が描かれた
+    from chart_restyle import CHART_RESTYLE_INSTRUCTION
+    assert "only of an object that the narration sentence" in CHART_RESTYLE_INSTRUCTION
+    assert "Never draw food" in CHART_RESTYLE_INSTRUCTION

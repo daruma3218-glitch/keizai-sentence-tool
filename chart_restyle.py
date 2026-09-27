@@ -41,8 +41,11 @@ CHART_RESTYLE_INSTRUCTION = (
     "Keep the chart type, the order of the items and the relative sizes of the bars, lines or "
     "values. Do not write any other number anywhere in the image (no price tags, dates or "
     "counters that are not in the first image). "
-    "Make it more engaging than the plain original: use the channel palette, a clear visual "
-    "hierarchy, and one or two simple flat icons or objects that fit the topic. "
+    "Make it more engaging than the plain original with the channel palette and a clear visual "
+    "hierarchy. Add at most one simple flat icon, and only of an object that the narration sentence "
+    "itself names (for example coins when it talks about yen). If the sentence does not name a "
+    "concrete object, add no objects at all. Never draw food, products or packages that the "
+    "sentence does not name (the video may still be hiding what the product is). "
     "If a SECOND image is attached, it shows the channel's professor. You may add him once, "
     "small, beside the chart (pointing at it or reacting), drawn as that SAME person "
     "(identical face, hair, glasses, half-lidded eyes, closed-mouth smile and outfit). "
@@ -140,9 +143,10 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
         images.append(_image_file(Path(reference_path).read_bytes(), "professor.png"))
     prompt = CHART_RESTYLE_INSTRUCTION
     if (sentence or "").strip():
-        # 9/27 試験: 文を渡さないと、ポテトチップスの話にご飯茶碗を描いた
-        prompt += ("\n\nTOPIC: this chart illustrates this narration sentence (Japanese): "
-                   f"「{sentence.strip()[:200]}」. Choose icons and objects that match this topic. "
+        # 9/27 試験: 文を渡さないとポテトチップスの話にご飯茶碗を描き、文を渡しても
+        # 「昔は、100グラム。」（何の重さかを伏せた文）にご飯茶碗を描いた → 文に名前がある物だけ
+        prompt += ("\n\nNARRATION SENTENCE (Japanese): "
+                   f"「{sentence.strip()[:200]}」. Only an object named in this sentence may be drawn. "
                    "Do not write this sentence in the image.")
     if (style_lock_text or "").strip():
         prompt += "\n\n" + style_lock_text.strip()
