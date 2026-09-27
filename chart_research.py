@@ -89,6 +89,43 @@ def clean_source_note(note: str) -> str:
     return re.sub(r"\s{2,}", " ", text)[:40]
 
 
+def _source_of(item: dict) -> tuple:
+    """(出典URL, 画面の出典名)。AI が別の欄名（source / sources / url）や出典名の中に URL を
+    書くことがあるので広く拾う（9/27 本番で source_url が無く、実データを使えなかった）。"""
+    texts, url = [], str(item.get("source_url") or item.get("url") or "").strip()
+    for key in ("source_note", "source", "source_name"):
+        if isinstance(item.get(key), str):
+            texts.append(item[key])
+    sources = item.get("sources")
+    if isinstance(sources, dict):
+        sources = [sources]
+    for src in sources if isinstance(sources, list) else []:
+        if isinstance(src, dict):
+            url = url or str(src.get("url") or src.get("source_url") or "").strip()
+            texts.append(str(src.get("title") or src.get("name") or ""))
+        elif isinstance(src, str):
+            texts.append(src)
+    if not url:
+        for t in texts:
+            m = _URL_RE.search(t)
+            if m:
+                url = m.group(0).rstrip(".,;:)」）]")
+                break
+    note = next((clean_source_note(t) for t in texts if clean_source_note(t)), "")
+    if url and not note:
+        note = re.sub(r"^https?://(www\.)?", "", url).split("/")[0][:40]
+    return url, note
+
+
+def describe_item(item) -> str:
+    """使わなかった候補を記録に残すための短い説明（欄名と出典の欄だけ）。"""
+    if not isinstance(item, dict):
+        return type(item).__name__
+    keys = ",".join(sorted(item))[:80]
+    src = {k: str(item.get(k))[:60] for k in ("source_url", "source_note", "source", "sources", "url") if k in item}
+    return f"欄={keys} 出典={json.dumps(src, ensure_ascii=False)[:160]}"
+
+
 def validate_research(item: dict, sentences: str) -> tuple:
     """(使える chart_spec, 使えない理由)。コードで出典・形・原稿の数字との一致を確かめる。"""
     if not isinstance(item, dict):
@@ -109,8 +146,7 @@ def validate_research(item: dict, sentences: str) -> tuple:
         return None, f"折れ線の時点数が {len(points)}（3〜30）"
     if ctype == "bar" and not 2 <= len(points) <= 8:
         return None, f"棒の件数が {len(points)}（2〜8）"
-    url = str(item.get("source_url") or "").strip()
-    note = clean_source_note(item.get("source_note"))
+    url, note = _source_of(item)
     if not re.match(r"https?://[^\s]+\.[^\s]+", url) or not note:
         return None, "出典（URL・出典名）が無い"
     values = {round(v, 6) for _, v in points}
@@ -163,6 +199,8 @@ def research_charts(chart_rows: list, *, title: str = "", max_n: int = CHART_RES
         log("chart_research", f"実データの調査を省略（{str(e)[:80]}）。数字カードのまま")
         return {}
     items = parse_json_array(text) or []
+    if not items:
+        log("chart_research", "実データの候補なし（数字カードのまま）", (text or "")[:300])
     out = {}
     for item in items[: max_n * 2]:
         if len(out) >= max_n:
@@ -174,7 +212,7 @@ def research_charts(chart_rows: list, *, title: str = "", max_n: int = CHART_RES
         sentences = " ".join(rows_by_no[n].get("sentence", "") for n in nos if n in rows_by_no)
         spec, why = validate_research(item, sentences)
         if not spec:
-            log("chart_research", f"№{target} 実データを使わない（{why}）")
+            log("chart_research", f"№{target} 実データを使わない（{why}）", describe_item(item))
             continue
         out[target] = spec
         log("chart_research",

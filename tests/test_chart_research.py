@@ -87,3 +87,15 @@ def test_prompter_time_limit_grows_with_parallel_rounds():
     from prompter import prompter_overall_timeout
     assert prompter_overall_timeout(5, 6) == 360          # 1巡（短い回）は従来どおり
     assert prompter_overall_timeout(15, 6) == 3 * 200 + 60  # 9/27 ルノアールの回（3巡）
+
+
+def test_sources_in_other_field_names_are_accepted():
+    item = {k: v for k, v in ITEM.items() if k not in ("source_url", "source_note")}
+    item["sources"] = [{"title": "NewSphere（カルビー取材）", "url": "https://newsphere.jp/popular/20241203-04/"}]
+    spec, why = validate_research(item, ROWS[2]["sentence"])
+    assert why == "" and spec["source_note"] == "NewSphere（カルビー取材）"
+    assert spec["research"]["source_url"].startswith("https://newsphere.jp/")
+    item2 = {k: v for k, v in ITEM.items() if k != "source_url"}
+    item2["source_note"] = "[カルビー公式](https://www.calbee.co.jp/)"
+    spec2, _ = validate_research(item2, ROWS[2]["sentence"])
+    assert spec2["research"]["source_url"] == "https://www.calbee.co.jp/" and spec2["source_note"] == "カルビー公式"
