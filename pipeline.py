@@ -59,6 +59,7 @@ class SentencePipeline:
         max_diagrams: int = 150,
         route_mode: str = "auto",
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
+        chart_ai_restyle: bool = False,    # render したグラフを数字そのままで番組の絵柄に描き直す
         allow_charts: bool = True,         # False: chart route を diagram に変換する
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         allow_maps: bool = True,           # False: map route を地理関係の図解に変換する
@@ -112,6 +113,7 @@ class SentencePipeline:
         self.max_diagrams = max(1, min(max_diagrams, 300))
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
+        self.chart_ai_restyle = bool(chart_ai_restyle)
         self.allow_charts = bool(allow_charts)
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.allow_maps = bool(allow_maps)
@@ -746,6 +748,7 @@ class SentencePipeline:
         client = get_anthropic_client(self.anthropic_key)
         gemini_key = (self.gemini_key or "").strip() or os.environ.get("GEMINI_API_KEY", "")
         openai_key = (self.openai_key or "").strip() or os.environ.get("OPENAI_API_KEY", "")
+        self._resolved_openai_key = openai_key  # グラフの AI清書で使う
 
         if self.provider == PROVIDER_NANOBANANA and not gemini_key:
             raise RuntimeError("nanobanana を使うには GEMINI_API_KEY が必要です。")
@@ -1936,6 +1939,47 @@ class SentencePipeline:
                 r["engine"] = "ai"
                 self._update_row(no, route="diagram", engine="ai")
         self._log("renderer", f"chart レンダリング完了: {done} 枚（決定論・文字化けゼロ）")
+        if self.chart_ai_restyle and done:
+            self._restyle_charts([r for r in render_rows if r.get("engine") == "render"])
+
+    def _restyle_charts(self, rows):
+        """コードで描いたグラフを、数字そのままで番組の絵柄に描き直す（AI清書・chart_restyle.py）。
+
+        描き直した絵の数字が元のグラフと1つでも違えば、コードのグラフのまま使う。
+        """
+        openai_key = getattr(self, "_resolved_openai_key", "")
+        if not openai_key:
+            self._log("chart_restyle", "OpenAI キーが無いため、グラフの描き直しを省略")
+            return
+        try:
+            import openai
+            from concurrent.futures import ThreadPoolExecutor
+            from chart_restyle import restyle_chart_file
+            from generator import resolve_openai_image_model
+            openai_client = openai.OpenAI(api_key=openai_key, timeout=300, max_retries=1)
+            verify_client = get_anthropic_client(self.anthropic_key)
+        except Exception as e:
+            self._log("chart_restyle", f"グラフの描き直しを省略（準備に失敗: {str(e)[:80]}）")
+            return
+        model = resolve_openai_image_model(self.openai_model)
+        self._progress(2, f"グラフ {len(rows)} 枚を番組の絵柄に描き直し中...", 22)
+
+        def one(r):
+            try:
+                res = restyle_chart_file(
+                    self.images_dir, r["no"], openai_client=openai_client, verify_client=verify_client,
+                    model=model, quality=self.openai_quality, style_lock_text=self.style_lock_text,
+                    reference_path=self.character_ref_path, log=self._log)
+            except Exception as e:
+                res = {"restyled": False, "reason": str(e)[:80]}
+            self._update_row(r["no"], chart_restyled=bool(res.get("restyled")),
+                             chart_restyle_note=res.get("reason", ""))
+            return res
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(one, rows))
+        n_ok = sum(1 for x in results if x.get("restyled"))
+        self._log("chart_restyle", f"グラフの描き直し: {n_ok} / {len(rows)} 枚（残りはコードのグラフ）")
 
     def _render_maps(self, render_rows):
         """map_spec を Natural Earth GeoJSON + matplotlib で描画（engine:render・LLM不使用）。

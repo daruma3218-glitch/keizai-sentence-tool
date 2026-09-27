@@ -389,6 +389,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             max_diagrams=max_diagrams,
             route_mode=route_mode,
             chart_engine=defaults.get("chart_engine", "ai"),
+            chart_ai_restyle=bool(defaults.get("chart_ai_restyle", False)),
             allow_charts=defaults.get("allow_charts", True),
             map_engine=defaults.get("map_engine", "ai"),
             allow_maps=defaults.get("allow_maps", False),
@@ -1691,6 +1692,36 @@ def _forced_route_user_instructions(force_route: str, base_instructions: str = "
     return f"{base}\n\n{route_note}".strip() if base else route_note
 
 
+def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state) -> bool:
+    """グラフ1枚の作り直しでも、チャンネル設定が chart_ai_restyle なら番組の絵柄に描き直す。"""
+    if not defaults.get("chart_ai_restyle"):
+        return False
+    openai_key = ch_keys.get("openai") or os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key:
+        return False
+    try:
+        import openai
+        from chart_restyle import restyle_chart_file
+        from generator import resolve_openai_image_model
+        from utils import get_anthropic_client
+        params = manifest or job_state or {}
+        cref = (defaults.get("character_ref") or "").strip()
+        cref_path = str(PROJECT_ROOT / cref) if cref and (PROJECT_ROOT / cref).exists() else ""
+        res = restyle_chart_file(
+            job_dir / "images", no,
+            openai_client=openai.OpenAI(api_key=openai_key, timeout=300, max_retries=1),
+            verify_client=get_anthropic_client(ch_keys.get("anthropic", "")),
+            model=resolve_openai_image_model(params.get("openai_model"), defaults.get("openai_image_model")),
+            quality=params.get("openai_quality") or defaults.get("openai_quality") or "medium",
+            style_lock_text=_style_lock_text_for(defaults, manifest, job_state),
+            reference_path=cref_path,
+            log=lambda *a, **k: None,
+        )
+        return bool(res.get("restyled"))
+    except Exception:
+        return False
+
+
 def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="", force_route=None, route_reason=None):
     """v3: chart 行（決定論レンダ）を再生成。
 
@@ -1706,11 +1737,15 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
     saved_spec = row.get("chart_spec")
 
     # 1) 保存 spec をそのまま再描画（追加指示が無いとき）
+    manifest = load_json(job_dir / "manifest.json", {})
+    job_state = load_json(job_dir / "job.json", {})
     if saved_spec and not extra:
         try:
             if render_chart(saved_spec, out, theme=chart_theme):
+                restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state)
                 _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
-                                      route=force_route, route_reason=route_reason)
+                                      route=force_route, route_reason=route_reason,
+                                      extra={"chart_restyled": restyled})
                 return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
                                 "route": force_route,
                                 "ts": datetime.now().strftime("%H%M%S")})
@@ -1744,8 +1779,10 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
         return jsonify({"error": f"グラフ描画に失敗: {str(e)[:140]}"}), 500
     if not ok:
         return jsonify({"error": "グラフ描画に失敗しました"}), 500
+    restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state)
     _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
-                          route=force_route, route_reason=route_reason)
+                          route=force_route, route_reason=route_reason,
+                          extra={"chart_restyled": restyled})
     return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
                     "route": force_route, "ts": datetime.now().strftime("%H%M%S")})
 

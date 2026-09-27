@@ -12,6 +12,7 @@ asyncio + Semaphore で同時 N 枚を並列生成する。
 import asyncio
 import base64
 import os
+import re
 import time
 from io import BytesIO
 from pathlib import Path
@@ -229,6 +230,28 @@ _EDIT_SOURCE_INSTRUCTION = (
     "overlap, and clean up small visual defects. Do NOT redesign the image from scratch, do NOT "
     "change the core idea, and do NOT introduce new facts."
 )
+
+
+# 図解・グラフの中に先生が小さく出るとき用（2026-09-27 せいまさん「ところどころ新居先生の
+# キャラクターが崩れている」→ 参照画像がイラストにしか渡っておらず、図解の先生は別人になっていた）
+_CHARACTER_LOCK_IN_DIAGRAM = (
+    "CHARACTER REFERENCE: The attached reference image shows the channel's professor. If the "
+    "professor appears in this image, draw him as that SAME person — identical face shape, "
+    "voluminous wavy dark-brown hair, thin dark glasses, calm half-lidded eyes, closed-mouth gentle "
+    "smile, gray tweed blazer over a wine-red V-neck sweater — in the same flat cartoon style, as a "
+    "presenter beside the diagram. Draw him at most once. Keep the diagram itself as the main "
+    "subject; do not turn the image into a portrait and do not copy the reference background."
+)
+
+# 世界観ロック中に「先生が描かれる画像」を文面から見分ける。プロンプト作成AIの character 旗は
+# イラストにしか立たないため、図解・グラフに先生が入っても参照画像が渡らなかった。
+_PROFESSOR_MENTION_RE = re.compile(r"\b(?:professor|teacher)\b|先生|教授", re.IGNORECASE)
+
+
+def depicts_recurring_character(prompt_text: str, prompt_type: str, style_lock_text: str) -> bool:
+    """世界観ロック中のチャンネルで、場面の文に先生が出てくるか（種類は問わない）。"""
+    return bool((style_lock_text or "").strip()) and prompt_type in STYLE_LOCK_TYPES \
+        and bool(_PROFESSOR_MENTION_RE.search(prompt_text or ""))
 
 
 # 世界観ロック（チャンネル設定 style_lock）を掛ける画像タイプ。
@@ -737,10 +760,15 @@ class ParallelImageGenerator:
 
             full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
                                              style_preset=row_style, style_lock=self.style_lock_text)
-            # キャラ固定: character=True かつ参照画像があるシーンだけ参照モードで生成
-            use_reference = bool(prompt_entry.get("character")) and self.reference_bytes is not None
+            # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
+            # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
+            use_reference = self.reference_bytes is not None and (
+                bool(prompt_entry.get("character"))
+                or depicts_recurring_character(prompt_text, prompt_type, self.style_lock_text))
             if use_reference:
-                full_prompt = _CHARACTER_LOCK_INSTRUCTION + "\n\n" + full_prompt
+                lock = (_CHARACTER_LOCK_INSTRUCTION if prompt_type == "illustration"
+                        else _CHARACTER_LOCK_IN_DIAGRAM)
+                full_prompt = lock + "\n\n" + full_prompt
 
             # v3 Step6: エンティティ follower の一貫性ロック（キャラ固定シーンとは排他）。
             # nanobanana は canonical 画像を参照に渡す。gpt-image は文言のみ（v3.0）。
