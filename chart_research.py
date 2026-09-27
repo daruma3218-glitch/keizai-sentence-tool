@@ -29,6 +29,9 @@ from utils import parse_json_array
 CHART_RESEARCH_MAX = 5
 RESEARCH_MODEL = "gpt-6-astra"
 RESEARCH_TIMEOUT = 600
+# PC の窓口（subsk-worker）が許可している用途名。Web検索つき（kind=research）はこの名前で通る。
+# 9/27 本番で独自の名前（sentence-chart-research）が tool_or_kind_not_allowed で止められた
+RESEARCH_TOOL = "sentence-web-search"
 
 SYSTEM = (
     "あなたは教養系YouTube動画のデータリサーチャーです。原稿の数字について、Webで一次情報・信頼できる"
@@ -155,7 +158,7 @@ def research_charts(chart_rows: list, *, title: str = "", max_n: int = CHART_RES
     query = QUERY_TEMPLATE.format(title=title or "（無題）", rows="\n".join(lines), max_n=max_n)
     try:
         text = generate(SYSTEM, query, model=RESEARCH_MODEL, use_search=True,
-                        tool="sentence-chart-research", timeout=RESEARCH_TIMEOUT, max_tokens=6000)[0]
+                        tool=RESEARCH_TOOL, timeout=RESEARCH_TIMEOUT, max_tokens=6000)[0]
     except Exception as e:
         log("chart_research", f"実データの調査を省略（{str(e)[:80]}）。数字カードのまま")
         return {}

@@ -58,6 +58,7 @@ def test_research_charts_uses_web_search_and_caps_results():
                           log=lambda *a, **k: logs.append(a[1]), generate=fake_generate)
     assert list(out) == [5]
     assert calls[0]["use_search"] is True
+    assert calls[0]["tool"] == "sentence-web-search"  # PC の窓口が許可している用途名
     assert any("出典" in m for m in logs)
 
 
