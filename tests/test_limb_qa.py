@@ -64,3 +64,9 @@ def test_check_limbs_asks_both_judges_with_images(tmp_path):
     assert sorted(c["model"] for c in calls) == sorted(m for m, _ in JUDGES)
     assert all(len(c["attachments"]) == 2 and c["allow_fallback"] is False for c in calls)
     assert all(c["tool"] == "sentence" for c in calls)  # PC の窓口が許可している用途名
+
+
+def test_prompt_limits_problems_to_limbs_not_looks():
+    # 9/27 本番: 眼鏡のない一般の人物を「先生の眼鏡がない」として不合格にした（№19・20・33）
+    from limb_qa import PROMPT
+    assert "眼鏡の有無" in PROMPT and "一般の人物として扱う" in PROMPT
