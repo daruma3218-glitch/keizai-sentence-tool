@@ -88,6 +88,7 @@ class SentencePipeline:
         style_lock: bool = False,           # 世界観の設定文を全イラスト/図解の生成指示に固定する
         allow_ai_realphoto: bool = True,    # False: AI実写風(realphoto)を作らず世界観イラストにする
         style_check: bool = False,          # 検品で画風も判定し、外れた画像を1回だけ作り直す
+        limb_check: bool = False,           # 人物の腕・手の崩れを2つのAIで検品し、最大2回作り直す
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
@@ -146,6 +147,7 @@ class SentencePipeline:
         self.style_lock_text = self.worldview_desc.strip() if self.style_lock else ""
         self.allow_ai_realphoto = bool(allow_ai_realphoto)
         # 画風チェックは「基準画像（先生キャラ）と世界観ロックの設定文」が揃うときだけ
+        self.limb_check = bool(limb_check)
         self.style_check = (bool(style_check) and self.style_lock and bool(self.character_ref_path)
                             and Path(self.character_ref_path).exists())
         self.progress_callback = progress_callback or (lambda phase, msg, pct: None)
@@ -1544,6 +1546,10 @@ class SentencePipeline:
                                            keys=(gemini_key, openai_key))
             except Exception as e:
                 self._log("verify", f"軽量検品をスキップ（{str(e)[:80]}）")
+            try:
+                self._check_limbs(results, generation_targets, keys=(gemini_key, openai_key))
+            except Exception as e:
+                self._log("verify", f"腕・手の検品をスキップ（{str(e)[:80]}）")
 
         # Web 検索の完了を待つ。
         # 通常チャンネルで長く待ちすぎると「画像生成は終わったのに止まった」ように見える。
@@ -1947,7 +1953,10 @@ class SentencePipeline:
                 self._update_row(no, route="diagram", engine="ai")
         self._log("renderer", f"chart レンダリング完了: {done} 枚（決定論・文字化けゼロ）")
         if self.chart_ai_restyle and done:
-            self._restyle_charts([r for r in render_rows if r.get("engine") == "render"])
+            # 実データのグラフ（chart_research）は描き直さない。2026-09-27 社長「この場合は新居先生の
+            # イラストなしで、グラフの数字などがはっきり見れるようにしようか。グラフの精度は大切だからね」
+            self._restyle_charts([r for r in render_rows if r.get("engine") == "render"
+                                  and not (r.get("chart_spec") or {}).get("research")])
 
     def _research_charts(self, rows):
         """数字カードになる文から上限 chart_research_max 件を選び、出典のある実データのグラフにする。
@@ -2451,6 +2460,88 @@ class SentencePipeline:
                   f"画風の作り直し完了: 作り直し {len(regenerated)}/{len(entries)} 枚・再判定で合格 {passed} 枚"
                   + (f"・良くならず元に戻した {restored} 枚" if restored else "")
                   + ("（残りは⚠で確認してください）" if passed < len(entries) else ""))
+
+    LIMB_FIX_ROUNDS = 2
+    LIMB_PARALLEL = 2  # 1枚につき判定役2つ＝PCのCLIを4本まで同時に使う
+
+    def _check_limbs(self, results, generation_targets, keys=None):
+        """人物イラストの腕・手の崩れ（腕が3本など）を2つのAIで検品し、崩れたものを最大2回作り直す。
+
+        2026-09-27 社長「№12・イラストは腕が3本になっているね。こういうミスがおきないようにしよう」。
+        判定と合否の決め方は limb_qa.py（素材レポートの 9/24 の仕組みと同じ）。2回作り直しても崩れて
+        いれば ⚠「腕・手の崩れ」で人の確認に回す。判定できなかった画像は作り直さない（費用だけかかる）。
+        """
+        if not self.limb_check or not keys:
+            return
+        from concurrent.futures import ThreadPoolExecutor
+        from generator import depicts_recurring_character
+        from limb_qa import FIX_HINT, check_limbs
+
+        targets_by_no = {t["index"]: t for t in generation_targets}
+        targets = []
+        for r in results:
+            t = targets_by_no.get(r.get("index"))
+            if not r.get("success") or not t:
+                continue
+            if t.get("type") == "illustration" or depicts_recurring_character(
+                    t.get("prompt", ""), t.get("type", ""), self.style_lock_text):
+                targets.append(t)
+        if not targets:
+            return
+        self._log("verify", f"腕・手の検品（Opus 5.5 と GPT-6 Sol）: {len(targets)} 枚")
+        job_id = self.output_dir.name
+        gemini_key, openai_key = keys
+
+        def judge(t):
+            path = self.images_dir / f"{t['index']}.png"
+            return t, (check_limbs(path, self.character_ref_path, job_id=job_id)
+                       if path.exists() else {"ok": None, "problems": ["画像が無い"]})
+
+        pending = targets
+        fixed = set()
+        for round_no in range(self.LIMB_FIX_ROUNDS + 1):
+            with ThreadPoolExecutor(max_workers=self.LIMB_PARALLEL) as pool:
+                verdicts = list(pool.map(judge, pending))
+            failed = [(t, v) for t, v in verdicts if v.get("ok") is False]
+            for t, v in verdicts:
+                if v.get("ok") is True and t["index"] in fixed:
+                    self._update_row(t["index"], verify_issue=False, verify_status="pass",
+                                     verify_reason="腕・手の崩れを作り直し済み")
+                elif v.get("ok") is None and round_no == 0:
+                    self._log("verify", f"№{t['index']} 腕・手の検品は未確認（{'・'.join(v.get('problems') or [])[:40]}）")
+            if not failed:
+                break
+            if round_no == self.LIMB_FIX_ROUNDS:
+                for t, v in failed:
+                    self._update_row(t["index"], verify_issue=True, verify_status="needs_fix",
+                                     verify_reason=("腕・手の崩れ（2回作り直しても直らず・要差し替え）: "
+                                                    + "・".join(v.get("problems") or []))[:120],
+                                     verify_issue_tags=["limb_error"])
+                self._log("verify", f"腕・手の崩れが直らなかった: №{', '.join(str(t['index']) for t, _ in failed)}（⚠で確認）")
+                break
+            self._log("verify", f"腕・手の崩れ {len(failed)} 枚を作り直します（{round_no + 1}回目）",
+                      "、".join(f"№{t['index']}: {'・'.join(v.get('problems') or [])[:40]}" for t, v in failed[:8]))
+            entries = []
+            for t, v in failed:
+                entry = dict(t)
+                entry["prompt"] = (f"{t.get('prompt', '')}\n\nIMPROVE: The previous image had broken anatomy "
+                                   f"(reviewer notes in Japanese: {'; '.join(v.get('problems') or [])}). {FIX_HINT}")
+                entries.append(entry)
+                self._update_row(t["index"], status="generating")
+            for provider, group in self._group_by_provider(entries):
+                run_parallel_generation(
+                    prompts=group, output_dir=self.images_dir, provider=provider,
+                    gemini_api_key=gemini_key, openai_api_key=openai_key,
+                    openai_quality=self.openai_quality, openai_model=self.openai_model,
+                    concurrency=2, style_preset=self.style_preset,
+                    reference_image_path=self.character_ref_path,
+                    realphoto_watermark=self.realphoto_watermark,
+                    style_lock_text=self.style_lock_text,
+                )
+            for t, _ in failed:
+                self._update_row(t["index"], status="ok", filename=f"{t['index']}.png")
+                fixed.add(t["index"])
+            pending = [t for t, _ in failed]
 
     def _write_source_pack(self, title, chapters, rows, source_videos, web_infos):
         """制作資料パック（sources.html / sources.md）を書き出す。

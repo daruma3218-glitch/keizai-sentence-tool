@@ -418,6 +418,7 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             style_lock=bool(defaults.get("style_lock", False)),
             allow_ai_realphoto=bool(defaults.get("allow_ai_realphoto", True)),
             style_check=bool(defaults.get("style_check", False)),
+            limb_check=bool(defaults.get("limb_check", False)),
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,
@@ -1698,6 +1699,10 @@ def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_sta
     """グラフ1枚の作り直しでも、チャンネル設定が chart_ai_restyle なら番組の絵柄に描き直す。"""
     if not defaults.get("chart_ai_restyle"):
         return False
+    snap = next((r for r in load_json(job_dir / "rows_progress.json", {"rows": []}).get("rows", [])
+                 if r.get("no") == no), {})
+    if (snap.get("chart_spec") or {}).get("research"):
+        return False  # 実データのグラフは描き直さない（9/27 社長「グラフの精度は大切」）
     openai_key = ch_keys.get("openai") or os.environ.get("OPENAI_API_KEY", "")
     if not openai_key:
         return False

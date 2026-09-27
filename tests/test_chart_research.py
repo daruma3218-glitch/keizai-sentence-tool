@@ -113,3 +113,20 @@ def test_two_links_in_one_field_keep_only_the_first_url():
     item = {**ITEM, "source_url": "[NewSphere](https://newsphere.jp/popular/20241203-04/)、[カルビー：内容量変更のお知らせ](https://www.calbee.co.jp/news/pdf/4080-15414.pdf)"}
     spec, _ = validate_research(item, ROWS[2]["sentence"])
     assert spec["research"]["source_url"] == "https://newsphere.jp/popular/20241203-04/"
+
+
+def test_research_charts_are_not_redrawn_with_the_professor(tmp_path, monkeypatch):
+    """9/27 社長「この場合は新居先生のイラストなしで、グラフの数字などがはっきり見れるように」"""
+    import pipeline as plmod
+    import renderer
+    pipe = plmod.SentencePipeline(manuscript_text="x" * 200, output_dir=tmp_path / "job",
+                                  channel_id="keizai", chart_ai_restyle=True)
+    pipe.images_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(renderer, "render_chart", lambda spec, out, theme=None: bool(
+        __import__("pathlib").Path(out).write_bytes(b"png")))
+    seen = []
+    monkeypatch.setattr(pipe, "_restyle_charts", lambda rows: seen.extend(r["no"] for r in rows))
+    rows = [{"no": 1, "engine": "render", "chart_spec": {"chart_type": "big_number", "series": [{"label": "昔", "value": 100}]}},
+            {"no": 5, "engine": "render", "chart_spec": {"chart_type": "line", "series": SERIES, "research": {"source_url": "https://x.jp/"}}}]
+    pipe._render_charts(rows)
+    assert seen == [1]
