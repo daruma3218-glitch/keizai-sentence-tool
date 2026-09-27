@@ -27,6 +27,9 @@ from typing import Callable, Optional
 
 from utils import parse_json_object
 
+# 1回の生成で描き直す上限（1枚ずつ・約30〜40秒/枚）。超えた分はコードのグラフのまま。
+CHART_RESTYLE_MAX = 30
+
 CHART_RESTYLE_INSTRUCTION = (
     "CHART REDRAW: The FIRST attached image is an exact data chart for this video. Redraw it as "
     "one frame of this video series, in the channel art style described below. "
@@ -151,7 +154,9 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
         b64 = getattr(datum, "b64_json", None) if datum is not None else None
         if not b64:
             return False, "画像が返りませんでした"
-        _save_as_16_9(base64.b64decode(b64), out_path)
+        data = base64.b64decode(b64)
+        b64 = response = None  # 大きなデータを早めに手放す（本番は 512MB）
+        _save_as_16_9(data, out_path)
         return True, ""
     except Exception as e:
         return False, str(e)[:160]

@@ -1953,8 +1953,7 @@ class SentencePipeline:
             return
         try:
             import openai
-            from concurrent.futures import ThreadPoolExecutor
-            from chart_restyle import restyle_chart_file
+            from chart_restyle import restyle_chart_file, CHART_RESTYLE_MAX
             from generator import resolve_openai_image_model
             openai_client = openai.OpenAI(api_key=openai_key, timeout=300, max_retries=1)
             verify_client = get_anthropic_client(self.anthropic_key)
@@ -1962,7 +1961,7 @@ class SentencePipeline:
             self._log("chart_restyle", f"グラフの描き直しを省略（準備に失敗: {str(e)[:80]}）")
             return
         model = resolve_openai_image_model(self.openai_model)
-        self._progress(2, f"グラフ {len(rows)} 枚を番組の絵柄に描き直し中...", 22)
+        self._progress(2, f"グラフ {min(len(rows), CHART_RESTYLE_MAX)} 枚を番組の絵柄に描き直し中...", 22)
 
         def one(r):
             try:
@@ -1977,10 +1976,18 @@ class SentencePipeline:
                              chart_restyle_note=res.get("reason", ""))
             return res
 
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            results = list(pool.map(one, rows))
+        # 1枚ずつ進める。9/27 18:27、215文の回で3枚同時に描き直した直後に本番（512MB）が
+        # メモリ不足で落ち、その回が「生成中」のまま止まった。1枚ごとにメモリを手放す。
+        # 1回の上限は CHART_RESTYLE_MAX 枚（残りはコードのグラフ）。
+        import gc
+        results = []
+        for r in rows[:CHART_RESTYLE_MAX]:
+            results.append(one(r))
+            gc.collect()
         n_ok = sum(1 for x in results if x.get("restyled"))
         self._log("chart_restyle", f"グラフの描き直し: {n_ok} / {len(rows)} 枚（残りはコードのグラフ）")
+        if len(rows) > CHART_RESTYLE_MAX:
+            self._log("chart_restyle", f"上限 {CHART_RESTYLE_MAX} 枚を超えた分はコードのグラフのまま（1枚ずつ作り直せます）")
 
     def _render_maps(self, render_rows):
         """map_spec を Natural Earth GeoJSON + matplotlib で描画（engine:render・LLM不使用）。
