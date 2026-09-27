@@ -46,6 +46,21 @@
     <div class="grid grid-cols-1 lg:grid-cols-5 gap-8">
 
       <div class="lg:col-span-3">
+        {% if board and (board.running or board.waiting) %}
+        <!-- いま作成中・順番待ち（2026-09-28 社長「誰かが作業している時にシステムで分かるように」） -->
+        <div id="generationBoard" class="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-xl text-sm">
+          {% if board.running %}
+          <p class="font-semibold text-blue-900">
+            いま作成中：<a class="underline" href="/progress/{{ board.running.id }}">「{{ board.running.title }}」</a>
+            （{{ board.running.channel }}{% if board.running.creator %}・{{ board.running.creator }}さん{% endif %}・{{ board.running.percent }}%・{{ board.running.started }}開始）
+          </p>
+          {% endif %}
+          {% for w in board.waiting %}
+          <p class="text-blue-800 mt-1">順番待ち {{ loop.index }}：「{{ w.title }}」（{{ w.channel }}{% if w.creator %}・{{ w.creator }}さん{% endif %}）</p>
+          {% endfor %}
+          <p class="text-xs text-blue-700 mt-2">生成は1回ずつ順番に進みます。いま作ると順番待ちに入り、前の回が終わりしだい自動で始まります（1枚の作り直しは待たずにできます）。</p>
+        </div>
+        {% endif %}
         <h1 class="text-3xl font-bold text-gray-900 mb-2">新しいセンテンス図解を作成</h1>
         <p class="text-sm text-gray-500 mb-6">原稿を章/ブロック/センテンスに分解して、各文に図解を割り当てます</p>
 
@@ -61,6 +76,13 @@
         </div>
 
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
+
+          <!-- 作る人の名前（任意）。いま作成中の表示と完了の知らせに出す。このパソコンで覚える -->
+          <div>
+            <label for="creatorName" class="block text-sm font-bold text-gray-700 mb-1">作る人の名前（任意）</label>
+            <input type="text" id="creatorName" name="creator" maxlength="20" placeholder="例: 新居"
+                   class="w-full px-4 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
 
           <!-- チャンネル選択（部屋）。前回選んだチャンネルを覚えて最初から選ぶ -->
           <div class="bg-indigo-50 rounded-xl border border-indigo-200 p-4">
@@ -523,6 +545,14 @@
       el.textContent = has ? '利用可' : 'キー未設定';
       el.className = 'text-[10px] px-1.5 py-0.5 rounded-full font-medium '
         + (has ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500');
+    }
+    const creatorInput = document.getElementById('creatorName');
+    const CREATOR_KEY = 'sentence.creator';
+    if (creatorInput) {
+      try { creatorInput.value = localStorage.getItem(CREATOR_KEY) || ''; } catch (e) {}
+      creatorInput.addEventListener('change', () => {
+        try { localStorage.setItem(CREATOR_KEY, creatorInput.value.trim()); } catch (e) {}
+      });
     }
     const channelSelect = document.getElementById('channelSelect');
     const LAST_CHANNEL_KEY = 'sentence.lastChannel';

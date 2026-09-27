@@ -331,7 +331,128 @@ def _add_log(job_id: str, category: str, message: str, detail: str = ""):
         pass
 
 
-def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: str,
+
+# ====== 順番待ち（生成は一度に1回だけ） ======
+# 2026-09-28 社長「誰かが作業している時にシステムで分かるようにできないのかな？おわったことが
+# わかるようになっていればいいよね」。本番は1台（512MB）で全チャンネル共通、指示文づくり・検品の
+# AI も社長の PC 1台を共有する。9/27 は2つの回が同時に動いてメモリ不足で落ち、指示文が時間切れで
+# 簡易版になった。生成は一度に1回だけにし、2件目以降は順番待ち→前の回が終わると自動で始める。
+# 1枚の作り直し（🔄）やシーン直しは軽いので対象外（待たずにできる）。
+_GENERATION_SLOT = threading.Lock()
+_QUEUE_LOCK = threading.Lock()
+_QUEUE: list = []            # 順番待ちの job_id（先頭が次）
+_RUNNING = {"job_id": None}  # いま作っている job_id
+
+
+def generation_board() -> dict:
+    """いま作っている回と順番待ちの回（画面上部の表示用）。"""
+    with _QUEUE_LOCK:
+        running, waiting = _RUNNING["job_id"], list(_QUEUE)
+
+    def brief(job_id):
+        st = _get_job_state(job_id) if job_id else {}
+        channel = get_channel(st.get("channel_id", "")) if st else {}
+        return {"id": job_id, "title": st.get("title") or "（題を分析中）",
+                "creator": st.get("creator", ""), "channel": channel.get("name", ""),
+                "percent": st.get("percent", 0), "started": job_id[9:11] + ":" + job_id[11:13]
+                if job_id and len(job_id) >= 13 else ""}
+    return {"running": brief(running) if running else None, "waiting": [brief(j) for j in waiting]}
+
+
+def _queue_message(job_id: str) -> str:
+    board = generation_board()
+    waiting_ids = [w["id"] for w in board["waiting"]]
+    position = waiting_ids.index(job_id) if job_id in waiting_ids else 0
+    running = board["running"]
+    who = f"（{running['creator']}さん）" if running and running.get("creator") else ""
+    now = f"いま「{running['title']}」{who}を作成中。" if running else ""
+    return f"順番待ち: {now}前に {position + (1 if running else 0)} 件。終わりしだい自動で始まります"
+
+
+def _run_pipeline_thread(job_id: str, *args, **kwargs):
+    """順番待ちを入れて、生成の本体（_run_pipeline_body）を一度に1回だけ動かす。"""
+    slot = _GENERATION_SLOT
+    with _QUEUE_LOCK:
+        _QUEUE.append(job_id)
+    last_message = ""
+    try:
+        while True:
+            with _QUEUE_LOCK:
+                first = bool(_QUEUE) and _QUEUE[0] == job_id
+            # 空いていればすぐ始める。待つときは先に「順番待ち」を画面に出してから待つ
+            if first and slot.acquire(timeout=3 if last_message else 0.05):
+                break
+            message = _queue_message(job_id)
+            if message != last_message:
+                _set_job_state(job_id, status="queued", message=message, percent=0)
+                last_message = message
+            if not first:
+                import time as _time
+                _time.sleep(3)
+    except Exception:
+        with _QUEUE_LOCK:
+            if job_id in _QUEUE:
+                _QUEUE.remove(job_id)
+        raise
+    with _QUEUE_LOCK:
+        _QUEUE.remove(job_id)
+        _RUNNING["job_id"] = job_id
+    try:
+        _run_pipeline_body(job_id, *args, **kwargs)
+    finally:
+        # 次に始まる回は、枠を渡す前に控える（渡した直後に順番待ちの列から消えるため）
+        next_job = (generation_board()["waiting"] or [None])[0]
+        with _QUEUE_LOCK:
+            _RUNNING["job_id"] = None
+        slot.release()
+        try:
+            _notify_job_done(job_id, next_job)
+        except Exception as e:
+            print(f"  [notify] 完了の知らせを送れませんでした: {type(e).__name__}", flush=True)
+
+
+# ====== 完了の知らせ（Chatwork） ======
+# 回が終わったら、そのチャンネルの Chatwork の部屋（channels.json の chatwork_room_id）へ知らせる。
+# 送信用の鍵は Render の環境変数 CHATWORK_API_TOKEN（無ければ知らせない）。
+PUBLIC_BASE_URL = os.environ.get("SENTENCE_PUBLIC_URL", "https://sentence.apprendre.jp").rstrip("/")
+
+
+def _job_done_message(job_id: str, state: dict, rows: list, next_job: Optional[dict]) -> str:
+    title = state.get("title") or job_id
+    creator = f"（{state['creator']}さん）" if state.get("creator") else ""
+    url = f"{PUBLIC_BASE_URL}/progress/{job_id}"
+    if state.get("status") == "completed":
+        flagged = sum(1 for r in rows if r.get("verify_issue"))
+        body = (f"[info][title]🤖 センテンスつくーる：「{title}」ができました{creator}[/title]"
+                f"画像 {state.get('generated', 0)} 枚（全 {state.get('total_sentences', 0)} 文）"
+                + (f"・要確認⚠ {flagged} 枚" if flagged else "") + f"\n{url}")
+    else:
+        body = (f"[info][title]🤖 センテンスつくーる：「{title}」が途中で止まりました{creator}[/title]"
+                f"{str(state.get('message') or '')[:120]}\n画面の「再開」から続きを作れます。\n{url}")
+    if next_job:
+        who = f"（{next_job['creator']}さん）" if next_job.get("creator") else ""
+        body += f"\n続けて順番待ちの「{next_job['title']}」{who}を始めます。"
+    return body + "[/info]"
+
+
+def _notify_job_done(job_id: str, next_job: Optional[dict] = None) -> bool:
+    token = os.environ.get("CHATWORK_API_TOKEN", "").strip()
+    state = _get_job_state(job_id)
+    room = str((get_channel(state.get("channel_id", "")).get("defaults") or {}).get("chatwork_room_id") or "")
+    if not token or not room.isdigit() or state.get("status") not in ("completed", "error"):
+        return False
+    rows = load_json(OUTPUT_DIR / job_id / "rows_progress.json", {"rows": []}).get("rows", [])
+    body = _job_done_message(job_id, state, rows, next_job)
+    import urllib.parse
+    import urllib.request
+    req = urllib.request.Request(
+        f"https://api.chatwork.com/v2/rooms/{room}/messages",
+        data=urllib.parse.urlencode({"body": body}).encode("utf-8"),
+        headers={"X-ChatWorkToken": token}, method="POST")
+    with urllib.request.urlopen(req, timeout=15) as res:
+        return 200 <= res.status < 300
+
+def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str,
                          concurrency: int, provider: str, openai_quality: str,
                          skip_decorative: bool, style_preset: str,
                          web_image_count: int, max_diagrams: int, route_mode: str,
@@ -503,6 +624,7 @@ def index():
         openai_image_models=[{"id": m, "label": l} for m, l in OPENAI_IMAGE_MODEL_CHOICES],
         past_jobs=past_jobs[:30],
         channels=usable or channels,
+        board=generation_board(),
         has_anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
         has_gemini=bool(os.environ.get("GEMINI_API_KEY")),
         has_openai=bool(os.environ.get("OPENAI_API_KEY")),
@@ -1163,6 +1285,7 @@ def start_job():
         verify_diagrams=verify_diagrams,
         title_override=title_override,
         fact_context=fact_context,
+        creator=(request.form.get("creator") or "").strip()[:20],
     )
 
     thread = threading.Thread(
