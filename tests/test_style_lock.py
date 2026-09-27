@@ -117,9 +117,13 @@ def test_generator_applies_lock_to_every_image_and_keeps_character_reference(tmp
     assert prof_ref is True
     assert prof_prompt.startswith(generator._CHARACTER_LOCK_INSTRUCTION)
     assert "CHANNEL ART STYLE" in prof_prompt
+    # 2026-09-27: 先生が文面に無い画像も、世界観ロック中は画風の参照として基準画像を渡す
+    # （簡易の指示文で描かれた先生が別人になったため）。先生は必要なときだけ描かせる
     for name in ("2.png", "3.png"):
         prompt, ref = by_name[name]
-        assert prompt.startswith("CHANNEL ART STYLE") and ref is False
+        assert ref is True
+        assert prompt.startswith(generator._STYLE_REFERENCE_INSTRUCTION)
+        assert "CHANNEL ART STYLE" in prompt
 
 
 def _pipe(tmp_path, **kw):

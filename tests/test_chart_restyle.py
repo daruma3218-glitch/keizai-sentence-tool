@@ -140,12 +140,29 @@ def test_generator_attaches_reference_to_diagram_with_professor(tmp_path):
         {"index": 2, "prompt": "Diagram: factory, coins and arrows only.", "type": "diagram"},
     ]
     asyncio.run(gen.generate_all(prompts, tmp_path))
-    by_prompt = {p: u for u, p in seen}
-    with_prof = next(u for u, p in seen if "professor stands" in p)
-    without = next(u for u, p in seen if "coins and arrows" in p)
-    assert with_prof is True and without is False
-    assert any("Draw him at most once" in p for u, p in seen if u)
-    assert by_prompt  # 2枚とも生成された
+    with_prof = next(p for u, p in seen if "professor stands" in p)
+    without = next((u, p) for u, p in seen if "coins and arrows" in p)
+    assert "Draw him at most once" in with_prof
+    # 先生が文面に無い図解（簡易の指示文を含む）も、世界観ロック中は画風の参照として渡す
+    assert without[0] is True and "STYLE REFERENCE" in without[1]
+    assert all("half-lidded" in p for u, p in seen)
+
+
+def test_no_reference_without_style_lock(tmp_path):
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(_png_bytes())
+    gen = ParallelImageGenerator(provider=PROVIDER_GPT_IMAGE, openai_api_key="sk-test",
+                                 reference_image_path=str(ref), style_lock_text="")
+    seen = []
+
+    def fake_dispatch(full_prompt, output_path, use_reference=False, *args, **kw):
+        seen.append(use_reference)
+        Path(output_path).write_bytes(_png_bytes())
+        return True, ""
+
+    gen._dispatch_sync_generate = fake_dispatch
+    asyncio.run(gen.generate_all([{"index": 1, "prompt": "a factory", "type": "diagram"}], tmp_path))
+    assert seen == [False]
 
 
 def test_restyle_keeps_code_chart_when_labels_are_reworded(tmp_path):

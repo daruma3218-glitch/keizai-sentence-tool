@@ -204,7 +204,8 @@ _CHARACTER_LOCK_INSTRUCTION = (
     "Reproduce the SAME person — identical face shape, hairstyle, glasses, skin tone and outfit "
     "(gray tweed blazer over a dark red V-neck sweater) — and the SAME simple, clean, "
     "thick-outline FLAT CARTOON tone, line weight and flat coloring as the reference image. "
-    "Only change the pose, expression and background to fit the new scene described below. "
+    "Only change the pose, gesture and background to fit the new scene described below. "
+    "Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
     "Do NOT redesign the character, and do NOT switch to a detailed, anime, or realistic style."
 )
 
@@ -239,8 +240,21 @@ _CHARACTER_LOCK_IN_DIAGRAM = (
     "professor appears in this image, draw him as that SAME person — identical face shape, "
     "voluminous wavy dark-brown hair, thin dark glasses, calm half-lidded eyes, closed-mouth gentle "
     "smile, gray tweed blazer over a wine-red V-neck sweater — in the same flat cartoon style, as a "
-    "presenter beside the diagram. Draw him at most once. Keep the diagram itself as the main "
+    "presenter beside the diagram. Draw him at most once. Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    "Keep the diagram itself as the main "
     "subject; do not turn the image into a portrait and do not copy the reference background."
+)
+
+# 先生が文面に出てこない画像にも、世界観ロック中は参照画像を渡す（2026-09-27）。
+# 指示文を作るAIが時間切れで簡易の指示文（先生の言葉なし）になった回で、世界観の設定文だけを
+# 頼りに描かれた先生が別人になった（№3 など）。先生は必要なときだけ・出すなら同じ人物に。
+_STYLE_REFERENCE_INSTRUCTION = (
+    "STYLE REFERENCE: The attached image is this series' style reference and shows its only "
+    "recurring character, the professor. Match its flat cartoon style, line weight and colors. "
+    "Draw the professor only if this scene needs someone to explain or react; if you draw him, he "
+    "must be this exact person (identical face, voluminous wavy dark-brown hair, thin dark glasses, "
+    "gray tweed blazer over a wine-red V-neck sweater). Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    "Do not copy the reference background or pose."
 )
 
 # 世界観ロック中に「先生が描かれる画像」を文面から見分ける。プロンプト作成AIの character 旗は
@@ -762,12 +776,19 @@ class ParallelImageGenerator:
                                              style_preset=row_style, style_lock=self.style_lock_text)
             # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
-            use_reference = self.reference_bytes is not None and (
-                bool(prompt_entry.get("character"))
-                or depicts_recurring_character(prompt_text, prompt_type, self.style_lock_text))
+            shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(
+                prompt_text, prompt_type, self.style_lock_text)
+            # 世界観ロック中は、先生が文面に出てこない画像（簡易の指示文を含む）にも参照画像を渡す
+            style_reference_only = (not shows_professor and bool(self.style_lock_text)
+                                    and prompt_type in STYLE_LOCK_TYPES)
+            use_reference = self.reference_bytes is not None and (shows_professor or style_reference_only)
             if use_reference:
-                lock = (_CHARACTER_LOCK_INSTRUCTION if prompt_type == "illustration"
-                        else _CHARACTER_LOCK_IN_DIAGRAM)
+                if style_reference_only:
+                    lock = _STYLE_REFERENCE_INSTRUCTION
+                elif prompt_type == "illustration":
+                    lock = _CHARACTER_LOCK_INSTRUCTION
+                else:
+                    lock = _CHARACTER_LOCK_IN_DIAGRAM
                 full_prompt = lock + "\n\n" + full_prompt
 
             # v3 Step6: エンティティ follower の一貫性ロック（キャラ固定シーンとは排他）。
