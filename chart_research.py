@@ -45,6 +45,9 @@ QUERY_TEMPLATE = """次は動画「{title}」の原稿のうち、数字がグ�
 
 決まり:
 - 数字は出典で確認できたものだけ。補間・推計・予測は入れない。確認できない時点は入れない
+- 比べる条件（同じ商品・同じ規格・同じ集計方法）がそろった値だけを1本の線・1組の棒にする。
+  規格やサイズが途中で変わる場合は、変わったことが分かる見出しにし、as_of に条件を書く
+- source_note は画面に出す短い出典名だけ（URL・リンクの書式は入れない）。URL は source_url に
 - 原稿の文に出てくる数字（量・金額・年）は必ずグラフに含める（原稿と食い違う出典なら、その件は返さない）
 - 折れ線（line）は時点の推移に使い 3〜30 時点。label は「1984」「2025年7月」のような時点
 - 棒（bar）は同じ時点の比較に使い 2〜8 件
@@ -71,6 +74,18 @@ def _numbers(text: str) -> list:
     return out
 
 
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)?")
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def clean_source_note(note: str) -> str:
+    """画面に出す出典名から、リンクの書式と URL を取り除く（9/27 試験で「[NewSphere…](https://…」が入った）。"""
+    text = _MD_LINK_RE.sub(lambda m: m.group(1), str(note or ""))
+    text = _URL_RE.sub("", text)
+    text = re.sub(r"[\[(（]\s*$", "", text).lstrip("[").strip(" 　,、・/|")  # 閉じていない括弧だけ落とす
+    return re.sub(r"\s{2,}", " ", text)[:40]
+
+
 def validate_research(item: dict, sentences: str) -> tuple:
     """(使える chart_spec, 使えない理由)。コードで出典・形・原稿の数字との一致を確かめる。"""
     if not isinstance(item, dict):
@@ -92,7 +107,7 @@ def validate_research(item: dict, sentences: str) -> tuple:
     if ctype == "bar" and not 2 <= len(points) <= 8:
         return None, f"棒の件数が {len(points)}（2〜8）"
     url = str(item.get("source_url") or "").strip()
-    note = str(item.get("source_note") or "").strip()
+    note = clean_source_note(item.get("source_note"))
     if not re.match(r"https?://[^\s]+\.[^\s]+", url) or not note:
         return None, "出典（URL・出典名）が無い"
     values = {round(v, 6) for _, v in points}
@@ -107,7 +122,7 @@ def validate_research(item: dict, sentences: str) -> tuple:
         "title": str(item.get("title") or "").strip()[:30],
         "unit": str(item.get("unit") or "").strip()[:10],
         "series": [{"label": label, "value": v} for label, v in points],
-        "source_note": note[:40],
+        "source_note": note,
         "show_change": ctype == "line",
         "research": {"source_url": url, "as_of": str(item.get("as_of") or "")[:60]},
     }

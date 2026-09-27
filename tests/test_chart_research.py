@@ -1,7 +1,7 @@
 """出典のある実データのグラフ（chart_research.py・2026-09-27 社長「それで進めて」）。"""
 import json
 
-from chart_research import pick_target_no, research_charts, validate_research
+from chart_research import clean_source_note, pick_target_no, research_charts, validate_research
 from renderer import _time_positions, render_chart
 
 SERIES = [{"label": "1984", "value": 100}, {"label": "1995", "value": 90},
@@ -74,3 +74,9 @@ def test_year_labels_are_placed_by_real_time(tmp_path):
             "source_note": "試験", "show_change": True}
     assert render_chart(spec, tmp_path / "line.png")
     assert (tmp_path / "line.png").stat().st_size > 10_000
+
+
+def test_source_note_drops_link_markup_and_urls():
+    assert clean_source_note("[NewSphere（カルビー取材）](https://newsphere.jp") == "NewSphere（カルビー取材）"
+    assert clean_source_note("カルビー公式 https://www.calbee.co.jp/") == "カルビー公式"
+    assert clean_source_note("総務省 家計調査") == "総務省 家計調査"
