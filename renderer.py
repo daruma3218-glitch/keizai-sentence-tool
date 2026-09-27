@@ -11,6 +11,7 @@ LLM は一切使わない。
 """
 
 import math
+import re
 import os
 import threading
 from pathlib import Path
@@ -232,6 +233,24 @@ def _draw_bar(fig, spec: dict, theme: dict):
     ax.set_ylim(0, top * 1.18)
 
 
+_YEAR_LABEL_RE = re.compile(r"^\s*(\d{4})\s*(?:年)?\s*(?:(\d{1,2})\s*月)?\s*$")
+
+
+def _time_positions(labels):
+    """ラベルがすべて年（「1984」「2025年7月」）なら実際の時間の位置を返す。違えば None（等間隔）。
+
+    素材レポートと同じく、期間が違うのに等間隔に並べない（2026-09-27 実データのグラフ）。
+    """
+    out = []
+    for label in labels:
+        m = _YEAR_LABEL_RE.match(str(label))
+        if not m:
+            return None
+        year, month = int(m.group(1)), int(m.group(2) or 1)
+        out.append(year + (month - 1) / 12)
+    return out if len(set(out)) == len(out) else None
+
+
 def _draw_line(fig, spec: dict, theme: dict):
     data = _num_series(spec)
     if not data:
@@ -241,11 +260,32 @@ def _draw_line(fig, spec: dict, theme: dict):
     unit = spec.get("unit", "")
     ax = fig.add_axes([0.10, 0.13, 0.84, 0.68])
     ax.set_facecolor(theme["bg"])
-    ax.plot(range(len(values)), values, color=theme["main"], linewidth=4,
+    xs = _time_positions(labels) or list(range(len(values)))
+    ax.plot(xs, values, color=theme["main"], linewidth=4,
             marker="o", markersize=12, markerfacecolor=theme["accent"],
             markeredgecolor="white", markeredgewidth=2, zorder=Z_LINE)
-    ax.set_xticks(range(len(values)))
-    ax.set_xticklabels(labels, fontsize=26, color=theme["text"])
+    # 軸の目盛り: 点が多いときは間引く（最初と最後は必ず出す）
+    step = max(1, math.ceil(len(xs) / 8))
+    tick_idx = sorted(set(list(range(0, len(xs), step)) + [len(xs) - 1]))
+    # 時間の間隔が近い目盛りは文字が重なるので、最後の時点を残して手前を落とす（例: 2022 と 2025年7月）。
+    # 文字幅（26pt: 数字 約18px・漢字 約30px・余白40px）と軸の長さ（約1610px）から必要な間隔を見積もる
+    span = (max(xs) - min(xs)) or 1
+    px_per_unit = 1610 / (span * 1.1)
+
+    def _label_px(text):
+        return sum(18 if ch.isascii() else 30 for ch in str(text))
+
+    kept = []
+    for i in tick_idx:
+        need = ((_label_px(labels[kept[-1]]) + _label_px(labels[i])) / 2 + 40) / px_per_unit if kept else 0
+        if kept and xs[i] - xs[kept[-1]] < need:
+            if i == len(xs) - 1:
+                kept[-1] = i
+            continue
+        kept.append(i)
+    tick_idx = kept
+    ax.set_xticks([xs[i] for i in tick_idx])
+    ax.set_xticklabels([labels[i] for i in tick_idx], fontsize=26, color=theme["text"])
     ax.tick_params(axis="y", labelsize=22, colors="#6B7280")
     ax.grid(axis="y", color=theme["grid"], linewidth=1, zorder=Z_GRID)
     for sp in ("top", "right"):
@@ -253,13 +293,27 @@ def _draw_line(fig, spec: dict, theme: dict):
     for sp in ("bottom", "left"):
         ax.spines[sp].set_color(theme["grid"])
     rng = (max(values) - min(values)) or max(abs(max(values)), 1)
-    for i, v in enumerate(values):
-        ax.text(i, v + rng * 0.04, _fmt_val(v, unit), ha="center", va="bottom",
+    # 値の吹き出し: 8点以下は全部、多いときは最初・最後・最大・最小だけ（読める数に絞る）
+    if len(values) <= 8:
+        label_idx = range(len(values))
+    else:
+        label_idx = sorted({0, len(values) - 1, values.index(max(values)), values.index(min(values))})
+    for i in label_idx:
+        ax.text(xs[i], values[i] + rng * 0.04, _fmt_val(values[i], unit), ha="center", va="bottom",
                 fontsize=24, fontweight="bold", color=theme["text"],
                 zorder=Z_TEXT,
                 bbox=dict(boxstyle="round,pad=0.10", facecolor=theme["bg"],
                           edgecolor="none", alpha=0.82))
-    ax.set_ylim(min(values) - rng * 0.12, max(values) + rng * 0.20)
+    if spec.get("show_change") and len(values) >= 2 and values[0]:
+        # 始点の値の点線と、終点の増減（▲▼%）。下がったら赤・上がったら青（素材レポートと同じ）
+        ax.axhline(values[0], color="#9CA3AF", linewidth=2, linestyle=(0, (6, 5)), zorder=Z_GRID)
+        change = (values[-1] - values[0]) / abs(values[0]) * 100
+        mark, color = ("▼", "#DC2626") if change < 0 else ("▲", "#1D4ED8")
+        ax.text(xs[-1], values[-1] - rng * 0.06, f"{mark}{abs(change):.0f}%", ha="center", va="top",
+                fontsize=30, fontweight="bold", color=color, zorder=Z_TEXT)
+    pad = (max(xs) - min(xs)) * 0.05 or 0.5
+    ax.set_xlim(min(xs) - pad, max(xs) + pad)
+    ax.set_ylim(min(values) - rng * 0.22, max(values) + rng * 0.20)
 
 
 def _draw_pie(fig, spec: dict, theme: dict):

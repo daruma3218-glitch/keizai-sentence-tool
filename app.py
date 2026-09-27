@@ -390,6 +390,8 @@ def _run_pipeline_thread(job_id: str, manuscript_text: str, user_instructions: s
             route_mode=route_mode,
             chart_engine=defaults.get("chart_engine", "ai"),
             chart_ai_restyle=bool(defaults.get("chart_ai_restyle", False)),
+            chart_research=bool(defaults.get("chart_research", False)),
+            chart_research_max=int(defaults.get("chart_research_max", 5) or 0),
             allow_charts=defaults.get("allow_charts", True),
             map_engine=defaults.get("map_engine", "ai"),
             allow_maps=defaults.get("allow_maps", False),

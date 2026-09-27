@@ -60,6 +60,8 @@ class SentencePipeline:
         route_mode: str = "auto",
         chart_engine: str = "ai",          # v3: render で chart を matplotlib 描画
         chart_ai_restyle: bool = False,    # render したグラフを数字そのままで番組の絵柄に描き直す
+        chart_research: bool = False,      # 数字カードの文を、出典のある実データの折れ線・棒にする
+        chart_research_max: int = 5,       # 1回の生成で実データを調べる上限（PC経由のAIを取り合わない）
         allow_charts: bool = True,         # False: chart route を diagram に変換する
         map_engine: str = "ai",            # v3: render で map を GeoJSON 描画
         allow_maps: bool = True,           # False: map route を地理関係の図解に変換する
@@ -114,6 +116,8 @@ class SentencePipeline:
         self.route_mode = route_mode if route_mode in VALID_ROUTE_MODES else "auto"
         self.chart_engine = (chart_engine or "ai").strip()  # "render" で matplotlib 描画
         self.chart_ai_restyle = bool(chart_ai_restyle)
+        self.chart_research = bool(chart_research)
+        self.chart_research_max = max(0, min(int(chart_research_max or 0), 10))
         self.allow_charts = bool(allow_charts)
         self.map_engine = (map_engine or "ai").strip()       # "render" で GeoJSON 描画
         self.allow_maps = bool(allow_maps)
@@ -792,6 +796,7 @@ class SentencePipeline:
         total_sentences = split_result["total_sentences"]
         # v3 Step7: final.json の tentative_title があれば最優先（無ければ分解で推定）
         title = self.title_override or analysis.get("title", "無題")
+        self._video_title = title  # グラフの実データ調査で動画の題を渡す
 
         # 上限を超える場合は、v2 は全文均等配置、v3(beat_mode) は重要度配分で間引く。
         if total_sentences > self.max_diagrams:
@@ -950,6 +955,8 @@ class SentencePipeline:
                             r["route"] = "diagram"  # 降格（chart→diagram, engine:ai）
                             r["engine"] = "ai"
                             self._update_row(r["no"], route="diagram")
+                    if to_render and self.chart_research and self.chart_research_max:
+                        self._research_charts(to_render)
                     if to_render:
                         self._render_charts(to_render)
             except Exception as e:
@@ -1941,6 +1948,26 @@ class SentencePipeline:
         self._log("renderer", f"chart レンダリング完了: {done} 枚（決定論・文字化けゼロ）")
         if self.chart_ai_restyle and done:
             self._restyle_charts([r for r in render_rows if r.get("engine") == "render"])
+
+    def _research_charts(self, rows):
+        """数字カードになる文から上限 chart_research_max 件を選び、出典のある実データのグラフにする。
+
+        大人の学び直しTVの素材レポートと同じ考え方（chart_research.py）。調べられなかった・原稿の数字が
+        入らない・出典が無いものは、今の数字カードのまま。失敗しても生成は止めない。
+        """
+        try:
+            from chart_research import research_charts
+            self._progress(2, "グラフの実データを調べています...", 21)
+            found = research_charts(rows, title=getattr(self, "_video_title", ""),
+                                    max_n=self.chart_research_max, log=self._log)
+        except Exception as e:
+            self._log("chart_research", f"実データの調査を省略（{str(e)[:80]}）。数字カードのまま")
+            return
+        for r in rows:
+            spec = found.get(r["no"])
+            if spec:
+                r["chart_spec"] = spec
+                self._update_row(r["no"], chart_research=spec.get("research"))
 
     def _restyle_charts(self, rows):
         """コードで描いたグラフを、数字そのままで番組の絵柄に描き直す（AI清書・chart_restyle.py）。
