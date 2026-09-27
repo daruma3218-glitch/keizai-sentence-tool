@@ -12,6 +12,7 @@ LLM は一切使わない。
 
 import math
 import re
+import sys
 import os
 import threading
 from pathlib import Path
@@ -457,7 +458,32 @@ def render_chart(spec: dict, output_path, theme: dict = None) -> bool:
     （呼び出し側で engine:ai の従来ルートへ降格すること）。
     """
     with _RENDER_LOCK:
-        return _render_chart_locked(spec, output_path, theme)
+        return _in_fresh_thread(_render_chart_locked, spec, output_path, theme)
+
+
+def _stack_depth() -> int:
+    depth, frame = 0, sys._getframe()
+    while frame is not None:
+        depth, frame = depth + 1, frame.f_back
+    return depth
+
+
+def _in_fresh_thread(fn, *args):
+    """描画を新しいスレッドで行い、結果を返す（呼び出し元の積み上がった呼び出しの深さを持ち込まない）。
+
+    2026-09-27 本番で、同じグラフが手元では描けるのに「maximum recursion depth exceeded」で
+    落ちた（実データのグラフの折れ線・利益の棒）。呼び出し元（生成の流れ）の深さに左右されない
+    よう、描画は毎回まっさらなスレッドで行う。_RENDER_LOCK は呼び出し側が持ったまま待つ。
+    """
+    box = {}
+
+    def run():
+        box["result"] = fn(*args)
+
+    worker = threading.Thread(target=run, name="renderer", daemon=True)
+    worker.start()
+    worker.join()
+    return box.get("result", False)
 
 
 def _render_chart_locked(spec: dict, output_path, theme: dict = None) -> bool:
@@ -477,6 +503,12 @@ def _render_chart_locked(spec: dict, output_path, theme: dict = None) -> bool:
         return True
     except Exception as e:
         print(f"  [renderer ERROR] chart_type={ctype}: {str(e)[:140]}", flush=True)
+        if isinstance(e, RecursionError):
+            # どこで深くなったかを残す（本番だけで起きるため）
+            import traceback
+            names = [f.name for f in traceback.extract_tb(e.__traceback__)]
+            print(f"  [renderer ERROR] depth={_stack_depth()} limit={sys.getrecursionlimit()} "
+                  f"frames={len(names)} first={names[:6]} last={names[-8:]}", flush=True)
         return False
     finally:
         if fig is not None:
@@ -804,7 +836,7 @@ def render_map(spec: dict, output_path, theme: dict = None) -> bool:
     route を illustration(engine:ai) へ降格すること）。
     """
     with _RENDER_LOCK:
-        return _render_map_locked(spec, output_path, theme)
+        return _in_fresh_thread(_render_map_locked, spec, output_path, theme)
 
 
 def _render_map_locked(spec: dict, output_path, theme: dict = None) -> bool:
