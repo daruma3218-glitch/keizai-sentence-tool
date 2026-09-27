@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from deploy_guard import CONTROL_PATH, DeployGuard, signature
+from deploy_guard import CONTROL_PATH, DeployGuard, interrupt_orphaned_jobs, signature
 
 SHA = "a" * 40
 
@@ -164,3 +164,18 @@ def test_hook_accepts_started_or_queued_without_ref(monkeypatch, status):
     call_hook("https://api.render.com/deploy/srv-test?key=fixture")
     with pytest.raises(ValueError):
         call_hook("https://api.render.com/deploy/srv-test?key=fixture&ref=" + SHA)
+
+
+def test_jobs_left_running_by_a_stopped_process_are_interrupted_at_startup(tmp_path):
+    # 9/27: メモリ不足で落ちた回が running のまま残り、更新も新しい回も止まった
+    for name, status in [("a", "running"), ("b", "completed"), ("c", "queued"), ("d", "error")]:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "job.json").write_text(json.dumps({"status": status, "title": name}),
+                                                   encoding="utf-8")
+    (tmp_path / "e").mkdir()
+    (tmp_path / "e" / "job.json").write_text("{broken", encoding="utf-8")
+    assert interrupt_orphaned_jobs(tmp_path, clock=lambda: 1000) == ["a", "c"]
+    a = json.loads((tmp_path / "a" / "job.json").read_text(encoding="utf-8"))
+    assert a["status"] == "interrupted" and a["title"] == "a" and "再開" in a["message"]
+    assert json.loads((tmp_path / "b" / "job.json").read_text(encoding="utf-8"))["status"] == "completed"
+    assert (tmp_path / "e" / "job.json").read_text(encoding="utf-8") == "{broken"

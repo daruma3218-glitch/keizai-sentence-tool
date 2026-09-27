@@ -193,7 +193,45 @@ class DeployGuard:
         return respond()
 
 
+def interrupt_orphaned_jobs(output_dir, clock=time.time):
+    """起動した時点で「生成中」のまま残っている回を「中断」にする。戻り値は中断にした回のID。
+
+    この本番は1プロセス（Gunicorn 1 worker）で、更新は生成が終わってから入れ替わる。起動時点で
+    終わっていない回は、前のプロセスが落ちて（メモリ不足など）止まったもので、もう進まない。
+    残すと jobs_busy が永久に「生成中」と答え、更新も新しい回も止まる（2026-09-27 18:27〜19:55 の実障害。
+    ルノアールの回が running のまま残り、再開も新しい回も 503 になった）。中断にすれば画面から再開できる。
+    """
+    from datetime import datetime
+    stamp = datetime.fromtimestamp(clock()).isoformat(timespec="seconds")
+    changed = []
+    for directory in sorted(Path(output_dir).iterdir()):
+        path = directory / "job.json"
+        if not directory.is_dir() or not path.exists():
+            continue
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # 読めない回は jobs_busy が安全側（生成中）に倒す。人が確認する
+        if not isinstance(state, dict) or state.get("status") in TERMINAL:
+            continue
+        state.update(status="interrupted", updated_at=stamp,
+                     message="サーバーの再起動で中断しました。「再開」で続きから作れます。")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        changed.append(directory.name)
+    return changed
+
+
 def install(module, root):
+    try:
+        orphaned = interrupt_orphaned_jobs(module.OUTPUT_DIR)
+        if orphaned:
+            logging.warning("Marked jobs left running by a stopped process as interrupted: %s",
+                            ", ".join(orphaned))
+    except Exception:
+        logging.error("Orphaned job check failed; jobs left running still block deployments")
+
     def jobs_busy():
         with module._jobs_lock:
             if any(state.get("status") not in TERMINAL for state in module._jobs.values()):
