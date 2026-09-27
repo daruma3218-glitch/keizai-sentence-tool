@@ -99,3 +99,11 @@ def test_sources_in_other_field_names_are_accepted():
     item2["source_note"] = "[カルビー公式](https://www.calbee.co.jp/)"
     spec2, _ = validate_research(item2, ROWS[2]["sentence"])
     assert spec2["research"]["source_url"] == "https://www.calbee.co.jp/" and spec2["source_note"] == "カルビー公式"
+
+
+def test_markdown_link_in_the_url_field_is_accepted():
+    # 9/27 本番: source_url に「[記事名](URL)」がそのまま入っていた
+    item = {**ITEM, "source_url": "[NewSphereのカルビー取材記事](https://newsphere.jp/popular/20241203-04/)",
+            "source_note": "NewSphere・カルビー公式"}
+    spec, why = validate_research(item, ROWS[2]["sentence"])
+    assert why == "" and spec["research"]["source_url"] == "https://newsphere.jp/popular/20241203-04/"

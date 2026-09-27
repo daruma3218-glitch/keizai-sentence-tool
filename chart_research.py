@@ -112,6 +112,9 @@ def _source_of(item: dict) -> tuple:
                 url = m.group(0).rstrip(".,;:)」）]")
                 break
     note = next((clean_source_note(t) for t in texts if clean_source_note(t)), "")
+    # URL の欄にリンクの書式（[記事名](https://…)）が入ることがある（9/27 本番）→ URL 部分だけにする
+    m = _URL_RE.search(url or "")
+    url = m.group(0).rstrip(".,;:)」）]") if m else ""
     if url and not note:
         note = re.sub(r"^https?://(www\.)?", "", url).split("/")[0][:40]
     return url, note
