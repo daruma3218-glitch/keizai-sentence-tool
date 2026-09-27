@@ -330,11 +330,48 @@
       return normal + asDiagram;
     }
 
+    // グラフの版（2026-09-28 社長「データはそのままのデータパターンと、先生がスクリーンなどで紹介する
+    // パターンをつかえるように」）。使っていない方の版は ZIP の「グラフの別版」フォルダにも入る
+    function chartVariantKey(row) {
+      const vs = row.chart_variants || [];
+      if (row.route !== 'chart' || row.engine !== 'render' || vs.length < 2) return '';
+      return vs.join(',') + ':' + (row.chart_variant || 'plain');
+    }
+
+    function chartVariantHtml(row) {
+      if (!chartVariantKey(row)) return '';
+      const current = row.chart_variant || 'plain';
+      const labels = {plain: 'データのみ', screen: '先生が紹介'};
+      const parts = (row.chart_variants || []).filter(v => labels[v]).map(v => v === current
+        ? `<span class="text-[10px] font-bold text-gray-800">${labels[v]}</span>`
+        : `<button onclick='useChartVariant(${row.no}, "${v}", event)' class="text-[10px] text-indigo-600 hover:text-indigo-800 hover:underline">${labels[v]}</button>`);
+      return `<div class="chart-variant mt-0.5 text-gray-300" title="グラフの版を入れ替える">${parts.join(' ｜ ')}</div>`;
+    }
+
+    async function useChartVariant(no, variant, ev) {
+      if (ev) ev.stopPropagation();
+      try {
+        const res = await fetch(`/api/chart_variant/${JOB_ID}/${no}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({variant}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) { alert(data.error || '入れ替えに失敗しました'); return; }
+        const row = (lastRows || []).find(r => r.no === no);
+        const tr = document.querySelector(`tr[data-no="${no}"]`);
+        if (row && tr) {
+          row.chart_variant = variant;
+          tr.setAttribute('data-chart-variant', chartVariantKey(row));
+          const cell = tr.querySelector('.thumb-cell');
+          if (cell) cell.innerHTML = thumbCellHtml(row);
+        }
+      } catch (e) { alert('入れ替えに失敗しました'); }
+    }
+
     function thumbCellHtml(row) {
       const status = row.status || 'pending';
       const filename = row.filename;
       if (status === 'ok' && filename) {
-        return `<img src="/results/${JOB_ID}/images/${filename}?t=${Date.now()}" class="thumb-img pop-in" onclick='openModal(${row.no})' alt="" loading="lazy"><br>${regenBtn(row.no, row.route || '')}`;
+        return `<img src="/results/${JOB_ID}/images/${filename}?t=${Date.now()}" class="thumb-img pop-in" onclick='openModal(${row.no})' alt="" loading="lazy">${chartVariantHtml(row)}<br>${regenBtn(row.no, row.route || '')}`;
       } else if (status === 'generating') {
         return `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto">
                   <div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div>
@@ -573,7 +610,10 @@
         const nextIssue = rowHasIssue(row) ? '1' : '0';
         applyRowAttrs(tr, row);
 
-        if (prevStatus !== row.status) {
+        const prevVariant = tr.getAttribute('data-chart-variant') || '';
+        const nextVariant = chartVariantKey(row);
+        if (prevStatus !== row.status || prevVariant !== nextVariant) {
+          tr.setAttribute('data-chart-variant', nextVariant);
           tr.setAttribute('data-status', row.status || 'pending');
           tr.setAttribute('data-filename', row.filename || '');
           tr.setAttribute('data-error', row.error || '');
@@ -617,6 +657,7 @@
             data-error="${escapeHtml(attrs.error)}"
             data-web-url="${escapeHtml(attrs.webUrl)}"
             data-route="${escapeHtml(attrs.route)}"
+            data-chart-variant="${escapeHtml(chartVariantKey(row))}"
             data-display="${escapeHtml(attrs.display)}"
             data-issue="${attrs.issue}"
             data-blueprint='${attrs.blueprint.replace(/'/g, "&#039;")}'

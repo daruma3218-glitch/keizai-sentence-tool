@@ -198,6 +198,14 @@ VALID_PROVIDERS = (PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE)
 
 # 参照画像（キャラ固定）を使うときにプロンプト先頭へ付ける指示。
 # 参照画像の「人物」と「絵柄トーン」を新しいシーンでも忠実に再現させる。
+# 先生以外の人物の目（2026-09-28 新居先生「他のキャラクターの目が違和感」: №3 の店員と客、№4 の
+# 人物が先生と同じ半目になっていた。参照画像の先生の目を全員に写していた）。半目は先生だけのもの。
+_OTHER_PEOPLE_EYES = (
+    "The half-lidded eyes and closed-mouth smile belong ONLY to the professor: draw every other "
+    "person with ordinary open eyes (simple dark dots or small ovals, no heavy upper lids) and a "
+    "natural expression that fits the scene. "
+)
+
 _CHARACTER_LOCK_INSTRUCTION = (
     "CHARACTER & STYLE REFERENCE: The attached reference image shows the EXACT recurring "
     "character (the teacher / professor) and the EXACT art style for this video series. "
@@ -206,6 +214,7 @@ _CHARACTER_LOCK_INSTRUCTION = (
     "thick-outline FLAT CARTOON tone, line weight and flat coloring as the reference image. "
     "Only change the pose, gesture and background to fit the new scene described below. "
     "Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    + _OTHER_PEOPLE_EYES +
     "Do NOT redesign the character, and do NOT switch to a detailed, anime, or realistic style."
 )
 
@@ -241,6 +250,7 @@ _CHARACTER_LOCK_IN_DIAGRAM = (
     "voluminous wavy dark-brown hair, thin dark glasses, calm half-lidded eyes, closed-mouth gentle "
     "smile, gray tweed blazer over a wine-red V-neck sweater — in the same flat cartoon style, as a "
     "presenter beside the diagram. Draw him at most once. Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    + _OTHER_PEOPLE_EYES +
     "Keep the diagram itself as the main "
     "subject; do not turn the image into a portrait and do not copy the reference background."
 )
@@ -254,6 +264,7 @@ _STYLE_REFERENCE_INSTRUCTION = (
     "Draw the professor only if this scene needs someone to explain or react; if you draw him, he "
     "must be this exact person (identical face, voluminous wavy dark-brown hair, thin dark glasses, "
     "gray tweed blazer over a wine-red V-neck sweater). Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    + _OTHER_PEOPLE_EYES +
     "Do not copy the reference background or pose."
 )
 
@@ -266,6 +277,48 @@ def depicts_recurring_character(prompt_text: str, prompt_type: str, style_lock_t
     """世界観ロック中のチャンネルで、場面の文に先生が出てくるか（種類は問わない）。"""
     return bool((style_lock_text or "").strip()) and prompt_type in STYLE_LOCK_TYPES \
         and bool(_PROFESSOR_MENTION_RE.search(prompt_text or ""))
+
+
+# 背景の色を段落ごとに変える（2026-09-28 新居先生「背景が全部似たような色」）。
+# 世界観の設定文の「BACKDROP COLORS: 色 | 色 | ...」の行から、段落（章・ブロック）ごとに順番に1色を選び、
+# その行を「この画像の背景色」の指示に置き換える。同じ段落の場面は同じ色（同じ店が続いても
+# 壁の色が変わらない）、次の段落で色が変わる。番号で決まるので、作り直しても同じ色になる。
+_BACKDROP_LINE_RE = re.compile(r"^BACKDROP COLORS:(.*)$", re.MULTILINE)
+
+
+def backdrop_key(entry: dict) -> int:
+    """背景の色を選ぶ番号。章・ブロックが分かれば段落ごと、無ければ画像の番号。"""
+    ci, bi = entry.get("chapter_index"), entry.get("block_index")
+    try:
+        if ci is not None and bi is not None:
+            return int(ci) * 1000 + int(bi)
+        return int(entry.get("index") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0) -> str:
+    """設定文の BACKDROP COLORS の行を、この画像の背景色の指示に置き換える（行が無ければそのまま）。"""
+    m = _BACKDROP_LINE_RE.search(lock_text or "")
+    if not m:
+        return lock_text
+    tones = [t.strip() for t in m.group(1).split("|") if t.strip()]
+    if not tones:
+        return (lock_text[:m.start()] + lock_text[m.end():]).strip()
+    tone = tones[int(key or 0) % len(tones)]
+    if prompt_type in ("diagram", "chart"):
+        line = (f"BACKGROUND OF THIS IMAGE: a plain, very light {tone} paper background (almost white) "
+                "behind the whole board.")
+    else:
+        line = (f"BACKDROP COLOR OF THIS IMAGE: {tone}. Use calm tints of this color for the walls, sky "
+                "or plain backdrop; people and objects keep their own colors.")
+    return lock_text[:m.start()] + line + lock_text[m.end():]
+
+
+# 図解は場面のイラストと見た目を分ける（2026-09-28 新居先生「イラストと図のタッチが同じ」）。
+# 見た目の中身はチャンネルの設定文（IMAGE KINDS）に書き、ここでは「図解の画像だ」と伝える。
+_LOCKED_DIAGRAM_HINT = ("This image is a DIAGRAM: an explanation board, not a story scene "
+                        "(follow the diagram look in the channel art style). ")
 
 
 # 世界観ロック（チャンネル設定 style_lock）を掛ける画像タイプ。
@@ -287,6 +340,7 @@ def _build_full_prompt(
     allowed_terms: Optional[list] = None,
     style_preset: str = "",
     style_lock: str = "",
+    backdrop: int = 0,
 ) -> str:
     """画像生成用のシステム接頭辞を付与
 
@@ -336,7 +390,10 @@ def _build_full_prompt(
     }
     lock = (style_lock or "").strip() if prompt_type in STYLE_LOCK_TYPES else ""
     if lock:
+        lock = apply_backdrop(lock, prompt_type, backdrop)
         style = _STYLE_LOCK_SCENE_HINTS.get(prompt_type) or style_hints.get(prompt_type, "")
+        if prompt_type == "diagram":
+            style = _LOCKED_DIAGRAM_HINT + style
     else:
         style = style_hints.get(prompt_type, style_hints["illustration"])
     preset_hints = {
@@ -773,7 +830,8 @@ class ParallelImageGenerator:
             })
 
             full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
-                                             style_preset=row_style, style_lock=self.style_lock_text)
+                                             style_preset=row_style, style_lock=self.style_lock_text,
+                                             backdrop=backdrop_key(prompt_entry))
             # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(

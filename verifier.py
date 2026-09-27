@@ -57,6 +57,7 @@ STYLE_CHECK_RULES_JA = """【画風チェック（このチャンネルは世界
 - 1: 実写・写真風・3DCG
 客・店員・店主・会社員など一般の大人が同じ画風で描かれているのは問題なし。
 先生の上着のツイード柄は基準画像にもある特徴なので減点しない。
+背景の色は段落ごとに変える決まり（2026-09-28）なので、基準画像と背景の色が違っても減点しない。
 画風の違いは style_score だけで表し、ok（意味・文字）の判定理由にはしないでください。"""
 
 
@@ -148,7 +149,7 @@ def verify_image(
     if style_ref:
         image_note = "2枚目の画像は"
         style_block = (
-            f"\n\n{STYLE_CHECK_RULES_JA}\n世界観の設定文:\n---\n{style_rules.strip()[:3000]}\n---"
+            f"\n\n{STYLE_CHECK_RULES_JA}\n世界観の設定文:\n---\n{style_rules.strip()[:5000]}\n---"
         )
         style_fields = (
             ', "style_score": 1〜5 の整数（上の画風チェック）, '

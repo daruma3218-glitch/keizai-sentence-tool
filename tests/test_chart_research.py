@@ -115,8 +115,10 @@ def test_two_links_in_one_field_keep_only_the_first_url():
     assert spec["research"]["source_url"] == "https://newsphere.jp/popular/20241203-04/"
 
 
-def test_research_charts_are_not_redrawn_with_the_professor(tmp_path, monkeypatch):
-    """9/27 社長「この場合は新居先生のイラストなしで、グラフの数字などがはっきり見れるように」"""
+def test_research_charts_get_their_versions_first(tmp_path, monkeypatch):
+    """9/27 社長「この場合は新居先生のイラストなしで、グラフの数字などがはっきり見れるように」。
+    9/28 から、どのグラフも「データのみ」と「先生が紹介」の2つの版を持つ。実データのグラフは
+    「データのみ」を使い（keep_plain・test_keizai_feedback_0928）、上限に掛からないよう先に並べる。"""
     import pipeline as plmod
     import renderer
     pipe = plmod.SentencePipeline(manuscript_text="x" * 200, output_dir=tmp_path / "job",
@@ -129,4 +131,4 @@ def test_research_charts_are_not_redrawn_with_the_professor(tmp_path, monkeypatc
     rows = [{"no": 1, "engine": "render", "chart_spec": {"chart_type": "big_number", "series": [{"label": "昔", "value": 100}]}},
             {"no": 5, "engine": "render", "chart_spec": {"chart_type": "line", "series": SERIES, "research": {"source_url": "https://x.jp/"}}}]
     pipe._render_charts(rows)
-    assert seen == [1]
+    assert seen == [5, 1]

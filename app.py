@@ -1818,21 +1818,24 @@ def _forced_route_user_instructions(force_route: str, base_instructions: str = "
     return f"{base}\n\n{route_note}".strip() if base else route_note
 
 
-def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state, sentence="") -> bool:
-    """グラフ1枚の作り直しでも、チャンネル設定が chart_ai_restyle なら番組の絵柄に描き直す。"""
+def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state, sentence="") -> dict:
+    """グラフ1枚の作り直しでも、チャンネル設定が chart_ai_restyle なら「先生が紹介」の版も描く。
+
+    戻り値は rows_progress.json に足す項目（使える版・使っている版）。実データのグラフは
+    「データのみ」を使う（9/27 社長「グラフの精度は大切」）。
+    """
+    plain_only = {"chart_restyled": False, "chart_variants": ["plain"], "chart_variant": "plain"}
     if not defaults.get("chart_ai_restyle"):
-        return False
+        return plain_only
     snap = next((r for r in load_json(job_dir / "rows_progress.json", {"rows": []}).get("rows", [])
                  if r.get("no") == no), {})
-    if (snap.get("chart_spec") or {}).get("research"):
-        return False  # 実データのグラフは描き直さない（9/27 社長「グラフの精度は大切」）
     openai_key = ch_keys.get("openai") or os.environ.get("OPENAI_API_KEY", "")
     if not openai_key:
-        return False
+        return plain_only
     try:
         import openai
         from chart_restyle import restyle_chart_file
-        from generator import resolve_openai_image_model
+        from generator import resolve_openai_image_model, backdrop_key
         from utils import get_anthropic_client
         params = manifest or job_state or {}
         cref = (defaults.get("character_ref") or "").strip()
@@ -1847,10 +1850,14 @@ def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_sta
             reference_path=cref_path,
             sentence=sentence,
             log=lambda *a, **k: None,
+            keep_plain=bool((snap.get("chart_spec") or {}).get("research")),
+            backdrop=backdrop_key({**snap, "index": no}),
         )
-        return bool(res.get("restyled"))
+        return {"chart_restyled": res.get("variant") == "screen",
+                "chart_variants": res.get("variants") or ["plain"],
+                "chart_variant": res.get("variant") or "plain"}
     except Exception:
-        return False
+        return plain_only
 
 
 def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="", force_route=None, route_reason=None):
@@ -1873,11 +1880,11 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
     if saved_spec and not extra:
         try:
             if render_chart(saved_spec, out, theme=chart_theme):
-                restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state,
-                                              sentence=row.get("sentence", ""))
+                variants = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state,
+                                                      sentence=row.get("sentence", ""))
                 _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                                       route=force_route, route_reason=route_reason,
-                                      extra={"chart_restyled": restyled})
+                                      extra=variants)
                 return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
                                 "route": force_route,
                                 "ts": datetime.now().strftime("%H%M%S")})
@@ -1911,11 +1918,11 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
         return jsonify({"error": f"グラフ描画に失敗: {str(e)[:140]}"}), 500
     if not ok:
         return jsonify({"error": "グラフ描画に失敗しました"}), 500
-    restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state,
-                                              sentence=row.get("sentence", ""))
+    variants = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state,
+                                          sentence=row.get("sentence", ""))
     _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                           route=force_route, route_reason=route_reason,
-                          extra={"chart_restyled": restyled})
+                          extra=variants)
     return jsonify({"ok": True, "no": no, "filename": f"{no}.png",
                     "route": force_route, "ts": datetime.now().strftime("%H%M%S")})
 
@@ -2013,6 +2020,50 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
         },
     )
     return jsonify({"ok": True, "no": no, "filename": fname, "route": "web_photo", "ts": datetime.now().strftime("%H%M%S")})
+
+
+def _chart_variant_rows(job_dir) -> dict:
+    """版を持つグラフの行 {no: 行}（コードで描いたグラフで、2つの版があるもの）。"""
+    return {r.get("no"): r for r in load_json(job_dir / "rows_progress.json", {"rows": []}).get("rows", [])
+            if r.get("route") == "chart" and r.get("engine") == "render"
+            and len(r.get("chart_variants") or []) >= 2}
+
+
+@app.route("/api/chart_variant/<job_id>/<int:no>", methods=["POST"])
+@login_required
+def api_chart_variant(job_id, no):
+    """グラフの「データのみ」と「先生が紹介」を入れ替える（2026-09-28 社長・新居先生）。"""
+    from chart_restyle import use_chart_variant
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return jsonify({"error": "ジョブが見つかりません"}), 404
+    variant = str((request.get_json(silent=True) or {}).get("variant") or "")
+    row = _chart_variant_rows(job_dir).get(no)
+    if not row or variant not in row.get("chart_variants", []):
+        return jsonify({"error": "このグラフには選べる版がありません"}), 400
+    if not use_chart_variant(job_dir, no, variant):
+        return jsonify({"error": "版のファイルが見つかりません"}), 404
+    _update_regen_snapshot(job_dir, no, True, extra={"chart_variant": variant,
+                                                     "chart_restyled": variant == "screen"})
+    return jsonify({"ok": True, "no": no, "filename": f"{no}.png", "variant": variant,
+                    "ts": datetime.now().strftime("%H%M%S")})
+
+
+def _chart_alternate_files(result_dir, rows) -> list:
+    """ZIP に入れる「使っていない方の版」: [(ファイル, ZIP内の名前)]。"""
+    from chart_restyle import variant_path, VARIANT_LABELS
+    out = []
+    live = _chart_variant_rows(result_dir)  # 入れ替え後の状態は rows_progress.json にある
+    for listed in rows:
+        r = live.get(listed.get("no"))
+        if not r:
+            continue
+        current = r.get("chart_variant") or "plain"
+        for v in r.get("chart_variants") or []:
+            p = variant_path(result_dir, r["no"], v)
+            if v != current and v in VARIANT_LABELS and p.exists():
+                out.append((p, f"グラフの別版/{r['no']}_{VARIANT_LABELS[v]}.png"))
+    return out
 
 
 @app.route("/api/regenerate/<job_id>/<int:no>", methods=["POST"])
@@ -2232,6 +2283,9 @@ def api_regenerate(job_id, no):
         "prompt": prompt_text,
         "type": route,
         "section": target.get("chapter_title", ""),
+        # 背景の色は段落ごと（generator.backdrop_key）。作り直しても元と同じ色にする
+        "chapter_index": target.get("chapter_index"),
+        "block_index": target.get("block_index"),
         "excerpt": target.get("sentence", ""),
         "keypoint": (target.get("sentence", "") or "")[:30],
         "allowed_terms": target.get("allowed_terms", []),
@@ -2496,6 +2550,8 @@ def download_block_zip(job_id, chapter_index, block_index):
                         zf.write(img, arc)
                         image_names.append(arc)
 
+        for path, arc in _chart_alternate_files(result_dir, rows):
+            zf.write(path, arc)
         _write_rows_csv_to_zip(zf, rows, "block.csv")
         zf.writestr("block_manifest.json", json.dumps({
             "job_id": job_id,
@@ -2546,6 +2602,9 @@ def download_zip(job_id):
             for img in sorted(images_dir.iterdir()):
                 if img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
                     zf.write(img, f"images/{img.name}")
+        # グラフの使っていない方の版（データのみ／先生が紹介）も別フォルダに入れる
+        for path, arc in _chart_alternate_files(result_dir, _rows_for_download(result_dir)):
+            zf.write(path, arc)
         for extra, arc in [("result.csv", "result.csv"),
                            ("result.html", "result.html"),
                            ("sources.html", "sources.html"),

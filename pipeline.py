@@ -1639,6 +1639,8 @@ class SentencePipeline:
                         "prompt": r.get("prompt", ""),
                         "type": fallback_route,
                         "section": r.get("chapter_title", ""),
+                        "chapter_index": r.get("chapter_index"),
+                        "block_index": r.get("block_index"),
                         "excerpt": r.get("sentence", ""),
                         "block_text": r.get("block_text", ""),
                         "keypoint": r.get("sentence", "")[:30],
@@ -1953,10 +1955,13 @@ class SentencePipeline:
                 self._update_row(no, route="diagram", engine="ai")
         self._log("renderer", f"chart レンダリング完了: {done} 枚（決定論・文字化けゼロ）")
         if self.chart_ai_restyle and done:
-            # 実データのグラフ（chart_research）は描き直さない。2026-09-27 社長「この場合は新居先生の
-            # イラストなしで、グラフの数字などがはっきり見れるようにしようか。グラフの精度は大切だからね」
-            self._restyle_charts([r for r in render_rows if r.get("engine") == "render"
-                                  and not (r.get("chart_spec") or {}).get("research")])
+            # どのグラフも「データのみ」と「先生が紹介」の2つの版を持つ（2026-09-28 社長・新居先生）。
+            # 実データのグラフ（chart_research）は「データのみ」を使う。2026-09-27 社長「この場合は
+            # 新居先生のイラストなしで、グラフの数字などがはっきり見れるようにしようか。グラフの精度は大切」
+            # 上限を超えても実データのグラフが先に版を持てるよう、先に並べる。
+            charts = [r for r in render_rows if r.get("engine") == "render"]
+            charts.sort(key=lambda r: not (r.get("chart_spec") or {}).get("research"))
+            self._restyle_charts(charts)
 
     def _research_charts(self, rows):
         """数字カードになる文から上限 chart_research_max 件を選び、出典のある実データのグラフにする。
@@ -1990,7 +1995,7 @@ class SentencePipeline:
         try:
             import openai
             from chart_restyle import restyle_chart_file, CHART_RESTYLE_MAX
-            from generator import resolve_openai_image_model
+            from generator import resolve_openai_image_model, backdrop_key
             openai_client = openai.OpenAI(api_key=openai_key, timeout=300, max_retries=1)
             verify_client = get_anthropic_client(self.anthropic_key)
         except Exception as e:
@@ -2005,10 +2010,13 @@ class SentencePipeline:
                     self.images_dir, r["no"], openai_client=openai_client, verify_client=verify_client,
                     model=model, quality=self.openai_quality, style_lock_text=self.style_lock_text,
                     reference_path=self.character_ref_path, sentence=r.get("sentence", ""),
-                    log=self._log)
+                    log=self._log, keep_plain=bool((r.get("chart_spec") or {}).get("research")),
+                    backdrop=backdrop_key({**r, "index": r["no"]}))
             except Exception as e:
-                res = {"restyled": False, "reason": str(e)[:80]}
-            self._update_row(r["no"], chart_restyled=bool(res.get("restyled")),
+                res = {"restyled": False, "reason": str(e)[:80], "variants": ["plain"], "variant": "plain"}
+            self._update_row(r["no"], chart_restyled=res.get("variant") == "screen",
+                             chart_variants=res.get("variants") or ["plain"],
+                             chart_variant=res.get("variant") or "plain",
                              chart_restyle_note=res.get("reason", ""))
             return res
 
@@ -2021,7 +2029,7 @@ class SentencePipeline:
             results.append(one(r))
             gc.collect()
         n_ok = sum(1 for x in results if x.get("restyled"))
-        self._log("chart_restyle", f"グラフの描き直し: {n_ok} / {len(rows)} 枚（残りはコードのグラフ）")
+        self._log("chart_restyle", f"「先生が紹介」の版: {n_ok} / {len(rows)} 枚（ほかは「データのみ」だけ）")
         if len(rows) > CHART_RESTYLE_MAX:
             self._log("chart_restyle", f"上限 {CHART_RESTYLE_MAX} 枚を超えた分はコードのグラフのまま（1枚ずつ作り直せます）")
 

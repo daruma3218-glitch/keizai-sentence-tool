@@ -1,0 +1,162 @@
+"""新居先生の感想（2026-09-28）の反映。
+
+①ほかの人物の目が先生と同じ半目で違和感 → 先生以外は普通に開いた目
+②イラストと図のタッチが同じ → 図解は白に近い紙の背景の説明ボード
+③背景が全部似たような色 → 段落ごとに背景の色を変える
+④グラフは「データのみ」と「先生がスクリーンで紹介」の2つの版を持ち、入れ替えられる
+"""
+import json
+from types import SimpleNamespace
+
+import app as appmod
+import generator
+from chart_restyle import restyle_chart_file, use_chart_variant, variant_path
+from test_chart_restyle import _FakeImages, _FakeVerify, _job
+
+WORLD = appmod.get_channel("keizai")["defaults"]["worldview_desc"]
+
+
+# ── ① ほかの人物の目
+def test_other_people_have_open_eyes_in_world_and_every_lock():
+    assert "Other people have ordinary open eyes" in WORLD
+    for lock in (generator._CHARACTER_LOCK_INSTRUCTION, generator._CHARACTER_LOCK_IN_DIAGRAM,
+                 generator._STYLE_REFERENCE_INSTRUCTION):
+        assert "belong ONLY to the professor" in lock
+
+
+# ── ② 図解は説明ボード
+def test_locked_diagram_is_an_explanation_board_not_a_scene():
+    assert "IMAGE KINDS" in WORLD and "very light paper background" in WORLD
+    diagram = generator._build_full_prompt("Cup -> shop -> coins.", "diagram", style_lock=WORLD)
+    assert "This image is a DIAGRAM" in diagram
+    assert "clean conceptual diagram with arrows" in diagram  # 組み立ての指示は残す
+    scene = generator._build_full_prompt("A cafe.", "illustration", style_lock=WORLD)
+    assert "This image is a DIAGRAM" not in scene
+
+
+# ── ③ 背景の色
+def test_backdrop_list_is_replaced_by_one_color_per_paragraph():
+    first = generator._build_full_prompt("A cafe.", "illustration", style_lock=WORLD,
+                                         backdrop=generator.backdrop_key({"chapter_index": 0, "block_index": 0}))
+    second = generator._build_full_prompt("A cafe.", "illustration", style_lock=WORLD,
+                                          backdrop=generator.backdrop_key({"chapter_index": 0, "block_index": 1}))
+    assert "BACKDROP COLORS:" not in first  # 色の一覧は渡さず、この画像の1色だけを渡す
+    assert "BACKDROP COLOR OF THIS IMAGE: pale slate blue-gray" in first
+    assert "BACKDROP COLOR OF THIS IMAGE: warm light beige" in second
+    diagram = generator._build_full_prompt("x", "diagram", style_lock=WORLD, backdrop=1)
+    assert "very light warm light beige paper background" in diagram
+
+
+def test_same_paragraph_same_color_and_regeneration_keeps_it():
+    a = generator.backdrop_key({"index": 7, "chapter_index": 2, "block_index": 3})
+    b = generator.backdrop_key({"index": 9, "chapter_index": 2, "block_index": 3})
+    assert a == b
+    assert generator.backdrop_key({"index": 7}) == 7  # 段落が分からない行は画像の番号
+
+
+def test_lock_without_backdrop_list_is_unchanged():
+    assert generator.apply_backdrop("ART STYLE: flat.", "illustration", 3) == "ART STYLE: flat."
+
+
+def test_generator_passes_paragraph_colors(tmp_path, monkeypatch):
+    import asyncio
+    from PIL import Image
+    gen = generator.ParallelImageGenerator(provider=generator.PROVIDER_GPT_IMAGE, openai_api_key="test-only",
+                                           concurrency=1, style_lock_text=WORLD)
+    seen = {}
+
+    def fake_dispatch(full_prompt, output_path, use_reference=False, ref_bytes_override=None,
+                      ref_mime_override=None):
+        from pathlib import Path
+        seen[Path(output_path).name] = full_prompt
+        Image.new("RGB", (32, 18)).save(output_path)
+        return True, ""
+
+    monkeypatch.setattr(gen, "_dispatch_sync_generate", fake_dispatch)
+    asyncio.run(gen.generate_all([
+        {"index": 1, "prompt": "A shop.", "type": "illustration", "chapter_index": 0, "block_index": 0},
+        {"index": 2, "prompt": "A shop.", "type": "illustration", "chapter_index": 0, "block_index": 2},
+    ], tmp_path))
+    assert "pale slate blue-gray" in seen["1.png"].split("BACKDROP COLOR OF THIS IMAGE:")[1][:40]
+    assert "pale sage green" in seen["2.png"].split("BACKDROP COLOR OF THIS IMAGE:")[1][:40]
+
+
+def test_style_check_sees_the_whole_world_text():
+    import verifier
+    assert len(WORLD) > 3000
+    assert "背景の色は段落ごとに変える決まり" in verifier.STYLE_CHECK_RULES_JA
+
+
+# ── ④ グラフの2つの版
+def _restyle(tmp_path, keep_plain):
+    images, ref = _job(tmp_path)
+    original = (images / "5.png").read_bytes()
+    calls = []
+    res = restyle_chart_file(
+        images, 5, openai_client=SimpleNamespace(images=_FakeImages(calls)),
+        verify_client=_FakeVerify('["100"]', '["100"]'), model="gpt-image-2.5-flare", quality="medium",
+        style_lock_text=WORLD, reference_path=str(ref), sentence="昔は、100グラム。", keep_plain=keep_plain,
+        backdrop=1)
+    return images, original, res, calls
+
+
+def test_research_chart_keeps_plain_and_gets_a_screen_version(tmp_path):
+    images, original, res, calls = _restyle(tmp_path, keep_plain=True)
+    assert res == {"restyled": True, "reason": "", "variants": ["plain", "screen"], "variant": "plain"}
+    assert (images / "5.png").read_bytes() == original  # 実データのグラフは「データのみ」を使う
+    assert variant_path(tmp_path, 5, "screen").exists()
+    assert "presentation screen" in calls[0]["prompt"]
+    assert "BACKDROP COLOR OF THIS IMAGE: warm light beige" in calls[0]["prompt"]
+
+
+def test_other_charts_use_the_screen_version_and_can_switch_back(tmp_path):
+    images, original, res, _ = _restyle(tmp_path, keep_plain=False)
+    assert res["variant"] == "screen"
+    assert (images / "5.png").read_bytes() != original
+    assert use_chart_variant(tmp_path, 5, "plain")
+    assert (images / "5.png").read_bytes() == original
+    assert use_chart_variant(tmp_path, 5, "screen")
+    assert (images / "5.png").read_bytes() == variant_path(tmp_path, 5, "screen").read_bytes()
+    assert not use_chart_variant(tmp_path, 5, "other")
+
+
+def test_failed_redraw_drops_the_old_screen_version(tmp_path):
+    images, _, _, _ = _restyle(tmp_path, keep_plain=True)
+    res = restyle_chart_file(
+        images, 5, openai_client=SimpleNamespace(images=_FakeImages([])),
+        verify_client=_FakeVerify('["100"]', '["120"]'), model="m", quality="medium")
+    assert res["variants"] == ["plain"]
+    assert not variant_path(tmp_path, 5, "screen").exists()  # 数字が変わった後の古い版を残さない
+
+
+# ── 画面の入れ替えと ZIP
+def _job_with_rows(tmp_path, monkeypatch, variant="plain"):
+    monkeypatch.setattr(appmod, "OUTPUT_DIR", tmp_path)
+    job = tmp_path / "20260928_090000"
+    job.mkdir()
+    _restyle(job, keep_plain=True)
+    rows = [{"no": 5, "route": "chart", "engine": "render", "status": "ok", "filename": "5.png",
+             "chart_variants": ["plain", "screen"], "chart_variant": variant},
+            {"no": 6, "route": "illustration", "engine": "ai", "status": "ok", "filename": "6.png"}]
+    (job / "rows_progress.json").write_text(json.dumps({"rows": rows}, ensure_ascii=False), encoding="utf-8")
+    return job
+
+
+def test_switch_api_changes_the_image_and_the_row(tmp_path, monkeypatch):
+    job = _job_with_rows(tmp_path, monkeypatch)
+    client = appmod.app.test_client()
+    with client.session_transaction() as sess:
+        sess["authenticated"] = True
+    res = client.post(f"/api/chart_variant/{job.name}/5", json={"variant": "screen"})
+    assert res.status_code == 200 and res.get_json()["variant"] == "screen"
+    assert (job / "images" / "5.png").read_bytes() == variant_path(job, 5, "screen").read_bytes()
+    row = json.loads((job / "rows_progress.json").read_text(encoding="utf-8"))["rows"][0]
+    assert row["chart_variant"] == "screen"
+    assert client.post(f"/api/chart_variant/{job.name}/6", json={"variant": "screen"}).status_code == 400
+
+
+def test_zip_carries_the_unused_version(tmp_path, monkeypatch):
+    job = _job_with_rows(tmp_path, monkeypatch, variant="plain")
+    rows = json.loads((job / "rows_progress.json").read_text(encoding="utf-8"))["rows"]
+    files = appmod._chart_alternate_files(job, rows)
+    assert [arc for _, arc in files] == ["グラフの別版/5_先生が紹介.png"]

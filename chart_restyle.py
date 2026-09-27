@@ -14,6 +14,14 @@
    9/27 の試験で、数字だけ見ていると「受取額→収入」「（仮定）」の追加を見逃したため文字も比べる。
 3. 元のグラフはジョブの chart_render/{no}.png に残す（images/ に置くと ZIP に混ざるため別フォルダ）。
 
+2026-09-28 新居先生「データは先生がスクリーンで紹介する形でいいかんじ」、社長「データはグラフなど
+そのままのデータパターンと、先生がスクリーンなどで紹介するパターンをつかえるようにしておきましょう」:
+グラフは2つの版を持つ。
+- plain（データのみ）: コードで描いたグラフそのもの。chart_render/{no}.png
+- screen（先生が紹介）: 先生が大きなスクリーンに映したグラフを指して紹介する絵。chart_render/{no}_screen.png
+使う版は images/{no}.png にコピーする。実データのグラフ（出典つき）は「データのみ」を使い
+（9/27 社長「グラフの精度は大切」）、それ以外は「先生が紹介」を使う。画面でいつでも入れ替えられる。
+
 チャンネル設定 chart_ai_restyle: true のときだけ動く（既定は従来どおりコードの図のみ）。
 """
 
@@ -30,9 +38,14 @@ from utils import parse_json_object
 # 1回の生成で描き直す上限（1枚ずつ・約30〜40秒/枚）。超えた分はコードのグラフのまま。
 CHART_RESTYLE_MAX = 30
 
+VARIANT_PLAIN, VARIANT_SCREEN = "plain", "screen"
+VARIANT_LABELS = {VARIANT_PLAIN: "データのみ", VARIANT_SCREEN: "先生が紹介"}
+
 CHART_RESTYLE_INSTRUCTION = (
     "CHART REDRAW: The FIRST attached image is an exact data chart for this video. Redraw it as "
-    "one frame of this video series, in the channel art style described below. "
+    "one frame of this video series, in the channel art style described below, as a presentation "
+    "scene: the chart is shown on one large flat presentation screen that fills most of the frame, "
+    "so the chart stays the main subject, large and easy to read. "
     "Keep EVERY number, unit, label and title EXACTLY as written in the first image: the same "
     "characters, the same values, the same units, nothing added, nothing removed, nothing rounded. "
     "Copy every Japanese word character for character: do not paraphrase, shorten or reword any "
@@ -46,10 +59,10 @@ CHART_RESTYLE_INSTRUCTION = (
     "itself names (for example coins when it talks about yen). If the sentence does not name a "
     "concrete object, add no objects at all. Never draw food, products or packages that the "
     "sentence does not name (the video may still be hiding what the product is). "
-    "If a SECOND image is attached, it shows the channel's professor. You may add him once, "
-    "small, beside the chart (pointing at it or reacting), drawn as that SAME person "
-    "(identical face, hair, glasses, half-lidded eyes, closed-mouth smile and outfit). "
-    "The chart stays the main subject."
+    "If a SECOND image is attached, it shows the channel's professor: draw him once, standing at "
+    "one side of the screen and pointing at the chart, drawn as that SAME person (identical face, "
+    "hair, glasses, half-lidded eyes, closed-mouth smile and outfit). He never covers any number "
+    "or label. The chart stays the main subject."
 )
 
 VERIFY_SYSTEM = (
@@ -133,9 +146,10 @@ def _image_file(data: bytes, name: str):
 
 
 def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: str, quality: str,
-                 style_lock_text: str = "", reference_path: str = "", sentence: str = "") -> tuple:
+                 style_lock_text: str = "", reference_path: str = "", sentence: str = "",
+                 backdrop: int = 0) -> tuple:
     """描いたグラフを番組の絵柄に描き直して out_path に保存。(成功, エラー)。"""
-    from generator import _save_as_16_9
+    from generator import _save_as_16_9, apply_backdrop
     import base64
 
     images = [_image_file(Path(rendered_path).read_bytes(), "chart.png")]
@@ -149,7 +163,8 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
                    f"「{sentence.strip()[:200]}」. Only an object named in this sentence may be drawn. "
                    "Do not write this sentence in the image.")
     if (style_lock_text or "").strip():
-        prompt += "\n\n" + style_lock_text.strip()
+        # 背景の色は段落ごと（スクリーンのある場面なので、場面の背景色として渡す）
+        prompt += "\n\n" + apply_backdrop(style_lock_text.strip(), "illustration", backdrop)
     try:
         response = openai_client.images.edit(
             model=model, image=images, prompt=prompt, n=1, size="1536x1024", quality=quality,
@@ -196,34 +211,60 @@ def verify_redraw(verify_client, rendered_path: Path, redrawn_path: Path) -> tup
     return texts_match(data["first_texts"], data["second_texts"])
 
 
+def variant_path(job_dir, no: int, variant: str) -> Path:
+    """グラフの版のファイル（ジョブの chart_render/ の中。images/ の外なので ZIP に混ざらない）。"""
+    keep_dir = Path(job_dir) / "chart_render"
+    return keep_dir / (f"{no}_screen.png" if variant == VARIANT_SCREEN else f"{no}.png")
+
+
+def use_chart_variant(job_dir, no: int, variant: str) -> bool:
+    """選んだ版を images/{no}.png にコピーして、使う画像を入れ替える。"""
+    src = variant_path(job_dir, no, variant)
+    if variant not in VARIANT_LABELS or not src.exists():
+        return False
+    shutil.copyfile(src, Path(job_dir) / "images" / f"{no}.png")
+    return True
+
+
 def restyle_chart_file(images_dir: Path, no: int, *, openai_client, verify_client, model: str,
                        quality: str, style_lock_text: str = "", reference_path: str = "",
-                       sentence: str = "", log: Optional[Callable] = None) -> dict:
-    """{no}.png（コードのグラフ）を描き直し、数字が一致したときだけ差し替える。
+                       sentence: str = "", log: Optional[Callable] = None,
+                       keep_plain: bool = False, backdrop: int = 0) -> dict:
+    """{no}.png（コードのグラフ）から「先生が紹介」の版を描き、数字と文字が一致したときだけ残す。
 
-    戻り値: {"restyled": bool, "reason": str}。一致しなければ {no}.png は元のまま。
-    元のグラフはジョブの chart_render/{no}.png に残す（スタッフの ZIP に混ざらないよう images/ の外）。
+    keep_plain=True（実データのグラフ）のときは images/{no}.png を「データのみ」のまま使い、
+    「先生が紹介」は入れ替え用の版として残すだけ。False なら「先生が紹介」を使う。
+    戻り値: {"restyled": 描けたか, "reason": str, "variants": 使える版, "variant": 使っている版}。
     """
     log = log or (lambda *a, **k: None)
     final = Path(images_dir) / f"{no}.png"
-    keep_dir = Path(images_dir).parent / "chart_render"
-    keep_dir.mkdir(parents=True, exist_ok=True)
-    rendered = keep_dir / f"{no}.png"
-    candidate = keep_dir / f"{no}_ai.png"
+    job_dir = Path(images_dir).parent
+    rendered = variant_path(job_dir, no, VARIANT_PLAIN)
+    screen = variant_path(job_dir, no, VARIANT_SCREEN)
+    rendered.parent.mkdir(parents=True, exist_ok=True)
+    candidate = rendered.parent / f"{no}_ai.png"
+    plain_only = {"restyled": False, "variants": [VARIANT_PLAIN], "variant": VARIANT_PLAIN}
     if not final.exists():
-        return {"restyled": False, "reason": "元のグラフがありません"}
+        return {**plain_only, "reason": "元のグラフがありません"}
+    screen.unlink(missing_ok=True)  # 作り直す前の版を残さない（数字が変わっていることがある）
     shutil.copyfile(final, rendered)
     ok, err = redraw_chart(openai_client, rendered, candidate, model=model, quality=quality,
                            style_lock_text=style_lock_text, reference_path=reference_path,
-                           sentence=sentence)
+                           sentence=sentence, backdrop=backdrop)
     if not ok:
         log("chart_restyle", f"№{no} 描き直しに失敗（コードのグラフのまま）: {err}")
-        return {"restyled": False, "reason": err}
+        return {**plain_only, "reason": err}
     same, why = verify_redraw(verify_client, rendered, candidate)
     if not same:
         candidate.unlink(missing_ok=True)
         log("chart_restyle", f"№{no} 数字か文字が一致しないためコードのグラフのまま: {why}")
-        return {"restyled": False, "reason": why}
-    candidate.replace(final)
-    log("chart_restyle", f"№{no} 番組の絵柄に描き直し（数字と文字の一致を確認）")
-    return {"restyled": True, "reason": ""}
+        return {**plain_only, "reason": why}
+    candidate.replace(screen)
+    if keep_plain:
+        log("chart_restyle", f"№{no} 実データのグラフは「データのみ」を使用（「先生が紹介」の版も作成・数字と文字の一致を確認）")
+        return {"restyled": True, "reason": "", "variants": [VARIANT_PLAIN, VARIANT_SCREEN],
+                "variant": VARIANT_PLAIN}
+    shutil.copyfile(screen, final)
+    log("chart_restyle", f"№{no} 先生がスクリーンで紹介する絵に描き直し（数字と文字の一致を確認）")
+    return {"restyled": True, "reason": "", "variants": [VARIANT_PLAIN, VARIANT_SCREEN],
+            "variant": VARIANT_SCREEN}
