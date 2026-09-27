@@ -1692,7 +1692,7 @@ def _forced_route_user_instructions(force_route: str, base_instructions: str = "
     return f"{base}\n\n{route_note}".strip() if base else route_note
 
 
-def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state) -> bool:
+def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state, sentence="") -> bool:
     """グラフ1枚の作り直しでも、チャンネル設定が chart_ai_restyle なら番組の絵柄に描き直す。"""
     if not defaults.get("chart_ai_restyle"):
         return False
@@ -1715,6 +1715,7 @@ def _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_sta
             quality=params.get("openai_quality") or defaults.get("openai_quality") or "medium",
             style_lock_text=_style_lock_text_for(defaults, manifest, job_state),
             reference_path=cref_path,
+            sentence=sentence,
             log=lambda *a, **k: None,
         )
         return bool(res.get("restyled"))
@@ -1742,7 +1743,8 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
     if saved_spec and not extra:
         try:
             if render_chart(saved_spec, out, theme=chart_theme):
-                restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state)
+                restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state,
+                                              sentence=row.get("sentence", ""))
                 _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                                       route=force_route, route_reason=route_reason,
                                       extra={"chart_restyled": restyled})
@@ -1779,7 +1781,8 @@ def _regenerate_render_chart(job_dir, no, snap_row, ch_keys, defaults, extra="",
         return jsonify({"error": f"グラフ描画に失敗: {str(e)[:140]}"}), 500
     if not ok:
         return jsonify({"error": "グラフ描画に失敗しました"}), 500
-    restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state)
+    restyled = _restyle_regenerated_chart(job_dir, no, ch_keys, defaults, manifest, job_state,
+                                              sentence=row.get("sentence", ""))
     _update_regen_snapshot(job_dir, no, True, filename=f"{no}.png", engine="render",
                           route=force_route, route_reason=route_reason,
                           extra={"chart_restyled": restyled})

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from PIL import Image
 
 import chart_restyle
-from chart_restyle import normalize_numbers, numbers_match, restyle_chart_file
+from chart_restyle import normalize_numbers, numbers_match, restyle_chart_file, texts_match
 from generator import ParallelImageGenerator, depicts_recurring_character, PROVIDER_GPT_IMAGE
 
 
@@ -31,6 +31,24 @@ def test_missing_or_extra_numbers_are_rejected():
     assert not ok and "120" in why
 
 
+def test_decimals_keep_their_leading_zero():
+    assert normalize_numbers(["0.5%", "0.50"]) == ["0.5", "0.5"]
+
+
+def test_reworded_or_added_labels_are_rejected():
+    # 9/27 の試験で実際に起きた言い換え・追加
+    ok, why = texts_match(["一袋あたりの受取額と費用", "メーカーの受取額"],
+                          ["一袋あたりの収入と費用（仮定）", "メーカーが受け取るお金"])
+    assert not ok and "仮" in why
+    ok, _ = texts_match(["企業に残る利益"], ["手元に残る利益"])
+    assert not ok
+
+
+def test_same_labels_split_differently_still_match():
+    assert texts_match(["内容量の変化", "100グラム vs 55グラム"],
+                       ["内容量の", "変化", "100グラム", "VS", "55グラム", "¥"]) == (True, "")
+
+
 def test_no_numbers_in_original_is_not_a_match():
     assert numbers_match([], [])[0] is False
 
@@ -47,9 +65,11 @@ class _FakeImages:
 
 
 class _FakeVerify:
-    def __init__(self, first, second):
+    def __init__(self, first, second, first_texts='["内容量"]', second_texts='["内容量"]'):
+        body = '{"first": %s, "second": %s, "first_texts": %s, "second_texts": %s}' % (
+            first, second, first_texts, second_texts)
         self.messages = SimpleNamespace(create=lambda **kw: SimpleNamespace(
-            content=[SimpleNamespace(text='{"first": %s, "second": %s}' % (first, second))]))
+            content=[SimpleNamespace(text=body)]))
 
 
 def _job(tmp_path):
@@ -69,7 +89,7 @@ def test_restyle_replaces_chart_when_numbers_match(tmp_path):
         images, 5, openai_client=SimpleNamespace(images=_FakeImages(calls)),
         verify_client=_FakeVerify('["100", "55"]', '["100グラム", "55グラム"]'),
         model="gpt-image-2.5-flare", quality="medium", style_lock_text="CHANNEL WORLD",
-        reference_path=str(ref))
+        reference_path=str(ref), sentence="カルビーのポテトチップス、うすしお味です。")
     assert res["restyled"] is True
     assert (images / "5.png").read_bytes() != original
     # 元のグラフは images/ の外に残し、スタッフの ZIP に混ざらない
@@ -78,6 +98,7 @@ def test_restyle_replaces_chart_when_numbers_match(tmp_path):
     # グラフと先生の2枚を渡し、世界観の設定文を足す
     assert len(calls[0]["image"]) == 2
     assert "CHANNEL WORLD" in calls[0]["prompt"]
+    assert "ポテトチップス" in calls[0]["prompt"]  # 話題に合う絵を選べるよう文を渡す
 
 
 def test_restyle_keeps_code_chart_when_numbers_differ(tmp_path):
@@ -125,3 +146,14 @@ def test_generator_attaches_reference_to_diagram_with_professor(tmp_path):
     assert with_prof is True and without is False
     assert any("Draw him at most once" in p for u, p in seen if u)
     assert by_prompt  # 2枚とも生成された
+
+
+def test_restyle_keeps_code_chart_when_labels_are_reworded(tmp_path):
+    images, ref = _job(tmp_path)
+    original = (images / "5.png").read_bytes()
+    res = restyle_chart_file(
+        images, 5, openai_client=SimpleNamespace(images=_FakeImages([])),
+        verify_client=_FakeVerify('["5"]', '["5"]', '["企業に残る利益"]', '["手元に残る利益"]'),
+        model="gpt-image-2.5-flare", quality="medium", reference_path=str(ref))
+    assert res["restyled"] is False
+    assert (images / "5.png").read_bytes() == original

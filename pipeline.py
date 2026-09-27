@@ -1969,7 +1969,8 @@ class SentencePipeline:
                 res = restyle_chart_file(
                     self.images_dir, r["no"], openai_client=openai_client, verify_client=verify_client,
                     model=model, quality=self.openai_quality, style_lock_text=self.style_lock_text,
-                    reference_path=self.character_ref_path, log=self._log)
+                    reference_path=self.character_ref_path, sentence=r.get("sentence", ""),
+                    log=self._log)
             except Exception as e:
                 res = {"restyled": False, "reason": str(e)[:80]}
             self._update_row(r["no"], chart_restyled=bool(res.get("restyled")),
