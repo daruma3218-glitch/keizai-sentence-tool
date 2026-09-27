@@ -80,3 +80,9 @@ def test_source_note_drops_link_markup_and_urls():
     assert clean_source_note("[NewSphere（カルビー取材）](https://newsphere.jp") == "NewSphere（カルビー取材）"
     assert clean_source_note("カルビー公式 https://www.calbee.co.jp/") == "カルビー公式"
     assert clean_source_note("総務省 家計調査") == "総務省 家計調査"
+
+
+def test_prompter_time_limit_grows_with_parallel_rounds():
+    from prompter import prompter_overall_timeout
+    assert prompter_overall_timeout(5, 6) == 360          # 1巡（短い回）は従来どおり
+    assert prompter_overall_timeout(15, 6) == 3 * 200 + 60  # 9/27 ルノアールの回（3巡）

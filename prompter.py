@@ -23,6 +23,16 @@ CLAUDE_MODEL = os.environ.get("PROMPTER_MODEL", "").strip() or "gpt-6-astra"
 BATCH_SIZE = 8
 PROMPTER_BATCH_TIMEOUT_SECONDS = 90
 PROMPTER_OVERALL_TIMEOUT_SECONDS = 360
+# 並列の1巡あたりの見込み（PC経由の ASTRA で1バッチ 約2.5分・9/27 実測）。全体の上限は巡回数から決める。
+# 9/27 ルノアールの回（118文・15バッチ・6並列＝3巡）で上限が375秒しかなく、7〜15バッチの70文が
+# 簡易の指示文になった（先生が別人になる原因）。
+PROMPTER_ROUND_SECONDS = 200
+
+
+def prompter_overall_timeout(n_batches: int, max_workers: int) -> int:
+    """指示文づくり全体の時間上限（秒）。並列の巡回数 × 1巡の見込み＋余裕。最低 PROMPTER_OVERALL_TIMEOUT_SECONDS。"""
+    rounds = -(-max(1, n_batches) // max(1, max_workers))
+    return max(PROMPTER_OVERALL_TIMEOUT_SECONDS, rounds * PROMPTER_ROUND_SECONDS + 60)
 
 
 DIAGRAM_CONNECTOR_TERMS = [
@@ -740,7 +750,7 @@ def generate_all_prompts(
             log("prompter", f"バッチ {completed}/{len(batches)} 完了（フォールバック {len(fallback)} 件）")
 
         try:
-            iterator = as_completed(future_to_idx, timeout=max(PROMPTER_OVERALL_TIMEOUT_SECONDS, len(batches) * 25))
+            iterator = as_completed(future_to_idx, timeout=prompter_overall_timeout(len(batches), max_workers))
             for future in iterator:
                 idx = future_to_idx[future]
                 try:
