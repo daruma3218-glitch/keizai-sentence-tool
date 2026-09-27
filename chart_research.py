@@ -78,7 +78,8 @@ def _numbers(text: str) -> list:
 
 
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)?")
-_URL_RE = re.compile(r"https?://\S+")
+# URL は空白・閉じ括弧・読点で終わる（「…pdf)、[次のリンク](…」がつながらないように）
+_URL_RE = re.compile(r"https?://[^\s)\]」）、,<>\"']+")
 
 
 def clean_source_note(note: str) -> str:

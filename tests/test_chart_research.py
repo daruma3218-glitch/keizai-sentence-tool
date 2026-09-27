@@ -107,3 +107,9 @@ def test_markdown_link_in_the_url_field_is_accepted():
             "source_note": "NewSphere・カルビー公式"}
     spec, why = validate_research(item, ROWS[2]["sentence"])
     assert why == "" and spec["research"]["source_url"] == "https://newsphere.jp/popular/20241203-04/"
+
+
+def test_two_links_in_one_field_keep_only_the_first_url():
+    item = {**ITEM, "source_url": "[NewSphere](https://newsphere.jp/popular/20241203-04/)、[カルビー：内容量変更のお知らせ](https://www.calbee.co.jp/news/pdf/4080-15414.pdf)"}
+    spec, _ = validate_research(item, ROWS[2]["sentence"])
+    assert spec["research"]["source_url"] == "https://newsphere.jp/popular/20241203-04/"
