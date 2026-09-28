@@ -11,6 +11,8 @@
 - 判定役には「人物ごとの手の位置と、袖をたどった先（右肩・左肩・胸・首）」だけを答えさせ、
   合否はコードで決める: 手が3つ以上／胸や首から生えた腕／同じ肩から2本／明らかな崩れの指摘
 - どちらか1つでも不合格なら不合格。どちらも判定できなければ「未確認」（作り直さない）
+- 判定役1つの失敗では社長に停止通知を出さない（もう一方で合否が出るため・2026-09-28 社長承認）。
+  両方とも判定できなかった時だけ、ジョブにつき1件通知する
 """
 
 import base64
@@ -23,6 +25,7 @@ from typing import Optional
 
 JUDGES = (("claude-opus-5-5", "medium"), ("gpt-6-sol", "medium"))
 JUDGE_TIMEOUT = 180
+LABEL = "先生の手足の検品"
 FIX_HINT = ("Every person has exactly two arms and two hands, each coming from a shoulder. "
             "Give each person one simple gesture (for example a hand on the chin, OR open palms, never both).")
 
@@ -104,25 +107,35 @@ def _judge_once(model: str, effort: str, attachments: list, generate, job_id: st
     try:
         text, _payload = generate(SYSTEM, PROMPT, model=model, effort=effort, attachments=attachments,
                                   allow_fallback=False, tool="sentence", channel="keizai",
-                                  label="先生の手足の検品", job_id=job_id, timeout=JUDGE_TIMEOUT,
-                                  max_tokens=2000)
+                                  label=LABEL, job_id=job_id, timeout=JUDGE_TIMEOUT,
+                                  max_tokens=2000, notify=False)
         m = re.search(r"\{[\s\S]*\}", text or "")
         verdict = limb_verdict(json.loads(m.group(0))) if m else {"ok": None, "problems": ["判定を読めない"]}
     except Exception as e:
         verdict = {"ok": None, "problems": [f"判定できず（{str(getattr(e, 'reason', '') or type(e).__name__)[:40]}）"]}
+        if getattr(e, "attempts", None):
+            verdict["_attempts"] = list(e.attempts)
     verdict["judge"] = model
     return verdict
 
 
-def check_limbs(image_path, reference_path: str = "", *, job_id: str = "", generate=None) -> dict:
+def check_limbs(image_path, reference_path: str = "", *, job_id: str = "", generate=None,
+                notify_group=None) -> dict:
     """1枚を2つの判定役で同時に検品する。戻り値は combine() の形。"""
-    if generate is None:
+    if generate is None or notify_group is None:
         import subscription_runtime as _subscription
-        generate = _subscription.generate
+        generate = generate or _subscription.generate
+        notify_group = notify_group or _subscription.notify_group_stopped
     attachments = []
     if reference_path and Path(reference_path).exists():
         attachments.append(_attachment(reference_path, max_side=640))
     attachments.append(_attachment(image_path))
     with ThreadPoolExecutor(max_workers=len(JUDGES)) as pool:
         verdicts = list(pool.map(lambda j: _judge_once(j[0], j[1], attachments, generate, job_id), JUDGES))
+    attempts = [a for v in verdicts for a in v.pop("_attempts", [])]
+    if attempts and all(v.get("ok") is None for v in verdicts):
+        try:
+            notify_group(tool="sentence", label=LABEL, job_id=job_id, reason="all_judges_failed", attempts=attempts)
+        except Exception:
+            pass  # 通知の失敗で検品結果（未確認）を失わない
     return combine(verdicts)

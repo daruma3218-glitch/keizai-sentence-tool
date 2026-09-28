@@ -70,3 +70,47 @@ def test_prompt_limits_problems_to_limbs_not_looks():
     # 9/27 本番: 眼鏡のない一般の人物を「先生の眼鏡がない」として不合格にした（№19・20・33）
     from limb_qa import PROMPT
     assert "眼鏡の有無" in PROMPT and "一般の人物として扱う" in PROMPT
+
+
+class _Stopped(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+        self.attempts = [{"provider": "claude", "attempt": 1, "reason": reason, "elapsed_s": 42.0}]
+
+
+def _images(tmp_path):
+    img = tmp_path / "12.png"
+    Image.new("RGB", (160, 90), (200, 200, 200)).save(img)
+    return img
+
+
+def test_one_judge_failing_is_silent_and_other_judge_decides(tmp_path):
+    # 2026-09-28: Opus だけ止まった時に停止通知が出ていた（20260928_023118）。もう一方で合否が出るので通知しない
+    calls, groups = [], []
+
+    def fake_generate(system, prompt, **kw):
+        calls.append(kw)
+        if kw["model"] == "claude-opus-5-5":
+            raise _Stopped("primary_cli_unavailable")
+        return json.dumps(TWO_ARMS, ensure_ascii=False), {}
+
+    result = check_limbs(_images(tmp_path), generate=fake_generate, notify_group=lambda **kw: groups.append(kw))
+    assert result["ok"] is True
+    assert all(c["notify"] is False for c in calls)
+    assert groups == []
+    assert all("_attempts" not in v for v in result["judges"])
+
+
+def test_both_judges_failing_sends_one_group_notice(tmp_path):
+    groups = []
+
+    def fake_generate(system, prompt, **kw):
+        raise _Stopped("primary_cli_unavailable")
+
+    result = check_limbs(_images(tmp_path), job_id="job-7", generate=fake_generate,
+                         notify_group=lambda **kw: groups.append(kw))
+    assert result["ok"] is None
+    assert len(groups) == 1
+    assert groups[0]["job_id"] == "job-7" and groups[0]["reason"] == "all_judges_failed"
+    assert len(groups[0]["attempts"]) == 2
