@@ -11,6 +11,14 @@ Wikimedia Commons API に限定し、**許可ライセンスのみ採用**＋ラ
 - 日本語クエリで 0 件なら英訳して再検索（Claude 小呼び出し・バッチ）。
 - run_web_search_for_selections と同じ item_callback(info) 形で結果を返す
   （info に license / license_url / attribution / commons_page_url を追加）。
+
+2026-09-28 社長の試験（ルノアール回 №46「喫茶店業界を大きく変えたのがドトールでした」）で、
+19世紀の本（カモンイス『ルシアダス』）の表紙のスキャンが採用された。Commons の検索は本のスキャン
+（DjVu）の中の文字まで探し、「Doutor」（ポルトガル語で博士）に当たった。検索結果の先頭を
+ライセンスと大きさだけで採用していたため、写っているものを確かめていなかった。
+→ 写真（JPEG・PNG・WebP）だけを検索し（filetype:bitmap）、候補を最大 JUDGE_MAX 枚まで AI に見せて
+  「探しているものそのものが写っているか」を確かめ、写っているものだけを使う。
+  どれも当てはまらなければ採用しない（呼び出し側が世界観のイラストで代わりを作る）。
 """
 
 import json
@@ -21,6 +29,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
 from utils import claude_query, parse_json_object
+
+# 写っているものを確かめる候補の数（1件あたり。1枚15〜25秒）
+JUDGE_MAX = 4
+# 写真として使う形式（本・文書のスキャンの DjVu・TIFF・PDF は使わない）
+_PHOTO_MIMES = ("image/jpeg", "image/png", "image/webp")
 
 _API = "https://commons.wikimedia.org/w/api.php"
 _UA = "sentence-tsukuru/1.0 (economics-education; contact: noreply)"
@@ -68,12 +81,19 @@ def search_commons_one(query: str, limit: int = 12, timeout: int = 20,
     min_w/min_h: 採用する最小画像サイズ。既定(400x300)で0件のとき、呼び出し側が
     緩めた値で再検索できる（歴史写真など小さめ素材しか無いトピックの取りこぼし対策）。
     """
+    found = search_commons_candidates(query, limit, timeout, min_w, min_h, max_n=1)
+    return found[0] if found else None
+
+
+def search_commons_candidates(query: str, limit: int = 12, timeout: int = 20,
+                              min_w: int = 400, min_h: int = 300, max_n: int = JUDGE_MAX) -> list:
+    """Commons を検索し、許可ライセンスの写真を検索順に最大 max_n 枚返す。"""
     q = (query or "").strip()
     if not q:
-        return None
+        return []
     params = {
         "action": "query", "format": "json", "generator": "search",
-        "gsrsearch": q, "gsrnamespace": "6", "gsrlimit": str(limit),
+        "gsrsearch": f"{q} filetype:bitmap", "gsrnamespace": "6", "gsrlimit": str(limit),
         "prop": "imageinfo", "iiprop": "url|extmetadata|size|mime",
         "iiurlwidth": "1280",
     }
@@ -83,18 +103,19 @@ def search_commons_one(query: str, limit: int = 12, timeout: int = 20,
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
     except Exception:
-        return None
+        return []
     pages = (data.get("query") or {}).get("pages") or {}
     # 検索順（index）でソート
     items = sorted(pages.values(), key=lambda p: p.get("index", 9999))
+    found = []
     for p in items:
         ii_list = p.get("imageinfo") or []
         if not ii_list:
             continue
         ii = ii_list[0]
         mime = ii.get("mime", "")
-        if not mime.startswith("image/") or mime == "image/svg+xml":
-            continue  # 写真でないもの（SVG等）は除外
+        if mime not in _PHOTO_MIMES:
+            continue  # 写真でないもの（SVG・本や文書のスキャンの DjVu/TIFF 等）は除外
         ext = ii.get("extmetadata") or {}
         short = (ext.get("LicenseShortName") or {}).get("value", "")
         if not _license_ok(short):
@@ -102,7 +123,7 @@ def search_commons_one(query: str, limit: int = 12, timeout: int = 20,
         w, h = ii.get("width", 0) or 0, ii.get("height", 0) or 0
         if w < min_w or h < min_h:
             continue  # 小さすぎ（ロゴ・アイコン）を除外
-        return {
+        found.append({
             "url": ii.get("url", ""),
             "thumb_url": ii.get("thumburl") or ii.get("url", ""),
             "license": short,
@@ -110,8 +131,53 @@ def search_commons_one(query: str, limit: int = 12, timeout: int = 20,
             "attribution": _clean_attribution(ext),
             "commons_page_url": ii.get("descriptionurl", ""),
             "title": (p.get("title", "") or "").replace("File:", ""),
-        }
-    return None
+        })
+        if len(found) >= max_n:
+            break
+    return found
+
+
+PHOTO_JUDGE_SYSTEM = "あなたは動画素材の写真の確認係です。写真を見て、指示された JSON だけを返します。"
+
+PHOTO_JUDGE_QUERY = """この写真を、動画の次の文の場面に使えるかを確かめます。
+文: {sentence}
+探しているもの: {topic}（検索語: {query}）
+写真のファイル名: {title}
+
+写真に「探しているもの」そのもの（その店・その会社の建物や看板や店内・その人・その場所・その物）が
+写っていれば match を true にしてください。
+本の表紙・文書や新聞や地図のスキャン・無関係の物や場所・同じ名前の別の物・判別できない写真は false。
+JSON のみ: {{"match": true または false, "what": "写っているものを短く"}}"""
+
+
+def photo_shows_topic(client, sel: dict, cand: dict, timeout: int = 20) -> tuple:
+    """(使えるか, 写っているもの)。写真を取れない・判定できないときは (None, 理由)。"""
+    from verifier import _encode_for_review, CLAUDE_MODEL
+    try:
+        req = urllib.request.Request(cand.get("thumb_url") or cand.get("url", ""), headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read()
+        b64, media = _encode_for_review(data, ".jpg", max_side=768)
+    except Exception as e:
+        return None, f"写真を取得できず（{type(e).__name__}）"
+    text = PHOTO_JUDGE_QUERY.format(sentence=(sel.get("sentence") or sel.get("topic") or "")[:200],
+                                    topic=sel.get("topic", ""), query=sel.get("query", ""),
+                                    title=cand.get("title", "")[:120])
+    try:
+        response = client.messages.create(
+            model=CLAUDE_MODEL, max_tokens=300, system=PHOTO_JUDGE_SYSTEM,
+            timeout=180, effort="high", workload="assets_review",
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
+                {"type": "text", "text": text}]}],
+        )
+        answer = "".join(getattr(b, "text", "") for b in response.content if hasattr(b, "text"))
+        obj = parse_json_object(answer)
+    except Exception as e:
+        return None, f"判定できず（{type(e).__name__}）"
+    if not isinstance(obj, dict) or not isinstance(obj.get("match"), bool):
+        return None, "判定を読めず"
+    return obj["match"], str(obj.get("what") or "")[:40]
 
 
 def _translate_queries(client, queries: list, log=None) -> dict:
@@ -167,10 +233,22 @@ def run_commons_search_for_selections(
         cb(info)
         return info
 
+    def _find(sel, query, min_w=400, min_h=300):
+        """検索して、写っているものを確かめた最初の候補を返す（判定役が無いときは先頭）。"""
+        for cand in search_commons_candidates(query, 12, 20, min_w, min_h, max_n=JUDGE_MAX if client else 1):
+            if client is None:
+                return cand
+            ok, what = photo_shows_topic(client, sel, cand)
+            if ok:
+                return cand
+            note = f"写っているもの: {what}" if ok is False else what
+            log("websearch", f"Commons №{sel.get('no')} 「{cand.get('title', '')[:40]}」は不採用（{note}）")
+        return None
+
     results = {}
     pending = []
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
-        futs = {ex.submit(search_commons_one, s.get("query", "")): s for s in selections}
+        futs = {ex.submit(_find, s, s.get("query", "")): s for s in selections}
         for f in as_completed(futs):
             s = futs[f]
             try:
@@ -191,7 +269,7 @@ def run_commons_search_for_selections(
             for s in pending:
                 en = (trans.get(s.get("query", "")) or "").strip()
                 if en and en != s.get("query", ""):
-                    futs[ex.submit(search_commons_one, en)] = s
+                    futs[ex.submit(_find, s, en)] = s
             for f in as_completed(futs):
                 s = futs[f]
                 try:
@@ -210,7 +288,7 @@ def run_commons_search_for_selections(
                 futs = {}
                 for s in pending2:
                     q = (trans.get(s.get("query", "")) or "").strip() or s.get("query", "")
-                    futs[ex.submit(search_commons_one, q, 12, 20, 240, 160)] = s
+                    futs[ex.submit(_find, s, q, 240, 160)] = s
                 for f in as_completed(futs):
                     s = futs[f]
                     try:
@@ -222,7 +300,7 @@ def run_commons_search_for_selections(
                         relaxed_hits += 1
 
     log("websearch",
-        f"Commons: {len(results)}/{len(selections)} 件取得（許可ライセンスのみ・"
+        f"Commons: {len(results)}/{len(selections)} 件取得（許可ライセンスのみ・写っているものを確認・"
         f"英訳再検索含む" + (f"・サイズ緩和で+{relaxed_hits}" if relaxed_hits else "") + "）")
     return results
 

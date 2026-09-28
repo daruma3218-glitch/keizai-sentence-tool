@@ -310,8 +310,9 @@ def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0) -> str:
         line = (f"BACKGROUND OF THIS IMAGE: a plain, very light {tone} paper background (almost white) "
                 "behind the whole board.")
     else:
-        line = (f"BACKDROP COLOR OF THIS IMAGE: {tone}. Use calm tints of this color for the walls, sky "
-                "or plain backdrop; people and objects keep their own colors.")
+        line = (f"BACKDROP COLOR OF THIS IMAGE: {tone}. For a plain backdrop, use calm tints of this color; "
+                "for an illustrated place, use it as the main tint of its walls or sky. People and objects "
+                "keep their own colors.")
     return lock_text[:m.start()] + line + lock_text[m.end():]
 
 

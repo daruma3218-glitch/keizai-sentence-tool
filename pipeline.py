@@ -1209,6 +1209,7 @@ class SentencePipeline:
                         "no": r["no"],
                         "query": rt.get("search_query") or r.get("sentence", "")[:30],
                         "topic": rt.get("topic") or r.get("sentence", "")[:20],
+                        "sentence": r.get("sentence", ""),  # 写真に写っているものの確認用
                     })
             # 再開時: 前回取得済みの文は検索対象から外す
             if resumed_web_nos:

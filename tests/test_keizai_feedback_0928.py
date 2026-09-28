@@ -166,3 +166,16 @@ def test_supervising_economist_is_the_professor():
     # 9/28 試験・9/27 本番の №11「経済学者の監修のもとで制作」で、先生ではない男性が描かれ画風2点になった
     world = appmod.get_channel("keizai")["defaults"]["worldview_desc"]
     assert "the economist who supervises this channel" in world
+
+
+def test_backgrounds_are_chosen_by_content():
+    # 9/28 社長「内容によってはイラストで描かれたもののほうが動画として使いやすそう。全部じゃなくて使い分け」
+    import prompter
+    import verifier
+    world = appmod.get_channel("keizai")["defaults"]["worldview_desc"]
+    assert "BACKGROUNDS OF STORY SCENES" in world and "Illustrated place" in world and "Plain backdrop" in world
+    assert "背景の使い分け" in prompter._style_lock_block(world)
+    assert "背景の描き込みは減点しない" in verifier.STYLE_CHECK_RULES_JA
+    line = generator.apply_backdrop(world, "illustration", 0)
+    assert "for an illustrated place, use it as the main tint of its walls or sky" in line
+    assert len(world) < 5000  # 画風チェックは設定文を5000字まで渡す
