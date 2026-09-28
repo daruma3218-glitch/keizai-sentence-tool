@@ -112,3 +112,23 @@ def test_running_job_is_not_notified(isolated, monkeypatch):
     (isolated / "j3").mkdir()
     appmod._set_job_state("j3", status="running", channel_id="keizai", title="t")
     assert _REAL_NOTIFY("j3") is False
+
+
+def test_start_time_is_shown_in_japan_time(monkeypatch):
+    # 本番のサーバーは UTC。9/28 の試験で 09:02 開始が「00:02開始」と出た
+    import os
+    import time as _t
+    if not hasattr(_t, "tzset"):  # Windows では時刻帯を差し替えられないので、この PC の時刻帯で確かめる
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        jid = datetime.now().strftime("%Y%m%d_%H%M%S")
+        assert appmod._job_started_jst(jid) == datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%H:%M")
+        return
+    monkeypatch.setenv("TZ", "UTC")
+    _t.tzset()
+    try:
+        assert appmod._job_started_jst("20260928_000230") == "09:02"
+    finally:
+        monkeypatch.delenv("TZ")
+        _t.tzset()
+    assert appmod._job_started_jst("bad") == ""

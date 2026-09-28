@@ -354,9 +354,18 @@ def generation_board() -> dict:
         channel = get_channel(st.get("channel_id", "")) if st else {}
         return {"id": job_id, "title": st.get("title") or "（題を分析中）",
                 "creator": st.get("creator", ""), "channel": channel.get("name", ""),
-                "percent": st.get("percent", 0), "started": job_id[9:11] + ":" + job_id[11:13]
-                if job_id and len(job_id) >= 13 else ""}
+                "percent": st.get("percent", 0), "started": _job_started_jst(job_id)}
     return {"running": brief(running) if running else None, "waiting": [brief(j) for j in waiting]}
+
+
+def _job_started_jst(job_id: str) -> str:
+    """job_id（サーバーの時刻。本番は UTC）から日本時間の「時:分」。9/28 試験で 09:02 が 00:02 と出た。"""
+    try:
+        started = datetime.strptime(str(job_id)[:15], "%Y%m%d_%H%M%S").astimezone()  # サーバーの時刻として解釈
+    except ValueError:
+        return ""
+    from zoneinfo import ZoneInfo
+    return started.astimezone(ZoneInfo("Asia/Tokyo")).strftime("%H:%M")
 
 
 def _queue_message(job_id: str) -> str:
