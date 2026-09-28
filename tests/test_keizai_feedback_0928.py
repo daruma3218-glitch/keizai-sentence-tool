@@ -228,7 +228,7 @@ def test_full_bleed_crops_instead_of_adding_side_bars(tmp_path):
 def test_full_bleed_prompt_and_boards_without_outer_frame():
     assert generator.full_bleed(WORLD)
     scene = generator._build_full_prompt("A cafe.", "illustration", style_lock=WORLD)
-    assert "Fill the WHOLE frame edge to edge" in scene and "generous safe margin" not in scene
+    assert "Fill the WHOLE 16:9 frame edge to edge" in scene and "generous safe margin" not in scene
     diagram = generator._build_full_prompt("x", "diagram", style_lock=WORLD, board=4)
     assert "board surface itself fills the whole frame edge to edge" in diagram
     assert "BOARD OF THIS IMAGE: a light tablet screen surface." in diagram
@@ -243,21 +243,49 @@ def test_generator_asks_for_crop_on_full_bleed_channels(tmp_path, monkeypatch):
 
     def fake_openai(client, full_prompt, output_path, **kw):
         seen["fill"] = kw.get("fill")
+        seen["size"] = kw.get("size")
         from PIL import Image
         Image.new("RGB", (32, 18)).save(output_path)
         return True, ""
 
     monkeypatch.setattr(generator, "_sync_generate_image_openai", fake_openai)
     gen = generator.ParallelImageGenerator(provider=generator.PROVIDER_GPT_IMAGE, openai_api_key="test-only",
-                                           concurrency=1, style_lock_text=WORLD)
+                                           concurrency=1, style_lock_text=WORLD,
+                                           openai_model="gpt-image-2.5-flare")
     asyncio.run(gen.generate_all([{"index": 1, "prompt": "A shop.", "type": "illustration"}], tmp_path))
+    assert generator.openai_size_for("gpt-image-1", WORLD) == "1536x1024"   # 大きさを選べないモデルは従来どおり
+    assert generator.openai_size_for("gpt-image-2.5-flare", "ART STYLE") == "1536x1024"  # ほかのチャンネル
     assert seen["fill"] == "crop"
+    assert seen["size"] == "1536x864"  # 9/28: 切ると縦に長い図解の見出しが欠けた → 16:9 で直接描かせる
 
 
 def test_chart_redraw_is_cropped_and_keeps_numbers_clear_of_the_trim(tmp_path):
     from PIL import Image
     images, original, res, calls = _restyle(tmp_path, keep_plain=False)
-    assert "top and bottom 8% are trimmed" in calls[0]["prompt"]
+    assert "5% away from every edge" in calls[0]["prompt"]
+    assert calls[0]["size"] == "1536x864"  # 16:9 のまま描かせる（上下を切らない）
     with Image.open(images / "5.png") as im:
         w, h = im.size
     assert abs(w / h - 16 / 9) < 0.01
+
+
+def test_rejected_16_9_size_falls_back_to_3_2(tmp_path):
+    import base64
+    import io
+    from types import SimpleNamespace
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (1536, 1024), (10, 10, 10)).save(buf, format="PNG")
+    sizes = []
+
+    def generate(**kw):
+        sizes.append(kw["size"])
+        if kw["size"] == "1536x864":
+            raise ValueError("Invalid value for 'size'")
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(buf.getvalue()).decode(), url=None)])
+
+    client = SimpleNamespace(images=SimpleNamespace(generate=generate))
+    ok, err = generator._sync_generate_image_openai(client, "x", tmp_path / "a.png", size="1536x864", fill="crop")
+    assert ok and sizes == ["1536x864", "1536x1024"]
+    with Image.open(tmp_path / "a.png") as im:
+        assert im.size == (1536, 864)  # 3:2 で描いても 16:9 に合わせる（帯は足さない）

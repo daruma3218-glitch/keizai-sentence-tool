@@ -164,7 +164,7 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
                  style_lock_text: str = "", reference_path: str = "", sentence: str = "",
                  backdrop: int = 0, layout: int = 0) -> tuple:
     """描いたグラフを番組の絵柄に描き直して out_path に保存。(成功, エラー)。"""
-    from generator import _save_as_16_9, apply_backdrop, apply_board, full_bleed
+    from generator import _save_as_16_9, apply_backdrop, apply_board, full_bleed, openai_size_for
     import base64
 
     images = [_image_file(Path(rendered_path).read_bytes(), "chart.png")]
@@ -180,16 +180,17 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
                    "Do not write this sentence in the image.")
     if full_bleed(style_lock_text):
         # 画面いっぱい（上下を約8%ずつ切って 16:9 にする）。切られる帯に数字や見出しを置かせない
-        prompt += ("\n\nFRAME: fill the whole frame edge to edge with the scene (no side bars, no blank margins). "
-                   "The top and bottom 8% are trimmed for the 16:9 video, so keep the whole chart, every number "
-                   "and label, and the professor's face at least 10% away from the top and bottom edges.")
+        prompt += ("\n\nFRAME: fill the whole 16:9 frame edge to edge with the scene (no side bars, no blank "
+                   "margins). Keep the whole chart, every number and label, and the professor's face at least 5% "
+                   "away from every edge.")
     if (style_lock_text or "").strip():
         # 背景の色は段落ごと（スクリーンのある場面なので、場面の背景色として渡す）
         prompt += "\n\n" + apply_board(apply_backdrop(style_lock_text.strip(), "illustration", backdrop),
                                         "illustration")
     try:
         response = openai_client.images.edit(
-            model=model, image=images, prompt=prompt, n=1, size="1536x1024", quality=quality,
+            model=model, image=images, prompt=prompt, n=1,
+            size=openai_size_for(model, style_lock_text), quality=quality,
         )
         datum = response.data[0] if response and response.data else None
         b64 = getattr(datum, "b64_json", None) if datum is not None else None

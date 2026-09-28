@@ -109,6 +109,18 @@ def full_bleed(lock_text: str) -> bool:
     return FULL_BLEED_MARK in (lock_text or "")
 
 
+# 16:9 で直接描かせる大きさ（9/28 12:35 の試験で、上下を切る方式だと縦に長い図解の見出しや下の段が
+# 欠けた＝№13「飲食店」）。gpt-image-2 系は幅・高さが16の倍数なら好きな大きさを指定できる。
+NATIVE_16_9_SIZE = "1536x864"
+
+
+def openai_size_for(model: str, lock_text: str, default: str = "1536x1024") -> str:
+    """画面いっぱいのチャンネルで gpt-image-2 系なら 16:9 のまま描かせる。ほかは従来の大きさ。"""
+    if full_bleed(lock_text) and (model or "").startswith("gpt-image-2"):
+        return NATIVE_16_9_SIZE
+    return default
+
+
 def _crop_to_16_9(img: Image.Image) -> Image.Image:
     """中央を 16:9 に切り出す（3:2 なら上下を切る・横長すぎなら左右を切る）。"""
     w, h = img.size
@@ -537,11 +549,10 @@ def _build_full_prompt(
 
     if lock and full_bleed(lock):
         composition = (
-            "- COMPOSITION (CRITICAL): Fill the WHOLE frame edge to edge with the scene, the board surface or the "
-            "backdrop: no outer frame, no border, no side bars and no blank margins around the picture.\n"
-            "  The picture is trimmed to 16:9 by cutting about 8% from the top and 8% from the bottom, so keep all "
-            "text, labels, numbers, faces and key objects at least 10% away from the top and bottom edges and 4% "
-            "away from the left and right edges.\n"
+            "- COMPOSITION (CRITICAL): Fill the WHOLE 16:9 frame edge to edge with the scene, the board surface or "
+            "the backdrop: no outer frame, no border, no side bars and no blank margins around the picture.\n"
+            "  Keep all text, labels, numbers, faces and key objects at least 5% away from every edge; for a "
+            "diagram, lay the elements out across the wide frame rather than stacking them from top to bottom.\n"
             "- Make the main content large and easy to see; do not shrink it into the middle of the frame.\n"
         )
     else:
@@ -724,6 +735,12 @@ def _sync_generate_image_openai(
                 return False, f"model not available: {model_name} ({err[:80]})"
             if "401" in err or "invalid api key" in err_lower:
                 return False, f"invalid OpenAI API key: {err[:80]}"
+            if "size" in err_lower and size != "1536x1024":
+                # 16:9 の大きさ（NATIVE_16_9_SIZE）を断られたら、従来の 3:2 で描いて 16:9 に合わせる
+                # （やり直しの回数は既定1回なので、回数を使わずに1度だけ呼び直す）
+                return _sync_generate_image_openai(client, full_prompt, output_path, model_name=model_name,
+                                                   size="1536x1024", quality=quality,
+                                                   reference_bytes=reference_bytes, fill=fill)
             time.sleep(3 + 2 * attempt)
 
     return False, last_error or "max retries exceeded"
@@ -845,7 +862,7 @@ class ParallelImageGenerator:
             return _sync_generate_image_openai(
                 self.openai_client, full_prompt, output_path,
                 model_name=self.openai_model,
-                size=self.openai_size,
+                size=openai_size_for(self.openai_model, self.style_lock_text, self.openai_size),
                 quality=self.openai_quality,
                 reference_bytes=ref,
                 fill="crop" if full_bleed(self.style_lock_text) else "pad",
