@@ -160,3 +160,9 @@ def test_zip_carries_the_unused_version(tmp_path, monkeypatch):
     rows = json.loads((job / "rows_progress.json").read_text(encoding="utf-8"))["rows"]
     files = appmod._chart_alternate_files(job, rows)
     assert [arc for _, arc in files] == ["グラフの別版/5_先生が紹介.png"]
+
+
+def test_supervising_economist_is_the_professor():
+    # 9/28 試験・9/27 本番の №11「経済学者の監修のもとで制作」で、先生ではない男性が描かれ画風2点になった
+    world = appmod.get_channel("keizai")["defaults"]["worldview_desc"]
+    assert "the economist who supervises this channel" in world
