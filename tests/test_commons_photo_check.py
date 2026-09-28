@@ -186,3 +186,12 @@ def test_wikimedia_is_asked_once_a_second_and_429_is_retried(monkeypatch):
     assert len(calls) == 2 and calls[0] == cs._UA
     assert 3.0 in sleeps  # Retry-After を待つ
     assert any(0 < s <= 1.0 for s in sleeps)  # 前の要求から1秒あける
+
+
+def test_same_brand_photo_is_kept_with_a_note(monkeypatch):
+    # 9/28 本番: 「原宿1号店の開業当時とは確認できない」ドトールの店舗の写真まで外していた
+    got, judge, _ = _run(monkeypatch, ['{"match": true, "exact": false, "what": "ドトールの別の店舗"}'],
+                         ["Doutor_Osaka.jpg"])
+    assert got[46]["source_title"] == "Doutor_Osaka.jpg"
+    assert got[46]["photo_note"].startswith("※文の店舗・時代そのものではない可能性")
+    assert '"exact"' in judge.seen[0]

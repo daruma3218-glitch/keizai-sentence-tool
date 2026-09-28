@@ -184,11 +184,13 @@ PHOTO_JUDGE_QUERY = """この写真を、動画の次の文の場面に使える
 探しているもの: {topic}（検索語: {query}）
 写真のファイル名: {title}
 
-写真に「探しているもの」そのもの（その店・その会社の建物や看板や店内・その人・その場所・その物）が
+写真に「探しているもの」（その店・その会社やブランドの店舗や看板や店内・その人・その場所・その物）が
 写っていれば match を true にしてください。
+文が特定の店舗や時代（1号店・創業当時など）を指していて、写真が同じ会社・ブランドの別の店舗や今の姿のときも
+match は true にし、exact を false にしてください（編集の人が注記を見て使うかを決めます）。
 本の表紙・文書や新聞や地図のスキャン・ロゴやバナーや文字だけの画像・無関係の物や場所・同じ名前の別の物・
-判別できない写真は false。
-JSON のみ: {{"match": true または false, "what": "写っているものを短く"}}"""
+判別できない写真は match を false。
+JSON のみ: {{"match": true または false, "exact": true または false, "what": "写っているものを短く"}}"""
 
 
 def photo_shows_topic(client, sel: dict, cand: dict, timeout: int = 20, data: bytes = None) -> tuple:
@@ -217,7 +219,12 @@ def photo_shows_topic(client, sel: dict, cand: dict, timeout: int = 20, data: by
         return None, f"判定できず（{type(e).__name__}）"
     if not isinstance(obj, dict) or not isinstance(obj.get("match"), bool):
         return None, "判定を読めず"
-    return obj["match"], str(obj.get("what") or "")[:40]
+    what = str(obj.get("what") or "")[:40]
+    if obj["match"] and obj.get("exact") is False:
+        # 9/28 本番: 「原宿1号店の開業当時とは確認できない」ドトールの店舗まで外していた。同じ会社・ブランドの
+        # 写真は使える素材として残し、注記を付ける
+        what = "※文の店舗・時代そのものではない可能性: " + what
+    return obj["match"], what
 
 
 def _translate_queries(client, queries: list, log=None) -> dict:
@@ -269,6 +276,7 @@ def run_commons_search_for_selections(
             "license_url": res["license_url"],
             "attribution": res["attribution"],
             "commons_page_url": res["commons_page_url"],
+            "photo_note": res.get("photo_note", ""),
         }
         cb(info)
         return info
@@ -291,7 +299,7 @@ def run_commons_search_for_selections(
             seen.add(cand.get("title"))
             ok, what = photo_shows_topic(client, sel, cand)
             if ok:
-                return cand
+                return {**cand, "photo_note": what}
             note = f"写っているもの: {what}" if ok is False else what
             log("websearch", f"Commons №{sel.get('no')} 「{cand.get('title', '')[:40]}」は不採用（{note}）")
         return None

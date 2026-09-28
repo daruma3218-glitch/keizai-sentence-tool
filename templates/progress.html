@@ -409,7 +409,8 @@
       return `
         <a href="${escapeHtml(src)}" target="_blank" rel="noopener" class="block hover:opacity-80" title="${escapeHtml(topic)}: ${escapeHtml(src)}">
           ${thumbHtml}
-          ${sourceType ? `<div class="text-[9px] text-emerald-600 truncate mt-0.5">${escapeHtml(sourceType)}</div>` : ''}
+          ${sourceType ? `<div class="text-[9px] ${sourceType.startsWith('引用') ? 'text-amber-700 font-bold' : 'text-emerald-600'} truncate mt-0.5">${escapeHtml(sourceType)}</div>` : ''}
+          ${row.web_note && row.web_note.startsWith('※') ? `<div class="text-[9px] text-amber-600 mt-0.5" title="${escapeHtml(row.web_note)}">※別の店舗・今の姿の可能性</div>` : ''}
           <div class="text-[10px] text-purple-600 truncate mt-0.5">${escapeHtml(topic.substring(0, 18))}</div>
         </a>${pickBtn}`;
     }

@@ -112,6 +112,7 @@ def find_quote_photo(client, sel: dict, search=None, judge=None, log: Optional[C
                 "source_title": page.get("title") or host_of(url), "topic": sel.get("topic", ""),
                 "license": QUOTE_LICENSE, "license_url": "", "attribution": host_of(url),
                 "commons_page_url": "", "source_type": "引用・" + _source_type(url, page.get("title", "")),
+                "photo_note": what or "",
             }
         note = f"写っているもの: {what}" if ok is False else what
         log("websearch", f"引用 №{sel.get('no')} {host_of(url)} の画像は不採用（{note}）")

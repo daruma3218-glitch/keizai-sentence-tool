@@ -1127,6 +1127,7 @@ class SentencePipeline:
                 license=info.get("license", ""),
                 attribution=info.get("attribution", ""),
                 commons_page_url=info.get("commons_page_url", ""),
+                web_note=info.get("photo_note", ""),  # 写っているもの（別の店舗・今の姿なら ※ の注記）
                 web_material_type=info.get("material_type", ""),  # 資料パックの分類用
                 # 差し替え候補（検索でヒットした他ページ）。UIの「候補から選ぶ」で使う
                 web_candidates=[

@@ -2049,6 +2049,7 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
             "license": info.get("license", ""),
             "attribution": info.get("attribution", ""),
             "commons_page_url": info.get("commons_page_url", ""),
+            "web_note": info.get("photo_note", ""),
         },
     )
     return jsonify({"ok": True, "no": no, "filename": fname, "route": "web_photo", "ts": datetime.now().strftime("%H%M%S")})
