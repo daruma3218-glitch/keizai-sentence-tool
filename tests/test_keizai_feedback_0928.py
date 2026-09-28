@@ -26,7 +26,7 @@ def test_other_people_have_open_eyes_in_world_and_every_lock():
 
 # ── ② 図解は説明ボード
 def test_locked_diagram_is_an_explanation_board_not_a_scene():
-    assert "IMAGE KINDS" in WORLD and "very light paper background" in WORLD
+    assert "IMAGE KINDS" in WORLD and "BOARD OF THIS IMAGE" in WORLD
     diagram = generator._build_full_prompt("Cup -> shop -> coins.", "diagram", style_lock=WORLD)
     assert "This image is a DIAGRAM" in diagram
     assert "clean conceptual diagram with arrows" in diagram  # 組み立ての指示は残す
@@ -44,7 +44,7 @@ def test_backdrop_list_is_replaced_by_one_color_per_paragraph():
     assert "BACKDROP COLOR OF THIS IMAGE: pale slate blue-gray" in first
     assert "BACKDROP COLOR OF THIS IMAGE: warm light beige" in second
     diagram = generator._build_full_prompt("x", "diagram", style_lock=WORLD, backdrop=1)
-    assert "very light warm light beige paper background" in diagram
+    assert "any margin around it is a plain, very light warm light beige" in diagram
 
 
 def test_same_paragraph_same_color_and_regeneration_keeps_it():
@@ -105,7 +105,7 @@ def test_research_chart_keeps_plain_and_gets_a_screen_version(tmp_path):
     assert res == {"restyled": True, "reason": "", "variants": ["plain", "screen"], "variant": "plain"}
     assert (images / "5.png").read_bytes() == original  # 実データのグラフは「データのみ」を使う
     assert variant_path(tmp_path, 5, "screen").exists()
-    assert "presentation screen" in calls[0]["prompt"]
+    assert "LAYOUT OF THIS IMAGE: one large green classroom blackboard" in calls[0]["prompt"]  # №5 → 見せ方2
     assert "BACKDROP COLOR OF THIS IMAGE: warm light beige" in calls[0]["prompt"]
 
 
@@ -178,4 +178,28 @@ def test_backgrounds_are_chosen_by_content():
     assert "背景の描き込みは減点しない" in verifier.STYLE_CHECK_RULES_JA
     line = generator.apply_backdrop(world, "illustration", 0)
     assert "for an illustrated place, use it as the main tint of its walls or sky" in line
-    assert len(world) < 5000  # 画風チェックは設定文を5000字まで渡す
+    assert len(world) < 6000  # 画風チェックは設定文を6000字まで渡す
+
+
+# ── 9/28 午後「まだ単調な雰囲気」: 見せ方・板・構図を変える
+def test_number_cards_rotate_their_layout_by_image_number():
+    from chart_restyle import CHART_LAYOUTS
+    assert len(CHART_LAYOUTS) == 4
+    assert len({CHART_LAYOUTS[n % 4] for n in (9, 10, 11, 12)}) == 4  # 続く数字カードは違う見せ方
+
+
+def test_diagrams_rotate_their_board_and_other_images_drop_the_list():
+    first = generator._build_full_prompt("x", "diagram", style_lock=WORLD, board=0)
+    third = generator._build_full_prompt("x", "diagram", style_lock=WORLD, board=2)
+    assert "BOARD OF THIS IMAGE: a plain, very light paper sheet." in first
+    assert "BOARD OF THIS IMAGE: a green classroom chalkboard" in third
+    for prompt in (first, third):
+        assert "DIAGRAM BOARDS:" not in prompt
+    scene = generator._build_full_prompt("A cafe.", "illustration", style_lock=WORLD, board=2)
+    assert "DIAGRAM BOARDS:" not in scene and "BOARD OF THIS IMAGE:" not in scene
+
+
+def test_prompter_varies_composition_and_spaces_out_the_professor():
+    import prompter
+    block = prompter._style_lock_block(WORLD)
+    assert "構図を1枚ごとに変える" in block and "続けて描かない" in block and "3分の1" in block

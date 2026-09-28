@@ -150,7 +150,7 @@ def verify_image(
     if style_ref:
         image_note = "2枚目の画像は"
         style_block = (
-            f"\n\n{STYLE_CHECK_RULES_JA}\n世界観の設定文:\n---\n{style_rules.strip()[:5000]}\n---"
+            f"\n\n{STYLE_CHECK_RULES_JA}\n世界観の設定文:\n---\n{style_rules.strip()[:6000]}\n---"
         )
         style_fields = (
             ', "style_score": 1〜5 の整数（上の画風チェック）, '

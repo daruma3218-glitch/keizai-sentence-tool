@@ -147,17 +147,19 @@ PHOTO_JUDGE_QUERY = """この写真を、動画の次の文の場面に使える
 
 写真に「探しているもの」そのもの（その店・その会社の建物や看板や店内・その人・その場所・その物）が
 写っていれば match を true にしてください。
-本の表紙・文書や新聞や地図のスキャン・無関係の物や場所・同じ名前の別の物・判別できない写真は false。
+本の表紙・文書や新聞や地図のスキャン・ロゴやバナーや文字だけの画像・無関係の物や場所・同じ名前の別の物・
+判別できない写真は false。
 JSON のみ: {{"match": true または false, "what": "写っているものを短く"}}"""
 
 
-def photo_shows_topic(client, sel: dict, cand: dict, timeout: int = 20) -> tuple:
+def photo_shows_topic(client, sel: dict, cand: dict, timeout: int = 20, data: bytes = None) -> tuple:
     """(使えるか, 写っているもの)。写真を取れない・判定できないときは (None, 理由)。"""
     from verifier import _encode_for_review, CLAUDE_MODEL
     try:
-        req = urllib.request.Request(cand.get("thumb_url") or cand.get("url", ""), headers={"User-Agent": _UA})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = r.read()
+        if data is None:
+            req = urllib.request.Request(cand.get("thumb_url") or cand.get("url", ""), headers={"User-Agent": _UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = r.read()
         b64, media = _encode_for_review(data, ".jpg", max_side=768)
     except Exception as e:
         return None, f"写真を取得できず（{type(e).__name__}）"
@@ -379,4 +381,20 @@ def build_credits_text(items: list) -> str:
         lines.append("")
     if n == 0:
         lines.append("（Wikimedia Commons の画像は使用していません）")
+    # 引用で使う写真（2026-09-28 quote_searcher）: 画面に出典を表示し、概要欄にも載せる
+    quoted, seen_q = [], set()
+    for it in items:
+        if (it.get("license") or "").strip() != "引用":
+            continue
+        url = (it.get("source_url") or "").strip()
+        if not url or url in seen_q:
+            continue
+        seen_q.add(url)
+        quoted.append(it)
+    if quoted:
+        lines += ["", "■ 引用した画像の出典（画面にも出典を表示してください）", ""]
+        for i, it in enumerate(quoted, 1):
+            lines.append(f"{i}. {(it.get('source_title') or it.get('attribution') or '').strip()}（№{it.get('no')}）")
+            lines.append(f"   出典: {(it.get('attribution') or '').strip()} {it.get('source_url')}")
+            lines.append("")
     return "\n".join(lines)

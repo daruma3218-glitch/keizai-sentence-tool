@@ -1223,13 +1223,21 @@ class SentencePipeline:
 
             def web_task_auto():
                 try:
-                    if self.photo_source == "commons":
+                    if self.photo_source in ("commons", "commons_then_quote"):
                         # v3 Step3: Wikimedia Commons 限定（許可ライセンスのみ・権利安全）
                         from commons_searcher import run_commons_search_for_selections
-                        run_commons_search_for_selections(
+                        found = run_commons_search_for_selections(
                             client, selections, max_workers=web_workers,
                             log=self._log, item_callback=_web_on_item,
                         )
+                        if self.photo_source == "commons_then_quote":
+                            # 2026-09-28 社長「引用で使う前提で範囲を広げたら編集しやすくなりそう」:
+                            # Commons に無かった文は、公式サイト・百科事典・報道の写真を引用として探す
+                            from quote_searcher import run_quote_search_for_selections
+                            run_quote_search_for_selections(
+                                client, [s for s in selections if s["no"] not in found],
+                                max_workers=3, log=self._log, item_callback=_web_on_item,
+                            )
                     else:
                         run_web_search_for_selections(
                             client, selections, max_workers=web_workers,

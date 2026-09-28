@@ -1997,7 +1997,7 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
         return jsonify({"error": "Web写真検索に必要な文が見つかりません"}), 404
     client = get_anthropic_client(ch_keys.get("anthropic", ""))
     selections = [{"no": no, "query": sentence[:40], "topic": sentence[:24], "sentence": sentence}]
-    if defaults.get("photo_source") == "commons":
+    if defaults.get("photo_source") in ("commons", "commons_then_quote"):
         # 写真を Commons に限るチャンネル（カラクリ経済学）は、1枚の作り直しも Commons から、
         # 写っているものを確かめて使う（2026-09-28。自動の経路と同じ決まり）
         from commons_searcher import run_commons_search_for_selections, suggest_query
@@ -2009,8 +2009,12 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
                 selections[0].update(query=hint["query"], topic=hint.get("topic") or hint["query"])
         found = run_commons_search_for_selections(client, selections, max_workers=1)
         info = found.get(no) or {}
+        if not info and defaults.get("photo_source") == "commons_then_quote":
+            from quote_searcher import run_quote_search_for_selections
+            info = run_quote_search_for_selections(client, selections, max_workers=1).get(no) or {}
         if not info:
-            return jsonify({"error": "Commons（自由に使える写真）で、この文に当てはまる写真が見つかりませんでした"}), 422
+            return jsonify({"error": "Commons（自由に使える写真）でも引用できる公式サイト・報道でも、"
+                                     "この文に当てはまる写真が見つかりませんでした"}), 422
     else:
         results = run_web_search_for_selections(
             client,

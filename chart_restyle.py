@@ -44,8 +44,8 @@ VARIANT_LABELS = {VARIANT_PLAIN: "データのみ", VARIANT_SCREEN: "先生が�
 CHART_RESTYLE_INSTRUCTION = (
     "CHART REDRAW: The FIRST attached image is an exact data chart for this video. Redraw it as "
     "one frame of this video series, in the channel art style described below, as a presentation "
-    "scene: the chart is shown on one large flat presentation screen that fills most of the frame, "
-    "so the chart stays the main subject, large and easy to read. "
+    "scene arranged as LAYOUT OF THIS IMAGE says, so the chart stays the main subject, large and "
+    "easy to read. "
     "Keep EVERY number, unit, label and title EXACTLY as written in the first image: the same "
     "characters, the same values, the same units, nothing added, nothing removed, nothing rounded. "
     "Copy every Japanese word character for character: do not paraphrase, shorten or reword any "
@@ -59,10 +59,25 @@ CHART_RESTYLE_INSTRUCTION = (
     "itself names (for example coins when it talks about yen). If the sentence does not name a "
     "concrete object, add no objects at all. Never draw food, products or packages that the "
     "sentence does not name (the video may still be hiding what the product is). "
-    "If a SECOND image is attached, it shows the channel's professor: draw him once, standing at "
-    "one side of the screen and pointing at the chart, drawn as that SAME person (identical face, "
-    "hair, glasses, half-lidded eyes, closed-mouth smile and outfit). He never covers any number "
-    "or label. The chart stays the main subject."
+    "If a SECOND image is attached, it shows the channel's professor: draw him once, placed as "
+    "LAYOUT OF THIS IMAGE says, as that SAME person (identical face, hair, glasses, half-lidded "
+    "eyes, closed-mouth smile and outfit). He never covers any number or label. If no second image "
+    "is attached, leave the professor out. The chart stays the main subject."
+)
+
+# 「先生が紹介」の見せ方（2026-09-28 社長「まだ単調な雰囲気」: 試験 20260928_010838 の数字カード
+# №9・10・16・17 が全部「右に先生・スクリーン」の同じ構図だった）。画像の番号で順に選ぶので、
+# 続く数字カードは違う見せ方になり、作り直しても同じ見せ方になる。
+CHART_LAYOUTS = (
+    "one large flat presentation screen fills most of the frame and shows the chart; the professor "
+    "stands at the RIGHT side of the screen and points at it",
+    "one large green classroom blackboard fills most of the frame and shows the chart, drawn cleanly "
+    "in the same flat style; the professor stands at the LEFT side of the board holding a pointer",
+    "the professor, seen from the waist up at one side of the frame, holds up one large flat card that "
+    "shows the chart; the card fills most of the frame",
+    "one large standing sign board that fits the topic of the narration sentence (for example a menu "
+    "board at a cafe, a price board at a shop or a notice board in an office) fills most of the frame "
+    "and shows the chart; the professor stands beside it and gestures toward it",
 )
 
 VERIFY_SYSTEM = (
@@ -147,15 +162,16 @@ def _image_file(data: bytes, name: str):
 
 def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: str, quality: str,
                  style_lock_text: str = "", reference_path: str = "", sentence: str = "",
-                 backdrop: int = 0) -> tuple:
+                 backdrop: int = 0, layout: int = 0) -> tuple:
     """描いたグラフを番組の絵柄に描き直して out_path に保存。(成功, エラー)。"""
-    from generator import _save_as_16_9, apply_backdrop
+    from generator import _save_as_16_9, apply_backdrop, apply_board
     import base64
 
     images = [_image_file(Path(rendered_path).read_bytes(), "chart.png")]
     if reference_path and Path(reference_path).exists():
         images.append(_image_file(Path(reference_path).read_bytes(), "professor.png"))
-    prompt = CHART_RESTYLE_INSTRUCTION
+    prompt = (CHART_RESTYLE_INSTRUCTION
+              + f"\n\nLAYOUT OF THIS IMAGE: {CHART_LAYOUTS[int(layout or 0) % len(CHART_LAYOUTS)]}.")
     if (sentence or "").strip():
         # 9/27 試験: 文を渡さないとポテトチップスの話にご飯茶碗を描き、文を渡しても
         # 「昔は、100グラム。」（何の重さかを伏せた文）にご飯茶碗を描いた → 文に名前がある物だけ
@@ -164,7 +180,8 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
                    "Do not write this sentence in the image.")
     if (style_lock_text or "").strip():
         # 背景の色は段落ごと（スクリーンのある場面なので、場面の背景色として渡す）
-        prompt += "\n\n" + apply_backdrop(style_lock_text.strip(), "illustration", backdrop)
+        prompt += "\n\n" + apply_board(apply_backdrop(style_lock_text.strip(), "illustration", backdrop),
+                                        "illustration")
     try:
         response = openai_client.images.edit(
             model=model, image=images, prompt=prompt, n=1, size="1536x1024", quality=quality,
@@ -250,7 +267,7 @@ def restyle_chart_file(images_dir: Path, no: int, *, openai_client, verify_clien
     shutil.copyfile(final, rendered)
     ok, err = redraw_chart(openai_client, rendered, candidate, model=model, quality=quality,
                            style_lock_text=style_lock_text, reference_path=reference_path,
-                           sentence=sentence, backdrop=backdrop)
+                           sentence=sentence, backdrop=backdrop, layout=no)
     if not ok:
         log("chart_restyle", f"№{no} 描き直しに失敗（コードのグラフのまま）: {err}")
         return {**plain_only, "reason": err}

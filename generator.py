@@ -307,13 +307,30 @@ def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0) -> str:
         return (lock_text[:m.start()] + lock_text[m.end():]).strip()
     tone = tones[int(key or 0) % len(tones)]
     if prompt_type in ("diagram", "chart"):
-        line = (f"BACKGROUND OF THIS IMAGE: a plain, very light {tone} paper background (almost white) "
-                "behind the whole board.")
+        line = (f"BACKGROUND OF THIS IMAGE: the board fills the frame; any margin around it is a plain, "
+                f"very light {tone} (almost white).")
     else:
         line = (f"BACKDROP COLOR OF THIS IMAGE: {tone}. For a plain backdrop, use calm tints of this color; "
                 "for an illustrated place, use it as the main tint of its walls or sky. People and objects "
                 "keep their own colors.")
     return lock_text[:m.start()] + line + lock_text[m.end():]
+
+
+# 図解の板の種類を画像ごとに変える（2026-09-28 社長「まだ背景が単調」: 試験の図解16枚が全部
+# 同じ白い紙のボードだった）。設定文の「DIAGRAM BOARDS: 板 | 板 | ...」から画像の番号で順に1つ選び、
+# 図解では「この画像の板」の指示に、ほかの種類では行ごと外す。作り直しても同じ板になる。
+_BOARD_LINE_RE = re.compile(r"^DIAGRAM BOARDS:(.*)$", re.MULTILINE)
+
+
+def apply_board(lock_text: str, prompt_type: str, key: int = 0) -> str:
+    m = _BOARD_LINE_RE.search(lock_text or "")
+    if not m:
+        return lock_text
+    boards = [b.strip() for b in m.group(1).split("|") if b.strip()]
+    if prompt_type != "diagram" or not boards:
+        return (lock_text[:m.start()] + lock_text[m.end():]).replace("\n\n\n", "\n\n")
+    board = boards[int(key or 0) % len(boards)]
+    return lock_text[:m.start()] + f"BOARD OF THIS IMAGE: {board}." + lock_text[m.end():]
 
 
 # 図解は場面のイラストと見た目を分ける（2026-09-28 新居先生「イラストと図のタッチが同じ」）。
@@ -342,6 +359,7 @@ def _build_full_prompt(
     style_preset: str = "",
     style_lock: str = "",
     backdrop: int = 0,
+    board: int = 0,
 ) -> str:
     """画像生成用のシステム接頭辞を付与
 
@@ -391,7 +409,7 @@ def _build_full_prompt(
     }
     lock = (style_lock or "").strip() if prompt_type in STYLE_LOCK_TYPES else ""
     if lock:
-        lock = apply_backdrop(lock, prompt_type, backdrop)
+        lock = apply_board(apply_backdrop(lock, prompt_type, backdrop), prompt_type, board)
         style = _STYLE_LOCK_SCENE_HINTS.get(prompt_type) or style_hints.get(prompt_type, "")
         if prompt_type == "diagram":
             style = _LOCKED_DIAGRAM_HINT + style
@@ -832,7 +850,7 @@ class ParallelImageGenerator:
 
             full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
                                              style_preset=row_style, style_lock=self.style_lock_text,
-                                             backdrop=backdrop_key(prompt_entry))
+                                             backdrop=backdrop_key(prompt_entry), board=idx)
             # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(
