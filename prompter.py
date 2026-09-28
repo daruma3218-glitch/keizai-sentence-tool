@@ -21,7 +21,10 @@ from utils import cached_user_content, claude_query, parse_json_array
 # 環境変数 PROMPTER_MODEL で変更可（例: PROMPTER_MODEL=claude-sonnet-5 で従来に戻す）。
 CLAUDE_MODEL = os.environ.get("PROMPTER_MODEL", "").strip() or "gpt-6-astra"
 BATCH_SIZE = 8
-PROMPTER_BATCH_TIMEOUT_SECONDS = 90
+# 2026-09-28: 90→180秒。90秒は 6/19 の Sonnet 時代の値で、ASTRA(high)では超えやすい。9/25〜28 に Codex が
+# 44回・Claude が1回時間切れ→そのバッチは機械の指示文に落ち、12:10 には両方切れて停止通知が出た。
+# 完了した114回の中央52秒・最大89.7秒(90秒で打ち切られた分は含まない)。社長承認。
+PROMPTER_BATCH_TIMEOUT_SECONDS = 180
 PROMPTER_OVERALL_TIMEOUT_SECONDS = 360
 # 並列の1巡あたりの見込み（PC経由の ASTRA で1バッチ 約2.5分・9/27 実測）。全体の上限は巡回数から決める。
 # 9/27 ルノアールの回（118文・15バッチ・6並列＝3巡）で上限が375秒しかなく、7〜15バッチの70文が
@@ -32,7 +35,9 @@ PROMPTER_ROUND_SECONDS = 200
 def prompter_overall_timeout(n_batches: int, max_workers: int) -> int:
     """指示文づくり全体の時間上限（秒）。並列の巡回数 × 1巡の見込み＋余裕。最低 PROMPTER_OVERALL_TIMEOUT_SECONDS。"""
     rounds = -(-max(1, n_batches) // max(1, max_workers))
-    return max(PROMPTER_OVERALL_TIMEOUT_SECONDS, rounds * PROMPTER_ROUND_SECONDS + 60)
+    # 1バッチが ASTRA で時間切れ→Claude でやり直す分(制限×2)は、短い回でも待つ
+    return max(PROMPTER_OVERALL_TIMEOUT_SECONDS, rounds * PROMPTER_ROUND_SECONDS + 60,
+               2 * PROMPTER_BATCH_TIMEOUT_SECONDS + 60)
 
 
 DIAGRAM_CONNECTOR_TERMS = [

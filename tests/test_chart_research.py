@@ -85,7 +85,8 @@ def test_source_note_drops_link_markup_and_urls():
 
 def test_prompter_time_limit_grows_with_parallel_rounds():
     from prompter import prompter_overall_timeout
-    assert prompter_overall_timeout(5, 6) == 360          # 1巡（短い回）は従来どおり
+    # 1巡（短い回）でも、1バッチの ASTRA の時間切れ→Claude のやり直し（180秒×2）を待つ（2026-09-28）
+    assert prompter_overall_timeout(5, 6) == 2 * 180 + 60
     assert prompter_overall_timeout(15, 6) == 3 * 200 + 60  # 9/27 ルノアールの回（3巡）
 
 
