@@ -259,6 +259,8 @@ def version():
         "editorial_models": {"selection": routing_model, "data_extraction": EXTRACT_MODEL,
                              "design": design_model, "image_review": review_model},
         "llm_billing": "subscription_cli_only", "llm_api_fallback": False,
+        # 従量APIへの明示の切り替え（既定オフ・2026-09-28）。ツール名・環境変数の名前・真偽値だけ
+        "llm_api_switch": subscription_runtime.api_switch_status(),
         "checked_at": datetime.now().isoformat(),
     })
 
