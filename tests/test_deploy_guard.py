@@ -6,7 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from deploy_guard import CONTROL_PATH, DeployGuard, interrupt_orphaned_jobs, signature
+from deploy_guard import (CONTROL_PATH, UPSTREAM_SETTLE_SECONDS, DeployGuard, interrupt_orphaned_jobs,
+                          parse_ref_advertisement, signature)
 
 SHA = "a" * 40
 
@@ -179,3 +180,123 @@ def test_jobs_left_running_by_a_stopped_process_are_interrupted_at_startup(tmp_p
     assert a["status"] == "interrupted" and a["title"] == "a" and "再開" in a["message"]
     assert json.loads((tmp_path / "b" / "job.json").read_text(encoding="utf-8"))["status"] == "completed"
     assert (tmp_path / "e" / "job.json").read_text(encoding="utf-8") == "{broken"
+
+
+# ---- 2026-09-28 新しいコミットの見張り（Render の Auto-Deploy を切り、生成の合間に本番が自分で配置する）
+# push のたびに Render が配置を始めると、生成中は Pre-deploy が保留で終わり「Deploy failed」のメールになっていた。
+
+def pkt(line):
+    return b"%04x" % (len(line) + 4) + line
+
+
+def test_ref_advertisement_reads_the_branch_head():
+    data = (pkt(b"# service=git-upload-pack\n") + b"0000"
+            + pkt(b"a" * 40 + b" HEAD\x00multi_ack thin-pack symref=HEAD:refs/heads/main\n")
+            + pkt(b"c" * 40 + b" refs/heads/main\n") + pkt(b"d" * 40 + b" refs/heads/dev\n") + b"0000")
+    assert parse_ref_advertisement(data, "refs/heads/main") == "c" * 40
+    assert parse_ref_advertisement(data, "refs/heads/dev") == "d" * 40
+    assert parse_ref_advertisement(data, "refs/heads/none") is None
+    assert parse_ref_advertisement(b"zzzz", "refs/heads/main") is None
+    assert parse_ref_advertisement(pkt(b"x" * 40 + b" refs/heads/main\n"), "refs/heads/main") is None
+
+
+@pytest.fixture
+def watcher(tmp_path):
+    now, heads = [1000], ["b" * 40]
+    def app(env, start):
+        start("200 OK", [])
+        return [b"ok"]
+    guard = DeployGuard(app, tmp_path, "test-only", "b" * 40, "old", Mock(return_value=False),
+                        hook="test-hook", clock=lambda: now[0], trigger=Mock(),
+                        upstream=("owner/repo", "main"), fetch_head=lambda: heads[0])
+    return guard, now, heads
+
+
+def step(guard, now, seconds=60):
+    now[0] += seconds
+    return guard.check_upstream()
+
+
+def test_new_commit_is_deployed_once_after_settling_while_idle(watcher):
+    guard, now, heads = watcher
+    assert guard.check_upstream() is None          # 動いている版と同じ
+    heads[0] = SHA
+    assert guard.check_upstream() is None          # 初めて見た。続けて push されるかもしれない
+    assert step(guard, now) is None                 # まだ落ち着いていない
+    assert step(guard, now, UPSTREAM_SETTLE_SECONDS) == SHA
+    guard.trigger.assert_called_once_with("test-hook")
+    assert step(guard, now) is None and step(guard, now, 600) is None   # 同じコミットは1回だけ
+    assert guard.trigger.call_count == 1
+    assert not guard.file.exists()                  # 受付は止めない（止めるのは Pre-deploy の時だけ）
+    assert request(guard)[0] == "200 OK"
+
+
+def test_burst_of_pushes_deploys_only_the_last(watcher):
+    guard, now, heads = watcher
+    for head in ["c" * 40, "d" * 40, "e" * 40]:
+        heads[0] = head
+        assert step(guard, now) is None
+    assert step(guard, now, UPSTREAM_SETTLE_SECONDS) == "e" * 40
+    assert guard.trigger.call_count == 1
+
+
+def test_waits_for_generation_to_finish_without_failing(watcher):
+    guard, now, heads = watcher
+    guard.jobs_busy.return_value = True
+    heads[0] = SHA
+    guard.check_upstream()
+    for _ in range(30):                             # 生成中は30分でも呼ばない
+        assert step(guard, now) is None
+    guard.trigger.assert_not_called()
+    guard.jobs_busy.return_value = False
+    assert step(guard, now) == SHA
+
+
+def test_skips_while_a_deployment_is_in_progress_or_needs_review(watcher):
+    guard, now, heads = watcher
+    assert guard.drain("c" * 40)["ready"]           # Pre-deploy が来て封印済み（配置の途中）
+    heads[0] = SHA
+    guard.check_upstream()
+    assert step(guard, now, UPSTREAM_SETTLE_SECONDS) is None
+    guard.file.write_text("{broken", encoding="utf-8")   # 状態が読めない＝人の確認待ち
+    assert step(guard, now, UPSTREAM_SETTLE_SECONDS) is None
+    guard.trigger.assert_not_called()
+
+
+def test_rollback_on_render_is_not_undone(tmp_path):
+    # 最新（c）が動いた後、Render で古い版（b）へ戻した。見張りは c を配置し直さない
+    DeployGuard(lambda e, s: [], tmp_path, "test-only", "c" * 40, "i1", lambda: False,
+                hook="h", upstream=("owner/repo", "main"), fetch_head=lambda: "c" * 40)
+    now = [1000]
+    old = DeployGuard(lambda e, s: [], tmp_path, "test-only", "b" * 40, "i2", lambda: False,
+                      hook="h", clock=lambda: now[0], trigger=Mock(),
+                      upstream=("owner/repo", "main"), fetch_head=lambda: "c" * 40)
+    for _ in range(5):
+        now[0] += UPSTREAM_SETTLE_SECONDS
+        assert old.check_upstream() is None
+    old.trigger.assert_not_called()
+
+
+def test_hook_failures_are_bounded_and_network_errors_are_quiet(watcher):
+    guard, now, heads = watcher
+    heads[0] = SHA
+    guard.trigger.side_effect = RuntimeError("sensitive hook must not be logged")
+    guard.check_upstream()
+    now[0] += UPSTREAM_SETTLE_SECONDS
+    for _ in range(6):
+        assert step(guard, now) is None
+    assert guard.trigger.call_count == 3
+    def offline():
+        raise OSError("no network")
+    guard.fetch_head = offline
+    assert step(guard, now) is None
+
+
+def test_disabled_without_hook_or_upstream(tmp_path):
+    fetch = Mock(return_value=SHA)
+    for kwargs in [dict(hook="", upstream=("owner/repo", "main")), dict(hook="h", upstream=None)]:
+        guard = DeployGuard(lambda e, s: [], tmp_path, "test-only", "b" * 40, "i", lambda: False,
+                            trigger=Mock(), fetch_head=fetch, **kwargs)
+        assert guard.check_upstream() is None
+    fetch.assert_not_called()
+
