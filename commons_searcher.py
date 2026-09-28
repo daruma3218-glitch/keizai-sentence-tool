@@ -87,8 +87,13 @@ def search_commons_one(query: str, limit: int = 12, timeout: int = 20,
 
 
 def search_commons_candidates(query: str, limit: int = 12, timeout: int = 20,
-                              min_w: int = 400, min_h: int = 300, max_n: int = JUDGE_MAX) -> list:
-    """Commons を検索し、許可ライセンスの写真を検索順に最大 max_n 枚返す。"""
+                              min_w: int = 400, min_h: int = 300, max_n: int = JUDGE_MAX,
+                              errors: Optional[list] = None) -> list:
+    """Commons を検索し、許可ライセンスの写真を検索順に最大 max_n 枚返す。
+
+    errors にリストを渡すと、検索の失敗（通信・API のエラー）を書き足す（9/28 本番で 0/3 件の原因が
+    見えなかったため。以前は失敗を黙って「0件」にしていた）。
+    """
     q = (query or "").strip()
     if not q:
         return []
@@ -103,8 +108,12 @@ def search_commons_candidates(query: str, limit: int = 12, timeout: int = 20,
         req = urllib.request.Request(url, headers={"User-Agent": _UA})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
-    except Exception:
+    except Exception as e:
+        if errors is not None:
+            errors.append(f"{type(e).__name__}: {str(e)[:80]}")
         return []
+    if errors is not None and data.get("error"):
+        errors.append(f"API: {str(data['error'].get('info') or data['error'])[:80]}")
     pages = (data.get("query") or {}).get("pages") or {}
     # 検索順（index）でソート
     items = sorted(pages.values(), key=lambda p: p.get("index", 9999))
@@ -241,7 +250,12 @@ def run_commons_search_for_selections(
     def _find(sel, query, min_w=400, min_h=300):
         """検索して、写っているものを確かめた最初の候補を返す（判定役が無いときは先頭）。"""
         seen = judged.setdefault(sel["no"], set())
-        for cand in search_commons_candidates(query, 12, 20, min_w, min_h, max_n=JUDGE_MAX if client else 1):
+        errs = []
+        cands = search_commons_candidates(query, 12, 20, min_w, min_h, max_n=JUDGE_MAX if client else 1,
+                                          errors=errs)
+        if errs:
+            log("websearch", f"Commons №{sel.get('no')} 検索エラー（{query[:30]}）: {errs[0]}")
+        for cand in cands:
             if client is None:
                 return cand
             if cand.get("title") in seen or len(seen) >= JUDGE_BUDGET:
