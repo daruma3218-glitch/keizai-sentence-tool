@@ -282,6 +282,7 @@ def restyle_chart_file(images_dir: Path, no: int, *, openai_client, verify_clien
         return {"restyled": True, "reason": "", "variants": [VARIANT_PLAIN, VARIANT_SCREEN],
                 "variant": VARIANT_PLAIN}
     shutil.copyfile(screen, final)
-    log("chart_restyle", f"№{no} 先生がスクリーンで紹介する絵に描き直し（数字と文字の一致を確認）")
+    shown = ("スクリーン", "黒板", "手に持つカード", "看板")[int(no) % len(CHART_LAYOUTS)]
+    log("chart_restyle", f"№{no} 先生が紹介する絵（{shown}）に描き直し（数字と文字の一致を確認）")
     return {"restyled": True, "reason": "", "variants": [VARIANT_PLAIN, VARIANT_SCREEN],
             "variant": VARIANT_SCREEN}
