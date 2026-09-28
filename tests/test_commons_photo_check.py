@@ -79,3 +79,27 @@ def test_only_a_photo_showing_the_subject_is_used(monkeypatch):
 def test_no_matching_photo_means_no_web_photo(monkeypatch):
     got, _, _ = _run(monkeypatch, ['{"match": false, "what": "本"}', "読めない答え"], ["A.jpg", "B.jpg"])
     assert 46 not in got  # 当てはまる写真が無ければ採用しない（世界観のイラストで代わりを作る）
+
+
+def test_long_router_words_are_shortened_until_a_photo_is_found(monkeypatch):
+    # 9/28 試験 20260928_010838: ルーターの検索語が長く、写真だけに絞ると 0/3 件だった
+    assert cs.shorter_queries("Doutor Coffee Harajuku first store") == [
+        "Doutor Coffee Harajuku first", "Doutor Coffee Harajuku", "Doutor Coffee", "Doutor"]
+    asked = []
+
+    def fake_candidates(q, *a, **k):
+        asked.append(q)
+        if q != "Doutor Coffee Harajuku":
+            return []
+        return [{"title": "Doutor_Harajuku.jpg", "thumb_url": "", "url": "", "license": "CC BY-SA 4.0",
+                 "license_url": "", "attribution": "", "commons_page_url": ""}]
+
+    monkeypatch.setattr(cs, "search_commons_candidates", fake_candidates)
+    monkeypatch.setattr(cs, "photo_shows_topic", lambda client, sel, cand: (True, "ドトール原宿店"))
+    monkeypatch.setattr(cs, "_translate_queries", lambda client, queries, log=None: {
+        "ドトールコーヒー 原宿 1号店": "Doutor Coffee Harajuku first store"})
+    got = cs.run_commons_search_for_selections(
+        object(), [{"no": 8, "query": "ドトールコーヒー 原宿 1号店", "topic": "ドトール1号店"}], max_workers=1)
+    assert got[8]["source_title"] == "Doutor_Harajuku.jpg"
+    assert asked[:3] == ["ドトールコーヒー 原宿 1号店", "Doutor Coffee Harajuku first store",
+                         "Doutor Coffee Harajuku first store"]

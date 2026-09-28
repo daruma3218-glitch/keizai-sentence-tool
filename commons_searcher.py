@@ -30,8 +30,9 @@ from typing import Callable, Optional
 
 from utils import claude_query, parse_json_object
 
-# 写っているものを確かめる候補の数（1件あたり。1枚15〜25秒）
+# 写っているものを確かめる候補の数（1回の検索あたり・1枚15〜25秒）と、1件あたりの上限
 JUDGE_MAX = 4
+JUDGE_BUDGET = 6
 # 写真として使う形式（本・文書のスキャンの DjVu・TIFF・PDF は使わない）
 _PHOTO_MIMES = ("image/jpeg", "image/png", "image/webp")
 
@@ -233,17 +234,42 @@ def run_commons_search_for_selections(
         cb(info)
         return info
 
+    judged = {}  # {no: 見せた候補の題}（同じ写真を何度も判定しない）
+
     def _find(sel, query, min_w=400, min_h=300):
         """検索して、写っているものを確かめた最初の候補を返す（判定役が無いときは先頭）。"""
+        seen = judged.setdefault(sel["no"], set())
         for cand in search_commons_candidates(query, 12, 20, min_w, min_h, max_n=JUDGE_MAX if client else 1):
             if client is None:
                 return cand
+            if cand.get("title") in seen or len(seen) >= JUDGE_BUDGET:
+                continue
+            seen.add(cand.get("title"))
             ok, what = photo_shows_topic(client, sel, cand)
             if ok:
                 return cand
             note = f"写っているもの: {what}" if ok is False else what
             log("websearch", f"Commons №{sel.get('no')} 「{cand.get('title', '')[:40]}」は不採用（{note}）")
         return None
+
+    def _rest(sel, en):
+        """元の検索語で見つからなかった文を、英訳 → 大きさを緩める → 語を後ろから減らす、の順に探す。
+
+        9/28 試験: ルーターの検索語（「ドトールコーヒー 原宿 1号店」など30字まで）は Commons では
+        全部の語が合う写真が無く0件になりやすい。短くした語でも、写っているものは判定役が確かめる。
+        """
+        q = sel.get("query", "")
+        steps = []
+        if en and en != q:
+            steps.append((en, 400, 300))
+        steps.append((en or q, 240, 160))
+        for base in dict.fromkeys(x for x in (en, q) if x):
+            steps += [(short, 400, 300) for short in shorter_queries(base)]
+        for query, w, h in dict.fromkeys(steps):
+            res = _find(sel, query, w, h)
+            if res:
+                return res, query
+        return None, ""
 
     results = {}
     pending = []
@@ -253,56 +279,45 @@ def run_commons_search_for_selections(
             s = futs[f]
             try:
                 res = f.result()
-            except Exception:
+            except Exception as e:
+                log("websearch", f"Commons №{s.get('no')} 検索に失敗（{type(e).__name__}）")
                 res = None
             if res:
                 results[s["no"]] = _emit(s, res)
             else:
                 pending.append(s)
 
-    # 0 件だったものを英訳して再検索
-    relaxed_hits = 0
+    later_hits = 0
     if pending:
         trans = _translate_queries(client, [s.get("query", "") for s in pending], log)
         with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
-            futs = {}
-            for s in pending:
-                en = (trans.get(s.get("query", "")) or "").strip()
-                if en and en != s.get("query", ""):
-                    futs[ex.submit(_find, s, en)] = s
+            futs = {ex.submit(_rest, s, (trans.get(s.get("query", "")) or "").strip()): s for s in pending}
             for f in as_completed(futs):
                 s = futs[f]
                 try:
-                    res = f.result()
-                except Exception:
-                    res = None
+                    res, used = f.result()
+                except Exception as e:
+                    log("websearch", f"Commons №{s.get('no')} 検索に失敗（{type(e).__name__}）")
+                    res, used = None, ""
                 if res:
                     results[s["no"]] = _emit(s, res)
-
-        # それでも 0 件のものは、最小サイズ条件を緩めて最後にもう一度だけ探す。
-        # 歴史写真・古い資料はスキャンが小さいことが多く、既定(400x300)では
-        # 全滅するトピックがあるため（緩和後も 240x160 未満のロゴ級は弾く）。
-        pending2 = [s for s in pending if s["no"] not in results]
-        if pending2:
-            with ThreadPoolExecutor(max_workers=max(1, max_workers)) as ex:
-                futs = {}
-                for s in pending2:
-                    q = (trans.get(s.get("query", "")) or "").strip() or s.get("query", "")
-                    futs[ex.submit(_find, s, q, 240, 160)] = s
-                for f in as_completed(futs):
-                    s = futs[f]
-                    try:
-                        res = f.result()
-                    except Exception:
-                        res = None
-                    if res:
-                        results[s["no"]] = _emit(s, res)
-                        relaxed_hits += 1
+                    later_hits += 1
+                    log("websearch", f"Commons №{s['no']} 「{res.get('title', '')[:40]}」を採用（検索語: {used}）")
+                else:
+                    en = (trans.get(s.get("query", "")) or "").strip()
+                    log("websearch", f"Commons №{s['no']} 当てはまる写真なし（検索語: {s.get('query', '')}"
+                                     + (f" / {en}" if en else "") + "）")
 
     log("websearch",
         f"Commons: {len(results)}/{len(selections)} 件取得（許可ライセンスのみ・写っているものを確認・"
-        f"英訳再検索含む" + (f"・サイズ緩和で+{relaxed_hits}" if relaxed_hits else "") + "）")
+        f"英訳・語を減らした再検索含む" + (f"・再検索で+{later_hits}" if later_hits else "") + "）")
     return results
+
+
+def shorter_queries(query: str) -> list:
+    """「ドトールコーヒー 原宿 1号店」→ ["ドトールコーヒー 原宿", "ドトールコーヒー"]（語を後ろから減らす）。"""
+    words = (query or "").split()
+    return [" ".join(words[:i]) for i in range(len(words) - 1, 0, -1)]
 
 
 def build_credits_text(items: list) -> str:
