@@ -97,8 +97,34 @@ def _detect_background_color(img: "Image.Image") -> tuple:
     return most_common
 
 
-def _save_as_16_9(image_bytes: bytes, output_path: Path) -> None:
-    """画像バイト列を 16:9 で保存する（レターボックス方式）。
+# 画面いっぱいの絵にするチャンネル（2026-09-28 社長「両サイドにまだカラーのベタ塗りが残っていない？
+# 画面全体でイラストにしたい。枠もそう。画面いっぱいに表示したほうが見やすそう」）。
+# gpt-image の出力は 1536x1024（3:2）で、従来は左右に背景色の帯（各約140px）を足して 16:9 にしていた。
+# 設定文に「FULL BLEED:」の行があるチャンネルは、帯を足さずに上下を約8%ずつ切って 16:9 にし、
+# 生成の指示も「端まで絵で埋める・文字と顔は上下の切られる帯に置かない」にする。
+FULL_BLEED_MARK = "FULL BLEED:"
+
+
+def full_bleed(lock_text: str) -> bool:
+    return FULL_BLEED_MARK in (lock_text or "")
+
+
+def _crop_to_16_9(img: Image.Image) -> Image.Image:
+    """中央を 16:9 に切り出す（3:2 なら上下を切る・横長すぎなら左右を切る）。"""
+    w, h = img.size
+    if not h or abs(w / h - TARGET_RATIO) < 0.01:
+        return img
+    if w / h < TARGET_RATIO:
+        new_h = int(round(w / TARGET_RATIO))
+        top = (h - new_h) // 2
+        return img.crop((0, top, w, top + new_h))
+    new_w = int(round(h * TARGET_RATIO))
+    left = (w - new_w) // 2
+    return img.crop((left, 0, left + new_w, h))
+
+
+def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> None:
+    """画像バイト列を 16:9 で保存する（fill="pad": レターボックス方式 / fill="crop": 画面いっぱい）。
 
     クロップせず画像全体を 16:9 フレーム内に収め、はみ出さないようにする。
     余白は四隅から検出した背景色で埋めるので、図解の端が欠けない。
@@ -110,6 +136,9 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path) -> None:
     img = Image.open(BytesIO(image_bytes))
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
+    if fill == "crop":
+        _crop_to_16_9(img.convert("RGB")).save(output_path, format="PNG")
+        return
     w, h = img.size
     current = w / h if h else 1.0
 
@@ -306,7 +335,11 @@ def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0) -> str:
     if not tones:
         return (lock_text[:m.start()] + lock_text[m.end():]).strip()
     tone = tones[int(key or 0) % len(tones)]
-    if prompt_type in ("diagram", "chart"):
+    if prompt_type in ("diagram", "chart") and full_bleed(lock_text):
+        line = ("BACKGROUND OF THIS IMAGE: the board surface itself fills the whole frame edge to edge, with no "
+                f"outer frame and no margin around it; a paper, whiteboard, notebook or screen surface is tinted "
+                f"very lightly with {tone}.")
+    elif prompt_type in ("diagram", "chart"):
         line = (f"BACKGROUND OF THIS IMAGE: the board fills the frame; any margin around it is a plain, "
                 f"very light {tone} (almost white).")
     else:
@@ -502,14 +535,27 @@ def _build_full_prompt(
             "- DO NOT add any title text or heading.\n"
         )
 
+    if lock and full_bleed(lock):
+        composition = (
+            "- COMPOSITION (CRITICAL): Fill the WHOLE frame edge to edge with the scene, the board surface or the "
+            "backdrop: no outer frame, no border, no side bars and no blank margins around the picture.\n"
+            "  The picture is trimmed to 16:9 by cutting about 8% from the top and 8% from the bottom, so keep all "
+            "text, labels, numbers, faces and key objects at least 10% away from the top and bottom edges and 4% "
+            "away from the left and right edges.\n"
+            "- Make the main content large and easy to see; do not shrink it into the middle of the frame.\n"
+        )
+    else:
+        composition = (
+            "- COMPOSITION (CRITICAL): The ENTIRE subject/diagram/figure MUST be fully visible inside the frame.\n"
+            "  Keep a generous safe margin (at least 10% padding) around all edges.\n"
+            "  Do NOT let any part of the figure, text, icon, or chart touch or extend beyond the edges.\n"
+            "  Zoom out / use a wider view so nothing is cropped or cut off.\n"
+            "- Center the main content with comfortable empty space around it.\n"
+        )
     common = (
         "OTHER REQUIREMENTS:\n"
         "- 16:9 landscape aspect ratio for video presentation (WIDE, not square, not tall).\n"
-        "- COMPOSITION (CRITICAL): The ENTIRE subject/diagram/figure MUST be fully visible inside the frame.\n"
-        "  Keep a generous safe margin (at least 10% padding) around all edges.\n"
-        "  Do NOT let any part of the figure, text, icon, or chart touch or extend beyond the edges.\n"
-        "  Zoom out / use a wider view so nothing is cropped or cut off.\n"
-        "- Center the main content with comfortable empty space around it.\n"
+        + composition +
         "- Simple, clear, professional. Avoid clutter.\n"
         "- For diagrams, do NOT make a mere keyword list. Show one clear structure: cause -> effect, comparison, process flow, or relationship map.\n"
         "- For geographic relationships in diagrams, do NOT create a detailed map. Use simplified region blocks, arrows, corridors, influence zones, and short labels instead.\n"
@@ -611,6 +657,7 @@ def _sync_generate_image_openai(
     size: str = "1536x1024",  # 3:2 横長（16:9 に最も近い）
     quality: str = "medium",  # low / medium / high
     reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像（あれば images.edit）
+    fill: str = "pad",  # 16:9 への合わせ方（"crop" で画面いっぱい）
 ) -> tuple:
     """1 枚の画像を同期生成（OpenAI gpt-image）。
 
@@ -652,13 +699,13 @@ def _sync_generate_image_openai(
 
             if b64:
                 img_data = base64.b64decode(b64)
-                _save_as_16_9(img_data, output_path)
+                _save_as_16_9(img_data, output_path, fill=fill)
                 return True, ""
             elif url:
                 # URL なら fetch
                 import urllib.request
                 with urllib.request.urlopen(url, timeout=60) as r:
-                    _save_as_16_9(r.read(), output_path)
+                    _save_as_16_9(r.read(), output_path, fill=fill)
                 return True, ""
             else:
                 last_error = "neither b64_json nor url in response"
@@ -801,6 +848,7 @@ class ParallelImageGenerator:
                 size=self.openai_size,
                 quality=self.openai_quality,
                 reference_bytes=ref,
+                fill="crop" if full_bleed(self.style_lock_text) else "pad",
             )
 
     async def _generate_one(

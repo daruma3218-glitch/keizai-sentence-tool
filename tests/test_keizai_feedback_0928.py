@@ -44,7 +44,7 @@ def test_backdrop_list_is_replaced_by_one_color_per_paragraph():
     assert "BACKDROP COLOR OF THIS IMAGE: pale slate blue-gray" in first
     assert "BACKDROP COLOR OF THIS IMAGE: warm light beige" in second
     diagram = generator._build_full_prompt("x", "diagram", style_lock=WORLD, backdrop=1)
-    assert "any margin around it is a plain, very light warm light beige" in diagram
+    assert "tinted very lightly with warm light beige" in diagram  # 9/28 午後から板の面が画面いっぱい
 
 
 def test_same_paragraph_same_color_and_regeneration_keeps_it():
@@ -204,3 +204,60 @@ def test_prompter_varies_composition_and_spaces_out_the_professor():
     block = prompter._style_lock_block(WORLD)
     assert "構図を1枚ごとに変える" in block and "続けて描かない" in block and "3分の1" in block
     assert "図解に変えない" in block and "場面・人・店の様子を語る文は illustration" in block
+
+
+# ── 9/28 午後「両サイドのベタ塗り・枠。画面いっぱいに」
+def test_full_bleed_crops_instead_of_adding_side_bars(tmp_path):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    img = Image.new("RGB", (1536, 1024), (200, 60, 60))
+    img.paste((20, 20, 200), (0, 0, 1536, 80))          # 上の帯（切られる）
+    img.save(buf, format="PNG")
+    out = tmp_path / "a.png"
+    generator._save_as_16_9(buf.getvalue(), out, fill="crop")
+    with Image.open(out) as im:
+        assert im.size == (1536, 864)                    # 左右に帯を足さず、上下を切って 16:9
+        assert im.getpixel((5, 5)) == (200, 60, 60)      # 端まで絵（帯の色は残らない）
+        assert im.getpixel((1530, 430)) == (200, 60, 60)
+    generator._save_as_16_9(buf.getvalue(), out)           # 既定は従来どおり（ほかのチャンネル）
+    with Image.open(out) as im:
+        assert im.size == (1820, 1024)
+
+
+def test_full_bleed_prompt_and_boards_without_outer_frame():
+    assert generator.full_bleed(WORLD)
+    scene = generator._build_full_prompt("A cafe.", "illustration", style_lock=WORLD)
+    assert "Fill the WHOLE frame edge to edge" in scene and "generous safe margin" not in scene
+    diagram = generator._build_full_prompt("x", "diagram", style_lock=WORLD, board=4)
+    assert "board surface itself fills the whole frame edge to edge" in diagram
+    assert "BOARD OF THIS IMAGE: a light tablet screen surface." in diagram
+    assert "thin dark frame" not in WORLD and "thin gray frame" not in WORLD
+    plain = generator._build_full_prompt("A cafe.", "illustration", style_lock="ART STYLE: flat.")
+    assert "generous safe margin" in plain                 # FULL BLEED の無いチャンネルは従来どおり
+
+
+def test_generator_asks_for_crop_on_full_bleed_channels(tmp_path, monkeypatch):
+    import asyncio
+    seen = {}
+
+    def fake_openai(client, full_prompt, output_path, **kw):
+        seen["fill"] = kw.get("fill")
+        from PIL import Image
+        Image.new("RGB", (32, 18)).save(output_path)
+        return True, ""
+
+    monkeypatch.setattr(generator, "_sync_generate_image_openai", fake_openai)
+    gen = generator.ParallelImageGenerator(provider=generator.PROVIDER_GPT_IMAGE, openai_api_key="test-only",
+                                           concurrency=1, style_lock_text=WORLD)
+    asyncio.run(gen.generate_all([{"index": 1, "prompt": "A shop.", "type": "illustration"}], tmp_path))
+    assert seen["fill"] == "crop"
+
+
+def test_chart_redraw_is_cropped_and_keeps_numbers_clear_of_the_trim(tmp_path):
+    from PIL import Image
+    images, original, res, calls = _restyle(tmp_path, keep_plain=False)
+    assert "top and bottom 8% are trimmed" in calls[0]["prompt"]
+    with Image.open(images / "5.png") as im:
+        w, h = im.size
+    assert abs(w / h - 16 / 9) < 0.01

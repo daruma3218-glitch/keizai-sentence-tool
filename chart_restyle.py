@@ -164,7 +164,7 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
                  style_lock_text: str = "", reference_path: str = "", sentence: str = "",
                  backdrop: int = 0, layout: int = 0) -> tuple:
     """描いたグラフを番組の絵柄に描き直して out_path に保存。(成功, エラー)。"""
-    from generator import _save_as_16_9, apply_backdrop, apply_board
+    from generator import _save_as_16_9, apply_backdrop, apply_board, full_bleed
     import base64
 
     images = [_image_file(Path(rendered_path).read_bytes(), "chart.png")]
@@ -178,6 +178,11 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
         prompt += ("\n\nNARRATION SENTENCE (Japanese): "
                    f"「{sentence.strip()[:200]}」. Only an object named in this sentence may be drawn. "
                    "Do not write this sentence in the image.")
+    if full_bleed(style_lock_text):
+        # 画面いっぱい（上下を約8%ずつ切って 16:9 にする）。切られる帯に数字や見出しを置かせない
+        prompt += ("\n\nFRAME: fill the whole frame edge to edge with the scene (no side bars, no blank margins). "
+                   "The top and bottom 8% are trimmed for the 16:9 video, so keep the whole chart, every number "
+                   "and label, and the professor's face at least 10% away from the top and bottom edges.")
     if (style_lock_text or "").strip():
         # 背景の色は段落ごと（スクリーンのある場面なので、場面の背景色として渡す）
         prompt += "\n\n" + apply_board(apply_backdrop(style_lock_text.strip(), "illustration", backdrop),
@@ -192,7 +197,7 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
             return False, "画像が返りませんでした"
         data = base64.b64decode(b64)
         b64 = response = None  # 大きなデータを早めに手放す（本番は 512MB）
-        _save_as_16_9(data, out_path)
+        _save_as_16_9(data, out_path, fill="crop" if full_bleed(style_lock_text) else "pad")
         return True, ""
     except Exception as e:
         return False, str(e)[:160]
