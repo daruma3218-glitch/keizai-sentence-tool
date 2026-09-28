@@ -2,7 +2,7 @@
 
 スタッフ用URLは `https://sentence.apprendre.jp`。サーバーの契約アカウント名に依存しない入口を使用する。
 
-本番の通常ブランチは `main`。Render の Auto-Deploy は **Off**（2026-09-28〜）。main への push は、
+本番の通常ブランチは `main`。Render の Auto-Deploy は **Off**（2026-09-28 10:45 に切り替え・社長承認）。main への push は、
 本番の見張り（`deploy_guard.check_upstream`）が生成の合間に Deploy Hook で配置する（下の「新しいコミットの配置」）。
 GitHub Actions で認証・保存済み結果のダウンロード・再開・更新ガードを検査し、
 Render のビルドでも同じテストを実行する。API生成やCLI呼び出しは行わない。
