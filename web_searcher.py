@@ -69,7 +69,7 @@ def _wikipedia_image_url(article_url: str) -> str:
             "redirects": "1",
         }
         url = f"{api}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "sentence-tool/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": _download_ua(url)})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         pages = data.get("query", {}).get("pages", {})
@@ -391,6 +391,14 @@ def select_search_worthy_sentences(
     return all_valid[:target_count]
 
 
+def _download_ua(url: str) -> str:
+    """Wikimedia の画像は連絡先の入った名乗りで（9/28 本番で 429）。ほかは従来どおり。"""
+    if "wikimedia.org" in (url or "") or "wikipedia.org" in (url or ""):
+        from commons_searcher import _UA
+        return _UA
+    return "sentence-tool/1.0 (educational video material research)"
+
+
 def download_thumbnail(thumb_url: str, output_path) -> bool:
     """Wikimedia 等のサムネイル画像をローカルに保存する。
 
@@ -406,7 +414,7 @@ def download_thumbnail(thumb_url: str, output_path) -> bool:
     try:
         req = urllib.request.Request(
             thumb_url,
-            headers={"User-Agent": "sentence-tool/1.0 (educational video material research)"},
+            headers={"User-Agent": _download_ua(thumb_url)},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             if getattr(resp, "status", 200) != 200:

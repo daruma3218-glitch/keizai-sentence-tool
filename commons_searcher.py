@@ -23,6 +23,7 @@ Wikimedia Commons API に限定し、**許可ライセンスのみ採用**＋ラ
 
 import json
 import re
+import threading
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,7 +38,38 @@ JUDGE_BUDGET = 6
 _PHOTO_MIMES = ("image/jpeg", "image/png", "image/webp")
 
 _API = "https://commons.wikimedia.org/w/api.php"
-_UA = "sentence-tsukuru/1.0 (economics-education; contact: noreply)"
+# Wikimedia の User-Agent の決まり（連絡先の入った名乗り）。9/28 本番で連絡先が「noreply」の名乗りのまま
+# 1秒に約10件の検索を送り、全部が HTTP 429（Too Many Requests）で断られていた（Commons 0/3 件の原因）。
+_UA = ("SentenceTsukuru/1.0 (https://sentence.apprendre.jp/; educational video production by apprendre Inc.) "
+       "Python-urllib")
+WIKIMEDIA_MIN_INTERVAL = 1.0   # Wikimedia への要求は1秒に1件まで（全スレッド共通）
+_wm_lock = threading.Lock()
+_wm_last = [0.0]
+
+
+def wikimedia_get(url: str, timeout: int = 20, retries: int = 2) -> bytes:
+    """Wikimedia（API・画像）を1秒に1件までで取得する。429 は Retry-After を待って取り直す。"""
+    import time
+    import urllib.error
+    for attempt in range(retries + 1):
+        with _wm_lock:
+            wait = _wm_last[0] + WIKIMEDIA_MIN_INTERVAL - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            _wm_last[0] = time.monotonic()
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": _UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt >= retries:
+                raise
+            try:
+                pause = float(e.headers.get("Retry-After") or 5)
+            except (TypeError, ValueError):
+                pause = 5.0
+            time.sleep(min(max(pause, 2.0), 15.0))
+    raise RuntimeError("unreachable")
 
 # 許可ライセンス（LicenseShortName を小文字化して判定）。NC/ND は除外。
 def _license_ok(short_name: str) -> bool:
@@ -105,9 +137,7 @@ def search_commons_candidates(query: str, limit: int = 12, timeout: int = 20,
     }
     url = _API + "?" + urllib.parse.urlencode(params)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": _UA})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        data = json.loads(wikimedia_get(url, timeout=timeout).decode("utf-8"))
     except Exception as e:
         if errors is not None:
             errors.append(f"{type(e).__name__}: {str(e)[:80]}")
@@ -166,9 +196,7 @@ def photo_shows_topic(client, sel: dict, cand: dict, timeout: int = 20, data: by
     from verifier import _encode_for_review, CLAUDE_MODEL
     try:
         if data is None:
-            req = urllib.request.Request(cand.get("thumb_url") or cand.get("url", ""), headers={"User-Agent": _UA})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                data = r.read()
+            data = wikimedia_get(cand.get("thumb_url") or cand.get("url", ""), timeout=timeout)
         b64, media = _encode_for_review(data, ".jpg", max_side=768)
     except Exception as e:
         return None, f"写真を取得できず（{type(e).__name__}）"

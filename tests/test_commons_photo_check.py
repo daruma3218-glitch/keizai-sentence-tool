@@ -153,3 +153,36 @@ def test_single_redo_uses_saved_words_or_asks_for_them(tmp_path, monkeypatch):
                                      {"anthropic": ""}, {"photo_source": "commons"})
     assert seen[0]["query"] == "ドトールコーヒー 原宿 1号店"   # 自動の回で使った検索語
     assert seen[1]["query"] == "Doutor Coffee Harajuku first store"  # 文と段落から決めた検索語
+
+
+def test_wikimedia_is_asked_once_a_second_and_429_is_retried(monkeypatch):
+    # 9/28 本番 20260928_023118: 名乗りの連絡先が noreply のまま1秒に約10件送り、全部 HTTP 429 だった
+    import time
+    import urllib.error
+    assert "https://sentence.apprendre.jp/" in cs._UA and "noreply" not in cs._UA
+    calls, sleeps = [], []
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    class _Ok:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"ok"
+
+    def fake_urlopen(req, timeout=0):
+        calls.append(req.get_header("User-agent"))
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {"Retry-After": "3"}, None)
+        return _Ok()
+
+    monkeypatch.setattr(cs.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cs, "WIKIMEDIA_MIN_INTERVAL", 1.0)
+    cs._wm_last[0] = time.monotonic()
+    assert cs.wikimedia_get("https://commons.wikimedia.org/w/api.php?x") == b"ok"
+    assert len(calls) == 2 and calls[0] == cs._UA
+    assert 3.0 in sleeps  # Retry-After を待つ
+    assert any(0 < s <= 1.0 for s in sleeps)  # 前の要求から1秒あける
