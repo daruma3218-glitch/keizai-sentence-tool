@@ -203,3 +203,4 @@ def test_prompter_varies_composition_and_spaces_out_the_professor():
     import prompter
     block = prompter._style_lock_block(WORLD)
     assert "構図を1枚ごとに変える" in block and "続けて描かない" in block and "3分の1" in block
+    assert "図解に変えない" in block and "場面・人・店の様子を語る文は illustration" in block
