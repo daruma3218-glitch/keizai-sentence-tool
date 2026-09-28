@@ -1996,15 +1996,24 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
     if not sentence:
         return jsonify({"error": "Web写真検索に必要な文が見つかりません"}), 404
     client = get_anthropic_client(ch_keys.get("anthropic", ""))
-    selections = [{"no": no, "query": sentence[:40], "topic": sentence[:24]}]
-    results = run_web_search_for_selections(
-        client,
-        selections,
-        max_workers=1,
-        log=lambda *args, **kwargs: None,
-        profile=defaults.get("web_search_profile", ""),
-    )
-    info = results[0] if results else {}
+    selections = [{"no": no, "query": sentence[:40], "topic": sentence[:24], "sentence": sentence}]
+    if defaults.get("photo_source") == "commons":
+        # 写真を Commons に限るチャンネル（カラクリ経済学）は、1枚の作り直しも Commons から、
+        # 写っているものを確かめて使う（2026-09-28。自動の経路と同じ決まり）
+        from commons_searcher import run_commons_search_for_selections
+        found = run_commons_search_for_selections(client, selections, max_workers=1)
+        info = found.get(no) or {}
+        if not info:
+            return jsonify({"error": "Commons（自由に使える写真）で、この文に当てはまる写真が見つかりませんでした"}), 422
+    else:
+        results = run_web_search_for_selections(
+            client,
+            selections,
+            max_workers=1,
+            log=lambda *args, **kwargs: None,
+            profile=defaults.get("web_search_profile", ""),
+        )
+        info = results[0] if results else {}
     thumb_url = info.get("thumb_url", "")
     if not thumb_url:
         return jsonify({"error": "Web写真候補は見つかりましたが、表示用サムネイルを取得できませんでした"}), 422
@@ -2026,6 +2035,10 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
             "web_topic": info.get("topic", ""),
             "web_source_title": info.get("source_title", ""),
             "web_source_type": info.get("source_type", ""),
+            # Commons のライセンス・クレジット（CSV / credits.txt 用。自動の経路と同じ項目）
+            "license": info.get("license", ""),
+            "attribution": info.get("attribution", ""),
+            "commons_page_url": info.get("commons_page_url", ""),
         },
     )
     return jsonify({"ok": True, "no": no, "filename": fname, "route": "web_photo", "ts": datetime.now().strftime("%H%M%S")})

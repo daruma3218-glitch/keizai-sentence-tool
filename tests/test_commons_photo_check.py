@@ -103,3 +103,30 @@ def test_long_router_words_are_shortened_until_a_photo_is_found(monkeypatch):
     assert got[8]["source_title"] == "Doutor_Harajuku.jpg"
     assert asked[:3] == ["ドトールコーヒー 原宿 1号店", "Doutor Coffee Harajuku first store",
                          "Doutor Coffee Harajuku first store"]
+
+
+def test_single_web_photo_redo_uses_commons_for_commons_channels(tmp_path, monkeypatch):
+    # 1枚の「Web写真で作り直す」も、写真を Commons に限るチャンネルでは Commons から確かめて使う
+    import app as appmod
+    import web_searcher
+    (tmp_path / "images").mkdir()
+    used = {}
+
+    def fake_commons(client, selections, max_workers=1, **kw):
+        used["sel"] = selections[0]
+        return {8: {"no": 8, "thumb_url": "http://x/t.jpg", "source_url": "http://commons/f", "source_title": "f.jpg",
+                    "topic": "t", "license": "CC BY-SA 4.0", "license_url": "", "attribution": "Mc681",
+                    "commons_page_url": "http://commons/f"}}
+
+    monkeypatch.setattr(cs, "run_commons_search_for_selections", fake_commons)
+    monkeypatch.setattr(web_searcher, "run_web_search_for_selections",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("一般の Web 検索は使わない")))
+    monkeypatch.setattr(web_searcher, "download_thumbnail", lambda url, path: path.write_bytes(b"jpg") or True)
+    captured = {}
+    monkeypatch.setattr(appmod, "_update_regen_snapshot", lambda *a, **k: captured.update(k))
+    with appmod.app.test_request_context():
+        res = appmod._regenerate_web_photo(tmp_path, 8, {"sentence": "1980年、原宿に1号店を開きます。"},
+                                           {"anthropic": ""}, {"photo_source": "commons"})
+    assert res.get_json()["ok"] is True
+    assert used["sel"]["sentence"].startswith("1980年")
+    assert captured["extra"]["license"] == "CC BY-SA 4.0" and captured["extra"]["attribution"] == "Mc681"
