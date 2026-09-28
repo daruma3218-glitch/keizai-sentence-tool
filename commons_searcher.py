@@ -314,6 +314,33 @@ def run_commons_search_for_selections(
     return results
 
 
+SUGGEST_QUERY_PROMPT = """動画の次の文の場面に使う写真を、Wikimedia Commons で探します。
+文: {sentence}
+前後の段落: {context}
+
+文が指している実在の物（店・会社・建物・場所・人・商品）を前後の段落から特定し、
+Commons で探す英語の検索語（固有名詞を先頭に、3〜5語）と、探しているもの（日本語で短く）を答えてください。
+JSON のみ: {{"query": "英語の検索語", "topic": "探しているもの"}}"""
+
+
+def suggest_query(client, sentence: str, context: str = "") -> dict:
+    """文と前後の段落から Commons の検索語を決める（1枚の作り直しで、ルーターの検索語が無いとき）。
+
+    9/28: 「1980年4月18日、東京・原宿に、立ち飲みスタイルの1号店を開きます。」は文に店名が無く、
+    文をそのまま検索しても写真が見つからなかった（店名＝ドトールは前の文にある）。
+    """
+    try:
+        text = claude_query(client, SUGGEST_QUERY_PROMPT.format(sentence=(sentence or "")[:200],
+                                                                context=(context or "")[:600]),
+                            "あなたは画像検索の担当です。JSON オブジェクトのみ返す。", max_tokens=300)
+        obj = parse_json_object(text)
+    except Exception:
+        return {}
+    if not isinstance(obj, dict) or not str(obj.get("query") or "").strip():
+        return {}
+    return {"query": str(obj["query"]).strip()[:80], "topic": str(obj.get("topic") or "").strip()[:30]}
+
+
 def shorter_queries(query: str) -> list:
     """「ドトールコーヒー 原宿 1号店」→ ["ドトールコーヒー 原宿", "ドトールコーヒー"]（語を後ろから減らす）。"""
     words = (query or "").split()

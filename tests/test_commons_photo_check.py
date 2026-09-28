@@ -130,3 +130,26 @@ def test_single_web_photo_redo_uses_commons_for_commons_channels(tmp_path, monke
     assert res.get_json()["ok"] is True
     assert used["sel"]["sentence"].startswith("1980年")
     assert captured["extra"]["license"] == "CC BY-SA 4.0" and captured["extra"]["attribution"] == "Mc681"
+
+
+def test_single_redo_uses_saved_words_or_asks_for_them(tmp_path, monkeypatch):
+    # 9/28: 文に店名が無い（「原宿に1号店を開きます」）と、文をそのまま検索しても見つからなかった
+    import app as appmod
+    import web_searcher
+    (tmp_path / "images").mkdir()
+    seen = []
+    monkeypatch.setattr(cs, "run_commons_search_for_selections",
+                        lambda client, sels, **k: seen.append(dict(sels[0])) or {})
+    monkeypatch.setattr(cs, "suggest_query", lambda client, sentence, context="": {
+        "query": "Doutor Coffee Harajuku first store", "topic": "ドトール1号店"})
+    monkeypatch.setattr(web_searcher, "download_thumbnail", lambda url, path: True)
+    with appmod.app.test_request_context():
+        appmod._regenerate_web_photo(tmp_path, 8, {"sentence": "原宿に1号店を開きます。",
+                                                  "web_query": "ドトールコーヒー 原宿 1号店",
+                                                  "web_query_topic": "ドトール1号店"},
+                                     {"anthropic": ""}, {"photo_source": "commons"})
+        appmod._regenerate_web_photo(tmp_path, 8, {"sentence": "原宿に1号店を開きます。",
+                                                  "block_text": "喫茶店業界を変えたのがドトールでした。"},
+                                     {"anthropic": ""}, {"photo_source": "commons"})
+    assert seen[0]["query"] == "ドトールコーヒー 原宿 1号店"   # 自動の回で使った検索語
+    assert seen[1]["query"] == "Doutor Coffee Harajuku first store"  # 文と段落から決めた検索語

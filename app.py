@@ -2000,7 +2000,13 @@ def _regenerate_web_photo(job_dir, no, snap_row, ch_keys, defaults):
     if defaults.get("photo_source") == "commons":
         # 写真を Commons に限るチャンネル（カラクリ経済学）は、1枚の作り直しも Commons から、
         # 写っているものを確かめて使う（2026-09-28。自動の経路と同じ決まり）
-        from commons_searcher import run_commons_search_for_selections
+        from commons_searcher import run_commons_search_for_selections, suggest_query
+        if row.get("web_query"):
+            selections[0].update(query=row["web_query"], topic=row.get("web_query_topic") or row["web_query"])
+        else:
+            hint = suggest_query(client, sentence, row.get("block_text", ""))
+            if hint:
+                selections[0].update(query=hint["query"], topic=hint.get("topic") or hint["query"])
         found = run_commons_search_for_selections(client, selections, max_workers=1)
         info = found.get(no) or {}
         if not info:

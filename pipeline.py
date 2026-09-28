@@ -1211,6 +1211,9 @@ class SentencePipeline:
                         "topic": rt.get("topic") or r.get("sentence", "")[:20],
                         "sentence": r.get("sentence", ""),  # 写真に写っているものの確認用
                     })
+                    # 1枚の「Web写真で作り直す」でも同じ検索語を使えるよう行に残す（9/28）
+                    self._update_row(r["no"], web_query=selections[-1]["query"],
+                                     web_query_topic=selections[-1]["topic"])
             # 再開時: 前回取得済みの文は検索対象から外す
             if resumed_web_nos:
                 selections = [s for s in selections if s.get("no") not in resumed_web_nos]
