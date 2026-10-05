@@ -272,17 +272,16 @@ def version():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if not APP_PASSWORD:
-        return redirect(url_for("index"))
-    if session.get("authenticated"):
-        return redirect(url_for("index"))
+    studio_home = url_for("materials.home")
+    if not APP_PASSWORD or session.get("authenticated"):
+        return redirect(studio_home)
     error = None
     if request.method == "POST":
         if request.form.get("password", "") == APP_PASSWORD:
             session.permanent = True  # 14日間有効（PERMANENT_SESSION_LIFETIME）
             session["authenticated"] = True
-            destination = session.pop("login_next", "/")
-            return redirect(destination if destination.startswith("/") and not destination.startswith("//") and "\\" not in destination else "/")
+            destination = session.pop("login_next", studio_home)
+            return redirect(destination if destination.startswith("/") and not destination.startswith("//") and "\\" not in destination else studio_home)
         error = "パスワードが正しくありません"
     return render_template("login.html", error=error)
 
@@ -290,7 +289,7 @@ def login():
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect(url_for("materials.home"))
 
 
 # ====== ジョブ管理 ======

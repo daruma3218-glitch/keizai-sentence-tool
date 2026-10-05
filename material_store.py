@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
 
-VERSION = "2026-10-05.4"
+VERSION = "2026-10-05.5"
 LOCK = threading.RLock()
 CHANNELS = {
     "russia": {"id": "russia", "source_id": "roshia", "name": "ロシア解体新書", "color": "#a32b35",
