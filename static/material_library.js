@@ -37,7 +37,7 @@
     $('adoption-count').textContent = adopted + ' / ' + required.length + ' 場面の素材を採用';
     StudioStatus.apply($('job-status'), data.status);
     const exported = data.export?.last;
-    $('export-state').textContent = exported ? (data.export.changed ? '前回の書き出し後に変更があります。編集側へ渡すときは、もう一度書き出してください。' : '前回書き出した採用内容と一致しています。') : 'この画面からの書き出し記録はまだありません。旧画面からのダウンロードは記録対象外です。';
+    $('export-state').textContent = exported ? (data.export.changed ? 'この画面での前回書き出し後に変更があります。編集側へ渡すときは、もう一度書き出してください。' : 'この画面で前回書き出した採用内容と一致しています。') : 'この画面からの書き出し記録はまだありません。';
     $('export-state').classList.toggle('status-text', !!data.export?.changed);
     $('export-state').dataset.tone = data.export?.changed ? 'attention' : 'neutral';
     $('selection-summary').innerHTML = StudioStatus.html('selection_pending', '未採用 ' + (required.length - adopted) + ' 場面') +

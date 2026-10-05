@@ -377,7 +377,8 @@ def register(module):
                 for filename in {r["asset"]["filename"] for r in data["rows"] if r["asset"]}:
                     archive.write(store.safe_path(d, filename), filename)
                 archive.writestr("README.txt", "採用した素材と原稿の対応です。推定時刻は音声に未同期です。\n"
-                                 "ready_for_editing は素材の準備状態で、動画の最終承認ではありません。\n")
+                                 "ready_for_editing は素材の準備状態で、動画の最終承認ではありません。\n" +
+                                 ("" if record else "この旧ダウンロード経路は、素材画面の書き出し記録・変更照合の対象外です。\n"))
             if record:
                 store.save(d / "material_last_export.json", {"revision": data["material_revision"],
                            "selection_hash": data["selection_hash"], "exported_at": data["exported_at"]})

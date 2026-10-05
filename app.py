@@ -296,14 +296,21 @@ def logout():
 # ====== ジョブ管理 ======
 def _set_job_state(job_id: str, **kwargs):
     with _jobs_lock:
+        if job_id not in _jobs:
+            try:
+                saved = json.loads((OUTPUT_DIR / job_id / "job.json").read_text(encoding="utf-8"))
+                if isinstance(saved, dict):
+                    _jobs[job_id] = saved
+            except (OSError, ValueError):
+                pass
         state = _jobs.setdefault(job_id, {})
         state.update(kwargs)
+        if kwargs.get("status") in {"running", "queued"}:
+            from job_recovery import runtime_owner
+            state["runtime_owner"] = runtime_owner()
         state["updated_at"] = datetime.now().isoformat()
         try:
-            (OUTPUT_DIR / job_id / "job.json").write_text(
-                json.dumps(state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            material_store.save(OUTPUT_DIR / job_id / "job.json", state)
         except Exception:
             pass
 
@@ -2728,6 +2735,8 @@ material_routes.register(sys.modules[__name__])
 
 
 if __name__ == "__main__":
+    from job_recovery import WorkerRecovery
+    app.before_request(WorkerRecovery(sys.modules[__name__]))
     port = int(os.environ.get("PORT", 3002))
     print("\n" + "=" * 50)
     print("  センテンスつくーる 起動中...")

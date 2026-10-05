@@ -7,7 +7,7 @@
 </section>
 <div class="summary-bar"><div><strong id="adoption-count">読込中…</strong><span id="job-status" class="subtle"></span></div><div class="actions"><button class="button compact" id="undo">直前の採用操作を戻す</button><a class="button dark compact" id="download" href="/materials/jobs/{{ job_id }}/download">採用素材をダウンロード ↓</a></div></div>
 <div class="selection-summary" id="selection-summary" aria-live="polite"></div>
-<p id="export-state" class="hint" role="status"></p>
+<p id="export-state" class="hint" role="status"></p><p class="hint">書き出しの比較は、この画面で作成したZIPが対象です。従来画面からのダウンロードは照合の対象外です。</p>
 <div class="library-controls"><nav class="filters selection-filters" aria-label="素材の絞り込み"><button data-filter="all" data-tone="neutral" class="active" aria-pressed="true">すべて</button><button data-filter="pending" data-tone="queued" aria-pressed="false">未採用</button><button data-filter="selected" data-tone="done" aria-pressed="false">採用済み</button><button data-filter="flagged" data-tone="attention" aria-pressed="false">要修正</button></nav><input id="search" type="search" placeholder="原稿から検索" aria-label="原稿から検索"></div>
 <div class="library-location"><label for="chapter-filter">章</label><select id="chapter-filter"><option value="">すべての章</option></select><button id="clear-view" class="text-button" type="button">絞り込みを解除</button><button id="restore-view" class="button compact" type="button" hidden>前回の位置へ</button><span id="visible-count" class="hint" role="status"></span></div>
 <p class="hint selection-help">採用・要修正は保存されます。章と表示位置は、このブラウザで続きから開けます。ダウンロードは絞り込みに関係なく全体が対象です。</p>

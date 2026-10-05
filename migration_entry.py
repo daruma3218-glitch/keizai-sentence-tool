@@ -10,12 +10,13 @@ from pathlib import Path
 
 
 class MigrationGate:
-    def __init__(self, application, data_dir, mode="readonly"):
+    def __init__(self, application, data_dir, mode="readonly", prepare=None):
         if mode not in {"readonly", "active"}:
             raise ValueError("MIGRATION_ACCESS must be readonly or active")
         self.application = application
         self.data_dir = Path(data_dir)
         self.mode = mode
+        self.prepare = prepare
 
     def read_only(self):
         if self.mode == "readonly":
@@ -36,10 +37,13 @@ class MigrationGate:
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "")
         login = method == "POST" and path == "/login"
-        if method not in {"GET", "HEAD", "OPTIONS"} and not login and self.read_only():
+        readonly = self.read_only()
+        if method not in {"GET", "HEAD", "OPTIONS"} and not login and readonly:
             body = json.dumps({"ok": False, "code": "migration_readonly", "error": "移行確認中のため、新規生成・再生成・変更は一時停止しています。保存済みの結果は閲覧・ダウンロードできます。"}, ensure_ascii=False).encode("utf-8")
             start_response("503 Service Unavailable", [("Content-Type", "application/json; charset=utf-8"), ("Content-Length", str(len(body))), ("Cache-Control", "no-store"), ("Retry-After", "300")])
             return [body]
+        if not readonly and self.prepare:
+            self.prepare()
         return self.application(environ, start_response)
 
 
@@ -55,7 +59,8 @@ def create_app():
         raise RuntimeError("Invalid MIGRATION_ACCESS")
     module = importlib.import_module("app")
     from deploy_guard import install
-    return MigrationGate(install(module, root), root, mode)
+    from job_recovery import WorkerRecovery
+    return MigrationGate(install(module, root), root, mode, prepare=WorkerRecovery(module))
 
 
 # Gunicorn's factory syntax migration_entry:create_app() avoids import-time
