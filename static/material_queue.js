@@ -5,7 +5,7 @@
   const esc = Studio.escape, status = StudioStatus;
   const freshness = document.getElementById('queue-freshness');
   let previous = JSON.parse(document.getElementById('queue-initial').textContent);
-  let timer, inFlight = false, signedOut = false;
+  let timer, inFlight = false, signedOut = false, wasActive = null;
   const link = job => '/progress/' + encodeURIComponent(job.id);
   const meta = job => [job.channel, job.creator ? '依頼者（入力名）：' + job.creator : '', job.started ? job.started + ' 受付（日本時間）' : ''].filter(Boolean).map(esc).join(' · ');
   async function fetchStatus(url) {
@@ -19,6 +19,15 @@
     finally { clearTimeout(timeout); }
   }
   function render(board) {
+    const active = !!(board.running || board.waiting.length || board.other_operations || board.accepting === false);
+    const panel = document.getElementById('queue-board');
+    if (wasActive !== null && active !== wasActive) panel.open = active;
+    wasActive = active;
+    panel.dataset.active = String(active);
+    document.getElementById('queue-summary').textContent = active
+      ? '一括生成 ' + (board.running ? '1' : '0') + ' 件 · 順番待ち ' + board.waiting.length + ' 件' + (board.other_operations ? ' · 手直し ' + board.other_operations + ' 件' : '')
+      : '生成中・順番待ちなし';
+    document.getElementById('queue-other').hidden = !board.other_operations;
     document.getElementById('queue-intake').hidden = board.accepting !== false;
     document.getElementById('queue-other').textContent = '素材の手直し・追加：' + (board.other_operations || 0) + ' 件処理中（一括生成とは別）';
     const running = board.running;
@@ -42,6 +51,7 @@
       element.dataset.tone = status.describe(state.status).tone;
       element.innerHTML = status.html(state.status) + '<a href="' + link(job) + '">' + esc(job.title) + '：結果を確認 →</a>';
       element.hidden = false;
+      document.getElementById('queue-board').open = true;
     } catch (_) { /* Keep the last confirmed board; never infer successful completion. */ }
   }
   async function poll() {

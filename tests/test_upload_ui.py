@@ -42,4 +42,4 @@ def test_start_screen_summarizes_and_folds_detailed_settings(monkeypatch):
     for name in ('name="provider"', 'name="openai_model"', 'name="worldview_desc"', 'name="route_mode"',
                  'name="concurrency"', 'name="max_diagrams"', 'name="web_image_count"', 'name="verify_diagrams"'):
         assert name in folded, name
-    assert "① チャンネルを選ぶ" in html and "② 原稿を入れる" in html and "③ 図解をまとめて作る" in html
+    assert "① チャンネルを選ぶ" in html and "② 原稿を入れる" in html and "③ 素材をまとめて作る" in html

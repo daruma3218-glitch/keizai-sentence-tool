@@ -30,12 +30,12 @@
         <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-600 to-blue-600 flex items-center justify-center">
           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>
         </div>
-        <span class="font-bold text-gray-900 text-base">センテンスつくーる</span>
+        <span class="font-bold text-gray-900 text-base">素材スタジオ</span>
         <span class="hidden md:inline text-xs text-gray-400 ml-2">原稿を1文ずつ図解化</span>
       </div>
       <div class="flex items-center gap-3">
         <a href="/compare" class="hidden sm:inline-flex items-center gap-2 px-4 py-2 rounded-lg text-cyan-700 text-sm font-semibold hover:bg-cyan-50">版を比べる</a>
-        <a href="/scene-fix" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-50 text-cyan-700 text-sm font-semibold hover:bg-cyan-100">シーン直しつくーる</a>
+        <a href="/scene-fix" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-50 text-cyan-700 text-sm font-semibold hover:bg-cyan-100">1場面を手直し</a>
         <span class="hidden md:inline text-xs text-gray-400">Claude + Gemini/OpenAI</span>
         <a href="/logout" class="text-xs text-gray-400 hover:text-gray-600 transition">ログアウト</a>
       </div>
@@ -61,7 +61,7 @@
           <p class="text-xs text-blue-700 mt-2">生成は1回ずつ順番に進みます。いま作ると順番待ちに入り、前の回が終わりしだい自動で始まります（1枚の作り直しは待たずにできます）。</p>
         </div>
         {% endif %}
-        <h1 class="text-3xl font-bold text-gray-900 mb-2">新しいセンテンス図解を作成</h1>
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">原稿から素材を作る</h1>
         <p class="text-sm text-gray-500 mb-6">原稿を章/ブロック/センテンスに分解して、各文に図解を割り当てます</p>
 
         <!-- 選択中チャンネルのキー有無で出し分け（JS が applyChannelDefaults で制御） -->
@@ -337,7 +337,7 @@
 
           <button type="submit" id="submitBtn"
                   class="w-full py-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold rounded-xl hover:from-cyan-700 hover:to-blue-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
-            <span id="submitText">③ 図解をまとめて作る</span>
+            <span id="submitText">③ 素材をまとめて作る</span>
           </button>
 
           <div id="errorBox" class="hidden p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"></div>
@@ -348,7 +348,7 @@
         <div class="bg-white rounded-xl border border-gray-200 p-5 sticky top-20">
           <h2 class="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
             <svg class="w-4 h-4 text-cyan-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            最近のジョブ
+            最近の制作
           </h2>
           {% if past_jobs %}
             <div class="space-y-2 max-h-[600px] overflow-y-auto">
@@ -634,7 +634,7 @@
           errorBox.textContent = data.error || 'エラーが発生しました';
           errorBox.classList.remove('hidden');
           submitBtn.disabled = false;
-          submitText.textContent = '③ 図解をまとめて作る';
+          submitText.textContent = '③ 素材をまとめて作る';
           return;
         }
         window.location.href = data.redirect;
@@ -642,7 +642,7 @@
         errorBox.textContent = '通信エラー: ' + err.message;
         errorBox.classList.remove('hidden');
         submitBtn.disabled = false;
-        submitText.textContent = '③ 図解をまとめて作る';
+        submitText.textContent = '③ 素材をまとめて作る';
       }
     });
   </script>

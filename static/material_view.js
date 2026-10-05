@@ -15,6 +15,28 @@
       (view.filter === 'all' || view.filter === 'pending' && mode(row, lib) === 'image' && !lib.selections[no] ||
        view.filter === 'selected' && mode(row, lib) === 'image' && !!lib.selections[no] || view.filter === 'flagged' && !!lib.flags[no]);
   }
+  // Preserve chapter/search scope while moving forward, then wrap once.
+  function nextPending(rows, lib, no, view) {
+    const index = rows.findIndex(row => String(row.no) === String(no));
+    const ordered = rows.slice(index + 1).concat(rows.slice(0, Math.max(0, index)));
+    return ordered.find(row => matches(row, lib, {...view, filter:'pending'})) || null;
+  }
+  function remaining(rows, lib) {
+    let previous = null, previousChapter = null;
+    return rows.filter(row => {
+      const ch = row.chapter_index ?? 0;
+      if (ch !== previousChapter) previous = null;
+      previousChapter = ch;
+      const no = String(row.no), value = mode(row, lib);
+      const chosen = (lib.candidates[no] || []).some(c => c.id === lib.selections[no]);
+      let unresolved = !!lib.flags[no];
+      if (value === 'image') { unresolved ||= !chosen; previous = chosen; }
+      else if (value === 'hold') unresolved ||= !previous;
+      else if (value === 'none') previous = null;
+      else unresolved = true;
+      return unresolved;
+    });
+  }
   function saved(value) {
     if (!value || typeof value !== 'object') return null;
     return {filter:['all','pending','selected','flagged'].includes(value.filter) ? value.filter : 'all',
@@ -24,7 +46,7 @@
       offset:Number.isFinite(value.offset) ? Math.max(-5000, Math.min(5000, value.offset)) : 0,
       y:Number.isFinite(value.y) ? Math.max(0, value.y) : 0};
   }
-  const api = {mode, chapter, state, matches, saved};
+  const api = {mode, chapter, state, matches, saved, nextPending, remaining};
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.MaterialView = api;
 })(typeof window === 'object' ? window : {});

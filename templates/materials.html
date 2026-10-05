@@ -2,8 +2,8 @@
 {% block content %}
 {% if not selected %}
 <section class="intro"><p class="eyebrow">MATERIAL STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">いつものチャンネルから、新しい制作も、前回の続きも。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
-{% else %}<p class="eyebrow channel-switch-label">CHANNEL WORKSPACE</p>{% endif %}
-{% include "material_queue.html" %}
+{% endif %}
+{% if not selected %}{% include "material_queue.html" %}{% endif %}
 <nav class="channel-grid {% if selected %}channel-grid-compact{% endif %}" aria-label="チャンネル">
 {% for ch in channels %}
 <a class="channel-card {% if selected == ch.id %}current{% endif %}" href="/materials?channel={{ ch.id }}" style="--channel:{{ ch.color }}" {% if selected == ch.id %}aria-current="page"{% endif %}>
@@ -15,20 +15,7 @@
 </nav>
 {% if selected %}
 {% set chosen = (channels | selectattr('id','equalto',selected) | first) %}
-<section class="workspace-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h1>{{ chosen.name }}</h1><p class="subtle">前回の続きから、制作を始めましょう。</p></div><a class="button" href="#new-project">＋ 新しい案件</a></section>
-{% if selected == 'russia' %}
-<section class="legacy-workspace"><div><strong>いつもの図解スタジオで作った素材</strong><p>制作中の図解と過去の履歴は、図解スタジオに保存されています。</p></div><a class="button dark" href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">図解の履歴・続きへ ↗</a></section>
-{% endif %}
-{% if selected == 'china' %}<p class="info">中国チャンネルは準備用の枠です。正式な画風・キャラクターは未設定です。専用の生成設定を用意してから制作を始めます。</p>{% endif %}
-<nav class="studio-tools" aria-label="制作ツール">
-  <a href="/?channel_id={{ chosen.source_id }}"><strong>原稿から素材を作る →</strong><span>章ごとの生成・図解・写真・出典</span></a>
-  <a href="/scene-fix?channel_id={{ chosen.source_id }}"><strong>1場面を手直し →</strong><span>原稿の一部と画像から案を作る</span></a>
-  <a href="/compare"><strong>生成した版を比較 →</strong><span>設定の違うジョブを文ごとに並べる</span></a>
-  <a href="/materials/guide"><strong>使える機能一覧 →</strong><span>従来の便利な機能と開く場所</span></a>
-</nav>
-{% if history.warning %}<p class="info" role="status">一部の制作記録を読み込めませんでした。表示できた履歴は下に残しています。少し待って画面を更新してください。</p>{% endif %}
-<section class="workspace-layout">
-<div class="workspace-history">
+<section class="workspace-heading"><div><h1>{{ chosen.name }}</h1><p class="subtle">前回の続きから、制作を始めましょう。</p></div><button class="button dark" type="button" data-open-project>＋ 新しく作る</button></section>
 {% if history.jobs %}
 {% set recent = history.jobs[0] %}
 <section class="continue-card" data-tone="{{ recent.tone }}" aria-label="直近の作業">
@@ -37,13 +24,26 @@
   <div class="continue-bottom"><p class="subtle">{% if recent.bucket == 'completed' %}保存した候補と採用状態から、素材選びを続けられます。{% else %}途中までの素材と、制作の進み具合を確認できます。{% endif %}</p><a class="button dark" href="{{ recent.href }}">続きから開く →</a></div>
 </section>
 {% endif %}
+{% include "material_queue.html" %}
+{% if selected == 'russia' %}
+<section class="legacy-workspace"><div><strong>いつもの図解スタジオで作った素材</strong><p>制作中の図解と過去の履歴は、図解スタジオに保存されています。</p></div><a class="button dark" href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">図解の履歴・続きへ ↗</a></section>
+{% endif %}
+{% if selected == 'china' %}<p class="info">中国チャンネルは準備用の枠です。正式な画風・キャラクターは未設定です。専用の生成設定を用意してから制作を始めます。</p>{% endif %}
+<details class="secondary-tools"><summary>手直し・過去の版の比較・使い方</summary><nav class="studio-tools" aria-label="制作ツール">
+  <a href="/scene-fix?channel_id={{ chosen.source_id }}"><strong>1場面を手直し →</strong><span>原稿の一部と画像から案を作る</span></a>
+  <a href="/compare"><strong>生成した版を比較 →</strong><span>別の制作回の候補を文ごとに並べる</span></a>
+  <a href="/materials/guide"><strong>使える機能一覧 →</strong><span>従来の便利な機能と開く場所</span></a>
+</nav></details>
+{% if history.warning %}<p class="info" role="status">一部の制作記録を読み込めませんでした。表示できた履歴は下に残しています。少し待って画面を更新してください。</p>{% endif %}
+<section class="workspace-layout history-only">
+<div class="workspace-history">
 <div class="history-heading"><h2>制作履歴 <span class="count">{{ history.jobs | length }} 件</span></h2><a class="quiet-link" href="/materials?channel={{ selected }}">最新の状態に更新</a></div>
 {% if history.jobs %}
 <div class="history-tools"><div class="filters history-filters" role="group" aria-label="制作履歴の状態">
   <button type="button" class="active" data-history-filter="all" aria-pressed="true">すべて</button>
   <button type="button" data-history-filter="unfinished" aria-pressed="false">作業途中 <span>{{ history.unfinished }}</span></button>
   <button type="button" data-history-filter="completed" aria-pressed="false">生成済み <span>{{ history.completed }}</span></button>
-</div><label class="history-search"><span class="sr-only">制作履歴を検索</span><input id="history-search" type="search" placeholder="タイトル・ジョブIDで検索"></label></div>
+</div><label class="history-search"><span class="sr-only">制作履歴を検索</span><input id="history-search" type="search" placeholder="タイトル・制作IDで検索"></label></div>
 <div id="job-history" class="job-history">
 {% for j in history.jobs %}
 <article class="job-row" data-tone="{{ j.tone }}" data-job="{{ j.id }}" data-bucket="{{ j.bucket }}" data-search="{{ j.title }} {{ j.id }} {{ j.project_id }}">
@@ -62,20 +62,20 @@
 </div>
 <p id="history-no-match" class="empty" hidden>条件に合う制作履歴はありません。</p>
 <div class="history-pagination"><p id="history-count" class="hint" aria-live="polite"></p><button id="history-more" class="button" type="button" hidden>さらに表示</button></div>
-<p class="hint history-note">従来のセンテンスで作ったジョブも表示しています。生成済みは、素材選びの前の段階です。</p>
-{% else %}<div class="empty"><span>▧</span><p>このチャンネルの制作履歴はまだありません。</p><p class="hint">新しい案件から原稿を入れると、ここに続きが保存されます。{% if selected == 'russia' %}<br>従来の図解は「図解の履歴・続きへ」から開けます。{% endif %}</p></div>{% endif %}
+<p class="hint history-note">従来のセンテンスで作った制作履歴も表示しています。生成済みは、素材選びの前の段階です。</p>
+{% else %}<div class="empty"><span>▧</span><p>このチャンネルの制作履歴はまだありません。</p><p class="hint">「新しく作る」から原稿を入れると、ここに続きが保存されます。{% if selected == 'russia' %}<br>従来の図解は「図解の履歴・続きへ」から開けます。{% endif %}</p></div>{% endif %}
 {% if history.drafts %}
 <section class="draft-list"><h3>原稿を入れる案件 <span class="count">{{ history.drafts | length }} 件</span></h3>
 {% for p in history.drafts %}<article class="draft-row"><div><h3>{{ p.title }}</h3><p class="hint">{% if p.missing_jobs %}過去の制作データが見つかりません。案件の設定は保存されています。{% else %}案件を作成済み · 原稿の入力待ち{% endif %}</p></div><a class="button compact" href="/?channel_id={{ p.source_channel_id }}&amp;project_id={{ p.project_id }}">原稿を入れる →</a></article>{% endfor %}
 </section>{% endif %}
 </div>
-<form id="new-project" class="panel new-project" data-channel="{{ selected }}">
-  <p class="eyebrow">NEW PROJECT</p><h2>新しい案件</h2><p class="hint">チャンネルの画風と設定を引き継ぎます。</p>
-  <label for="project-title">動画のタイトル</label><input id="project-title" name="title" required maxlength="160" value="{{ prefill_title }}" placeholder="例：どうして値上げが続くのか">
+<dialog id="new-project-dialog" aria-labelledby="new-project-title"><form id="new-project" class="panel new-project" data-channel="{{ selected }}">
+  <div class="dialog-heading"><h2 id="new-project-title">新しく作る</h2><button class="icon-button" type="button" data-close-project aria-label="閉じる">×</button></div><p class="hint">チャンネルの画風と設定を引き継ぎます。</p>
+  <label for="project-title">動画のタイトル</label><input id="project-title" name="title" required autofocus maxlength="160" value="{{ prefill_title }}" placeholder="例：どうして値上げが続くのか">
   <label for="trello-url">案件カードのURL <span class="subtle">任意</span></label><input id="trello-url" name="trello_url" type="url" value="{{ prefill_trello }}" placeholder="https://trello.com/c/…">
-  <p class="hint">同じTrelloカードから開くと、同じ案件に戻れます。</p><button class="button dark wide" type="submit">案件を作る →</button>
+  <p class="hint">同じTrelloカードから開くと、同じ案件に戻れます。</p><button class="button dark wide" type="submit">原稿の入力へ →</button>
   {% if not chosen.ready %}<p class="hint">案件の保存はできます。AI生成には、このチャンネルの生成設定が必要です。</p>{% endif %}
-</form>
+</form></dialog>
 </section>
 <dialog id="resume-dialog" aria-labelledby="resume-heading"><div class="dialog-heading"><h2 id="resume-heading">残りの生成を再開</h2><button class="icon-button" type="button" data-close-resume aria-label="閉じる">×</button></div><p id="resume-title"></p><p class="hint">保存済みで再利用できる素材は残し、保存された設定で残りの処理を再開します。途中で画像を保存できなかった処理は、もう一度生成します。追加の画像生成には利用料金が発生します。</p><div class="actions"><button class="button" type="button" data-close-resume>戻る</button><button id="confirm-resume" class="button dark" type="button">残りの生成を開始</button></div></dialog>
 {% else %}

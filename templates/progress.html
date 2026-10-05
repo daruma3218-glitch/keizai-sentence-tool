@@ -37,17 +37,17 @@
 
   <nav class="bg-white/90 backdrop-blur border-b border-gray-200 sticky top-0 z-50">
     <div class="max-w-[1600px] mx-auto px-6 h-14 flex items-center justify-between">
-      <a href="/" class="flex items-center gap-2.5">
+      <a href="/materials" class="flex items-center gap-2.5">
         <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-600 to-blue-600 flex items-center justify-center">
           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6z"/></svg>
         </div>
-        <span class="font-bold text-gray-900 text-base">センテンスつくーる</span>
+        <span class="font-bold text-gray-900 text-base">素材スタジオ</span>
       </a>
       <div class="flex items-center gap-3">
-        <a href="/materials" class="text-sm text-gray-600 hover:underline">素材スタジオ</a>
+        <a href="/materials{% if material_channel %}?channel={{ material_channel }}{% endif %}" class="text-sm text-gray-600 hover:underline">制作履歴</a>
         {% if material_supported %}<a href="/materials/jobs/{{ job_id }}" class="text-sm font-bold text-emerald-700">候補を比較・採用する →</a>{% endif %}
         <span class="text-xs text-gray-400 font-mono">{{ job_id }}</span>
-        <a href="/" class="text-xs text-cyan-600 hover:underline">+ 新規ジョブ</a>
+        <a href="/materials{% if material_channel %}?channel={{ material_channel }}{% endif %}#new-project" class="text-xs text-cyan-600 hover:underline">+ 新しく作る</a>
       </div>
     </div>
   </nav>
@@ -64,10 +64,12 @@
         <div id="statusBadge" class="status-badge" data-tone="neutral" role="status"><span class="status-icon" aria-hidden="true">…</span><span>読み込み中</span></div>
       </div>
 
+      <ol class="studio-steps progress-steps" aria-label="素材制作の工程"><li id="step-generation" aria-current="step"><b>1</b> 素材を生成</li><li id="step-selection"><b>2</b> 確認・採用</li><li><b>3</b> 書き出し</li></ol>
+      <p id="progress-next-action" class="progress-next-action" role="status">生成の状態を確認しています。</p>
       <div class="mb-4">
         <div class="flex items-center justify-between mb-2">
           <div class="flex gap-3 text-xs text-gray-500">
-            <span>全体の進み具合</span>
+            <span>素材生成の進み具合</span>
             <span class="text-gray-300">|</span>
             <span class="font-semibold status-text" id="overallPercent">0%</span>
           </div>
@@ -91,18 +93,18 @@
         <button type="button" class="summary-tile" data-tone="error" data-summary-filter="failed" aria-pressed="false" onclick="setRowFilter('failed')"><strong id="failedCount">0</strong><span>× 失敗</span></button>
         <button type="button" class="summary-tile" data-tone="neutral" data-summary-filter="other" aria-pressed="false" onclick="setRowFilter('other')"><strong id="otherCount">0</strong><span>− 対象外・その他</span></button>
       </div>
-      <div id="generationReview" class="generation-notice" data-tone="attention" hidden><p id="generationReviewText"></p><button type="button" onclick="setRowFilter('issues')">確認が必要な素材を見る →</button></div>
+      <div id="generationReview" class="generation-notice" data-tone="attention" hidden><p id="generationReviewText"></p><button type="button" onclick="showReviewRows()">確認が必要な素材を見る →</button></div>
 
 
-      <div id="chapterProgressSection" class="hidden mt-5">
+      <details id="chapterProgressSection" class="hidden chapter-disclosure mt-5"><summary>章ごとの進捗 <span id="chapter-count"></span><span id="chapter-selection"></span></summary>
         <div class="flex items-center justify-between gap-3 mb-3">
-          <h2 class="text-sm font-semibold text-gray-900">章ごとの進捗</h2>
+          <p class="text-xs text-gray-500">章を選んで素材を絞り込めます。</p>
           <button onclick="clearChapterFilter()" class="text-xs text-cyan-700 hover:text-cyan-900 hover:underline">全章表示</button>
         </div>
         <div id="chapterCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3"></div>
-      </div>
+      </details>
 
-      <div id="actions" class="hidden mt-5 flex flex-wrap gap-3">
+      <details id="actions" class="hidden legacy-downloads mt-5"><summary>生成結果の一覧・従来形式でダウンロード</summary><p class="text-xs text-gray-500 my-3">採用した素材を編集へ渡すときは「候補を比較・採用する」から書き出してください。</p><div class="flex flex-wrap gap-3">
         <a id="galleryBtn" href="" target="_blank" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-purple-500 text-purple-700 font-medium rounded-xl hover:bg-purple-50 transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
           画像ギャラリーを開く
@@ -119,19 +121,19 @@
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
           画像+CSV を ZIP でダウンロード
         </a>
-        <a href="/" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition">
-          + 新しいジョブ
+        <a href="/materials{% if material_channel %}?channel={{ material_channel }}{% endif %}#new-project" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition">
+          + 新しく作る
         </a>
-      </div>
+      </div></details>
     </div>
 
     <!-- メイン: テーブル + サイドログ -->
     <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
 
-      <div class="lg:col-span-3">
+      <div class="lg:col-span-3" id="material-review-table" tabindex="-1">
         <div class="bg-white rounded-2xl border border-gray-200 p-3 shadow-sm">
           <div class="flex flex-wrap items-center justify-between gap-3 mb-3 px-2 pt-1">
-            <h2 class="text-sm font-semibold text-gray-900">センテンス図解テーブル</h2>
+            <h2 class="text-sm font-semibold text-gray-900">原稿と素材の確認</h2>
             <div class="status-legend" aria-label="状態の色">
               <span class="status-badge" data-tone="queued">◷ 待機</span>
               <span class="status-badge" data-tone="working">↻ 生成中</span>
@@ -274,6 +276,7 @@
     let stopped = false;
     let lastRows = [];
     let rowFilter = 'all';
+    let initialFilterChosen = false;
     let chapterFilter = null;
     let lastJobStatus = 'unknown';
     let currentModalNo = null;
@@ -479,6 +482,8 @@
     function updateChapterCards(rows) {
       if (!els.chapterCards || !els.chapterProgressSection) return;
       const chapters = chapterStats(rows);
+      document.getElementById('chapter-count').textContent = chapters.length + ' 章';
+      document.getElementById('chapter-selection').textContent = chapterFilter === null ? '' : ' · 章 ' + chapterFilter + ' を表示中';
       els.chapterProgressSection.classList.toggle('hidden', !chapters.length);
       els.chapterCards.innerHTML = chapters.map(ch => {
         const pct = ch.total ? Math.round((ch.finished / ch.total) * 100) : 0;
@@ -494,7 +499,8 @@
       }).join('');
     }
 
-    function setRowFilter(filter) {
+    function setRowFilter(filter, initialize = false) {
+      if (!initialize) initialFilterChosen = true;
       rowFilter = filter;
       const tones = {all:'neutral',pending:'queued',generating:'working',ok:'done',issues:'attention',attention:'attention',failed:'error'};
       document.querySelectorAll('.row-filter-btn').forEach(btn => {
@@ -507,6 +513,14 @@
         btn.setAttribute('aria-pressed', String(btn.dataset.summaryFilter === rowFilter));
       });
       applyRowFilters();
+    }
+
+    function showReviewRows() {
+      clearChapterFilter();
+      setRowFilter('issues');
+      const target = document.getElementById('material-review-table');
+      target.scrollIntoView({block:'start', behavior:'instant'});
+      target.focus({preventScroll:true});
     }
 
     function setChapterFilter(index) {
@@ -688,6 +702,16 @@
       notice.hidden = lastJobStatus !== 'completed' || failed + attention === 0;
       notice.dataset.tone = failed ? 'error' : 'attention';
       document.getElementById('generationReviewText').textContent = '生成処理は完了しました。失敗 ' + failed + ' 件・要確認 ' + attention + ' 件の素材を確認してください。';
+      document.querySelectorAll('[data-summary-filter]').forEach(button => {
+        const key = button.dataset.summaryFilter;
+        const count = key === 'all' ? rows.length : counts[key];
+        button.classList.toggle('is-empty', !count);
+      });
+      if (!initialFilterChosen && rows.length && lastJobStatus === 'completed') setRowFilter(failed + attention ? 'issues' : 'all');
+      document.getElementById('progress-next-action').textContent = lastJobStatus === 'completed'
+        ? (failed + attention ? '次は、確認が必要な ' + (failed + attention) + ' 場面を見直し、使う候補を採用します。' : '生成が終わりました。次は、候補を比較して動画に使う素材を採用します。')
+        : ['error','failed','interrupted','cancelled'].includes(lastJobStatus) ? '生成は途中です。保存された素材と状況を確認してください。' : '素材を生成しています。完成した画像から確認できます。';
+      document.getElementById('jobOverview').dataset.tone = lastJobStatus === 'completed' && failed + attention ? 'attention' : StudioStatus.describe(lastJobStatus).tone;
       updateChapterCards(rows);
     }
 
@@ -710,6 +734,9 @@
         document.title = els.jobTitle.textContent + ' - 制作の進捗';
 
         StudioStatus.apply(els.statusBadge, state.status);
+        document.getElementById('step-generation').classList.toggle('is-done', state.status === 'completed');
+        document.getElementById('step-generation').setAttribute('aria-current', state.status === 'completed' ? 'false' : 'step');
+        document.getElementById('step-selection').setAttribute('aria-current', state.status === 'completed' ? 'step' : 'false');
         document.getElementById('jobOverview').dataset.tone = StudioStatus.describe(state.status).tone;
         if (lastRows.length) { rebuildTable(lastRows); updateSummary(lastRows); }
         if (state.status !== 'completed') els.actions.classList.add('hidden');
@@ -1161,7 +1188,7 @@
         setTimeout(async () => { await Promise.all([pollRows(), pollLogs()]); }, 1500);
       }
     }
-    setRowFilter('all');
+    setRowFilter('all', true);
     tick();
   </script>
 </body>

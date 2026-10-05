@@ -4,7 +4,7 @@
   const base = '/api/material-jobs/' + encodeURIComponent(window.materialJobId);
   let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
   const storageKey = 'material.selection.v1.' + window.materialJobId;
-  let lastVisit = null;
+  let lastVisit = null, reviewNo = '', reviewCandidate = '', reviewReference = '';
   try { lastVisit = MaterialView.saved(JSON.parse(localStorage.getItem(storageKey))); } catch (_) { /* Storage is optional. */ }
   if (lastVisit) { filter = lastVisit.filter; $('search').value = lastVisit.query; $('restore-view').hidden = false; }
   const currentView = () => ({filter, chapter:$('chapter-filter').value, query:$('search').value.trim()});
@@ -27,7 +27,7 @@
   const display = row => MaterialView.mode(row, data.library);
   function setBusy(value) {
     busy = value;
-    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit').forEach(button => { button.disabled = value; });
+    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
   }
   function draw() {
     if (!data) return;
@@ -36,8 +36,27 @@
     const adopted = required.filter(row => lib.selections[String(row.no)]).length;
     $('adoption-count').textContent = adopted + ' / ' + required.length + ' 場面の素材を採用';
     StudioStatus.apply($('job-status'), data.status);
+    const remaining = MaterialView.remaining(rows, lib).length;
+    const pending = required.length - adopted;
+    const flags = rows.filter(row => lib.flags[String(row.no)]).length;
+    $('next-action').textContent = (pending ? 'あと ' + pending + ' 場面の素材を採用' : '必要な素材は採用済み') + (flags ? ' · 要修正 ' + flags + ' 場面' : '') + (remaining ? ' · 確認が必要 ' + remaining + ' 場面' : ' · 書き出し時に最新版を照合します');
+    const choosing = remaining > 0 || !rows.length;
+    ['generation','selection','export'].forEach((step, index) => {
+      const element = $('library-step-' + step);
+      const current = data.status !== 'completed' ? 0 : choosing ? 1 : 2;
+      element.setAttribute('aria-current', index === current ? 'step' : 'false');
+      element.classList.toggle('is-done', index < current);
+    });
+    $('download').classList.toggle('dark', !choosing && data.status === 'completed');
+    $('review-next').classList.toggle('dark', pending > 0);
+    $('review-next').textContent = pending ? '次の未採用を確認 →' : '採用した素材を見直す';
+    document.querySelectorAll('[data-filter]').forEach(button => {
+      const labels = {all:'すべて',pending:'未採用',selected:'採用済み',flagged:'要修正'};
+      const count = {all:rows.length,pending,selected:adopted,flagged:flags}[button.dataset.filter];
+      button.textContent = labels[button.dataset.filter] + ' ' + count;
+    });
     const exported = data.export?.last;
-    $('export-state').textContent = exported ? (data.export.changed ? 'この画面での前回書き出し後に変更があります。編集側へ渡すときは、もう一度書き出してください。' : 'この画面で前回書き出した採用内容と一致しています。') : 'この画面からの書き出し記録はまだありません。';
+    $('export-state').textContent = exported ? (data.export.changed ? 'この画面での前回書き出し後に変更があります。編集側へ渡すときは、もう一度書き出してください。' : 'この画面で前回書き出した採用内容と一致しています。') : '';
     $('export-state').classList.toggle('status-text', !!data.export?.changed);
     $('export-state').dataset.tone = data.export?.changed ? 'attention' : 'neutral';
     $('selection-summary').innerHTML = StudioStatus.html('selection_pending', '未採用 ' + (required.length - adopted) + ' 場面') +
@@ -48,17 +67,18 @@
     $('chapter-filter').value = chapters.has(selectedChapter) ? selectedChapter : '';
     document.querySelectorAll('[data-filter]').forEach(button => { const active = button.dataset.filter === filter; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
     const visible = rows.filter(row => MaterialView.matches(row, lib, currentView()));
+    if (!MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
     $('visible-count').textContent = visible.length + ' / ' + rows.length + ' 場面を表示';
     $('rows').innerHTML = visible.map(row => {
       const no = String(row.no), candidates = lib.candidates[no] || [], selected = lib.selections[no], mode = display(row);
       const selectionState = MaterialView.state(row, lib);
-      return '<article class="scene" data-tone="' + StudioStatus.describe(selectionState).tone + '" data-selection-tone data-no="' + esc(no) + '"><div class="scene-caption"><div><span class="scene-number">' +
+      return '<article tabindex="-1" class="scene" data-tone="' + StudioStatus.describe(selectionState).tone + '" data-selection-tone data-no="' + esc(no) + '"><div class="scene-caption"><div><span class="scene-number">' +
         esc(String(row.no).padStart(3,'0')) + '</span><span class="pill">' + esc(row.chapter_title || ('第' + (row.chapter_index ?? 1) + '章')) +
         '</span><span class="selection-state">' + StudioStatus.html(selectionState) + '</span>' +
         '</div><p class="sentence">' + esc(row.sentence) + '</p><div class="display-options">' +
         '<span class="hint">表示：</span><button data-action="image" class="' + (mode === 'image' ? 'chosen' : '') + '">素材を切り替え</button><button data-action="hold" class="' + (mode === 'hold' ? 'chosen' : '') + '">前の素材を継続</button>' +
         '<button data-action="none" class="' + (mode === 'none' ? 'chosen' : '') + '">素材なし</button>' +
-        '<button data-action="flag">' + (lib.flags[no] ? '修正メモを変更' : '要修正にする') + '</button></div>' +
+        '<button class="compare-scene" data-action="compare">大きく比較・採用</button><button data-action="flag">' + (lib.flags[no] ? '修正メモを変更' : '要修正にする') + '</button></div>' +
         (lib.flags[no] ? '<p class="hint flag-label">' + esc(lib.flags[no]) + '</p>' : '') +
         '</div><div class="candidate-strip">' + candidates.map(c => {
           const chosen = c.id === selected;
@@ -79,6 +99,7 @@
     $('operation-state').textContent = '候補を作成中、または処理結果を確認中です。通信が切れた場合も、まず「素材を読み込む」で結果を確認してください。';
     const requested = operations.reduce((n, op) => n + (op.requested_images || 0), 0);
     $('cost-note').textContent = 'この画面からの追加生成：' + requested + ' 案を依頼。金額は未集計です。利用先の請求と照合して振り返ります。';
+    if ($('preview-dialog').open) renderReview();
     setBusy(busy);
     if (initialView) { initialView = false; restorePosition(lastVisit); }
   }
@@ -98,7 +119,8 @@
     try {
       data = await Studio.api(base + '/selection', {method:'POST', body:JSON.stringify({revision:data.library.revision, no, action, candidate_id:candidate, note})});
       draw(); Studio.notice(action === 'undo' ? '採用操作を戻しました。' : '保存しました。');
-    } catch (error) { Studio.notice(error.message, true); }
+      return true;
+    } catch (error) { Studio.notice(error.message, true); if ($('preview-dialog').open) $('review-status').textContent = error.message; return false; }
     finally { setBusy(false); }
   }
   function variant(no, kind, candidate) {
@@ -126,8 +148,8 @@
     const no = button.closest('.scene').dataset.no, action = button.dataset.action;
     const id = button.closest('.candidate')?.dataset.candidate;
     const candidate = (data.library.candidates[no] || []).find(c => c.id === id);
-    if (action === 'preview') {
-      $('preview-image').src = src(candidate); $('preview-dialog').showModal();
+    if (action === 'preview' || action === 'compare') {
+      openReview(no, candidate?.id);
     } else if (['generate','edit','flip','upload'].includes(action)) variant(no, action, candidate);
     else if (action === 'flag') {
       flagNo = no;
@@ -135,6 +157,78 @@
       $('clear-flag').hidden = !data.library.flags[no];
       $('flag-dialog').showModal();
     } else select(no, action, id);
+  });
+
+  function renderReview() {
+    const row = data.rows.find(row => String(row.no) === reviewNo);
+    if (!row) return;
+    const candidates = data.library.candidates[reviewNo] || [], chosen = data.library.selections[reviewNo];
+    if (!candidates.some(c => c.id === reviewCandidate)) reviewCandidate = candidates.find(c => c.id === chosen)?.id || candidates[0]?.id || '';
+    if (!candidates.some(c => c.id === reviewReference) || reviewReference === reviewCandidate) reviewReference = candidates.find(c => c.id !== reviewCandidate)?.id || '';
+    $('review-location').textContent = '場面 ' + String(row.no).padStart(3,'0') + ' · ' + (row.chapter_title || '章 ' + (row.chapter_index ?? 1));
+    $('review-sentence').textContent = row.sentence;
+    $('review-flag').hidden = !data.library.flags[reviewNo];
+    $('review-flag').textContent = '要修正：' + (data.library.flags[reviewNo] || '') + '（採用後もメモは残ります）';
+    const options = candidates.map(c => '<option value="' + esc(c.id) + '">' + esc(c.label) + (c.id === chosen ? ' · 採用中' : '') + '</option>').join('');
+    $('review-candidate-id').innerHTML = $('review-reference-id').innerHTML = options;
+    $('review-candidate-id').value = reviewCandidate; $('review-reference-id').value = reviewReference;
+    const focused = candidates.find(c => c.id === reviewCandidate), reference = candidates.find(c => c.id === reviewReference);
+    if (focused) $('preview-image').src = src(focused); else $('preview-image').removeAttribute('src');
+    if (reference) $('review-reference-image').src = src(reference); else $('review-reference-image').removeAttribute('src');
+    $('review-reference').hidden = !reference;
+    $('review-grid').classList.toggle('single', !reference);
+    $('review-grid').hidden = !focused; $('review-no-candidate').hidden = !!focused;
+    $('review-adopt').hidden = $('review-adopt-next').hidden = !focused;
+    $('review-chosen').textContent = focused?.id === chosen ? '✓ この候補を採用中' : '採用すると、この場面で使う画像として保存されます。';
+    const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
+    $('review-skip').hidden = !next;
+    $('review-adopt-next').textContent = next ? '採用して次の未採用へ →' : '採用して一覧へ戻る';
+    $('review-adopt').textContent = focused?.id === chosen ? '採用中' : 'この候補を採用';
+  }
+  function openReview(no, candidate) {
+    reviewNo = String(no); reviewCandidate = candidate || ''; reviewReference = '';
+    $('review-status').textContent = '';
+    renderReview();
+    if (!$('preview-dialog').open) $('preview-dialog').showModal();
+    $('preview-dialog').scrollTop = 0;
+    $('review-candidate-id').focus({preventScroll:true});
+  }
+  function reviewNext() {
+    if (!data || busy) return;
+    const first = MaterialView.nextPending(data.rows, data.library, '', currentView()) || data.rows.find(row => MaterialView.matches(row, data.library, {...currentView(), filter:'all'}));
+    if (first) openReview(first.no); else Studio.notice('この条件に合う場面はありません。絞り込みを解除してください。');
+  }
+  $('review-next').addEventListener('click', reviewNext);
+  $('review-candidate-id').addEventListener('change', event => { reviewCandidate = event.target.value; renderReview(); });
+  $('review-reference-id').addEventListener('change', event => { reviewReference = event.target.value; renderReview(); });
+  $('review-skip').addEventListener('click', () => {
+    if (busy) return;
+    const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
+    if (next) openReview(next.no);
+  });
+  async function adoptReview(advance) {
+    if (busy || !reviewCandidate) return;
+    $('review-status').textContent = '採用を保存しています…';
+    if (!await select(reviewNo, 'select', reviewCandidate)) return;
+    if (!$('preview-dialog').open) return;
+    $('review-status').textContent = '採用を保存しました。';
+    if (advance) {
+      const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
+      if (next) openReview(next.no);
+      else { $('preview-dialog').close(); Studio.notice('この範囲の未採用素材を確認しました。要修正メモと書き出し前の状態も確認できます。'); }
+    }
+  }
+  $('review-adopt').addEventListener('click', () => adoptReview(false));
+  $('review-adopt-next').addEventListener('click', () => adoptReview(true));
+  $('review-add').addEventListener('click', () => {
+    $('preview-dialog').close();
+    const scene = [...document.querySelectorAll('.scene')].find(el => el.dataset.no === reviewNo);
+    scene?.scrollIntoView({block:'center',behavior:'instant'});
+    scene?.querySelector('[data-action="generate"]')?.focus({preventScroll:true});
+  });
+  $('preview-dialog').addEventListener('close', () => {
+    const scene = [...document.querySelectorAll('.scene')].find(el => el.dataset.no === reviewNo);
+    (scene || $('review-next')).focus({preventScroll:true});
   });
   $('variant-form').addEventListener('submit', async event => {
     event.preventDefault(); if (busy || !operation) return;

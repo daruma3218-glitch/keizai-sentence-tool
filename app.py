@@ -1565,7 +1565,8 @@ def progress_page(job_id):
     manifest = load_json(d / "manifest.json", {}) if d else {}
     channel_id = (state or {}).get("channel_id") or (manifest or {}).get("channel_id")
     return render_template("progress.html", job_id=job_id,
-                           material_supported=channel_id in material_store.ALIASES)
+                           material_supported=channel_id in material_store.ALIASES,
+                           material_channel=material_store.ALIASES.get(channel_id, ""))
 
 
 @app.route("/api/status/<job_id>")

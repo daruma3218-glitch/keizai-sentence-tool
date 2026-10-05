@@ -45,3 +45,29 @@ test('progress buckets are exclusive even when active/failed/completed rows carr
   assert.deepEqual(counts, {pending:1,generating:1,ok:1,attention:1,failed:1,other:2});
   assert.equal(Object.values(counts).reduce((a,b) => a+b,0), rows.length);
 });
+
+test('next unadopted scene stays in chapter/search scope, wraps once and excludes current scene', () => {
+  const scope = {chapter:'i:2', query:'', filter:'selected'};
+  assert.equal(view.nextPending(rows, lib, '', scope).no, 3);
+  assert.equal(view.nextPending(rows, lib, 5, scope).no, 3);
+  assert.equal(view.nextPending(rows, lib, 3, scope), null);
+  assert.equal(view.nextPending(rows, lib, '', {...scope, query:'absent'}), null);
+  assert.equal(view.nextPending(rows, lib, 3, {chapter:'',query:'',filter:'all'}).no, 5);
+  assert.deepEqual(lib.selections, {'1':'chosen','4':'old-adoption'});
+});
+
+test('ready-looking adoption counts do not hide unresolved flags, missing candidates or invalid holds', () => {
+  const scenes = [
+    {no:1,chapter_index:1,display:'hold'},
+    {no:2,chapter_index:1,display:'image'},
+    {no:3,chapter_index:1,display:'hold'},
+    {no:4,chapter_index:2,display:'hold'},
+    {no:5,chapter_index:2,display:'none'},
+    {no:6,chapter_index:2,display:'hold'},
+    {no:7,chapter_index:2,display:'image'},
+  ];
+  const library = {display:{}, flags:{'3':'check'}, selections:{'2':'ok','7':'lost'}, candidates:{'2':[{id:'ok'}]}};
+  assert.deepEqual(view.remaining(scenes, library).map(r => r.no), [1,3,4,6,7]);
+  library.flags = {};
+  assert.deepEqual(view.remaining(scenes, library).map(r => r.no), [1,4,6,7]);
+});

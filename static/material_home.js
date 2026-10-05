@@ -1,6 +1,6 @@
 document.getElementById('new-project')?.addEventListener('submit', async event => {
   event.preventDefault();
-  const form = event.currentTarget, button = form.querySelector('button');
+  const form = event.currentTarget, button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
     const result = await Studio.api('/api/material-projects', {method:'POST', body:JSON.stringify({
@@ -59,3 +59,8 @@ document.getElementById('confirm-resume')?.addEventListener('click', async event
     location.href = result.redirect;
   } catch (error) { Studio.notice(error.message, true); button.disabled = false; }
 });
+
+const projectDialog = document.getElementById('new-project-dialog');
+document.querySelectorAll('[data-open-project]').forEach(button => button.addEventListener('click', () => projectDialog.showModal()));
+document.querySelector('[data-close-project]')?.addEventListener('click', () => projectDialog.close());
+if (projectDialog && (document.getElementById('trello-url').value || document.getElementById('project-title').value || location.hash === '#new-project')) projectDialog.showModal();
