@@ -57,7 +57,7 @@ def choose(d, candidate):
 
 
 def test_channel_entry_templates_and_no_secret_output(studio, monkeypatch):
-    client, _, _ = studio
+    client, _, root = studio
     monkeypatch.setenv("KEIZAI_OPENAI_API_KEY", "do-not-print-this")
     for channel in ("economy", "russia", "china", "success"):
         response = client.get("/materials?channel=" + channel)
@@ -66,6 +66,9 @@ def test_channel_entry_templates_and_no_secret_output(studio, monkeypatch):
         assert "do-not-print-this" not in response.text
     assert "zukai-studio.onrender.com" in client.get("/materials?channel=russia").text
     assert client.get("/?channel_id=nonexistent").status_code == 400
+    make_job(root)
+    assert "/progress/sample" in client.get("/?channel_id=keizai").text
+    assert "/progress/sample" not in client.get("/?channel_id=roshia").text
 
 
 def test_auth_csrf_and_login_return(studio):

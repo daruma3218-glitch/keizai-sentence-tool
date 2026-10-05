@@ -632,6 +632,8 @@ def index():
             if manifest.get("tool") == "scene_fix" or d.name.startswith("scene_fix_"):
                 continue
             ch_id = manifest.get("channel_id", job_state.get("channel_id", ""))
+            if selected_channel and ch_id != selected_channel:
+                continue
             past_jobs.append({
                 "id": d.name,
                 "title": manifest.get("title", job_state.get("title", d.name)),
