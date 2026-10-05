@@ -5,9 +5,12 @@
   <meta name="material-csrf" content="{{ csrf }}">
   <title>{% block title %}素材スタジオ{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='materials.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='studio_status.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='material_queue.css') }}">
+  <script src="{{ url_for('static', filename='studio_status.js') }}"></script>
 </head>
 <body>
-  <header class="studio-header"><a class="brand" href="/materials"><span class="brand-icon">▧</span>素材スタジオ</a><span class="header-note">原稿から、使う素材まで。</span><a class="quiet-link" href="/">従来の制作画面・履歴</a></header>
+  <header class="studio-header"><a class="brand" href="/materials"><span class="brand-icon">▧</span>素材スタジオ</a><span class="header-note">原稿から、使う素材まで。</span><nav class="header-links" aria-label="共通メニュー"><a class="quiet-link" href="/settings/api-usage">利用状況</a><a class="quiet-link" href="/">従来の制作画面・履歴</a><a class="quiet-link" href="/logout">ログアウト</a></nav></header>
   <main>{% block content %}{% endblock %}</main>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <script src="{{ url_for('static', filename='material_common.js') }}"></script>

@@ -3,11 +3,15 @@
 {% block content %}
 <section class="library-heading">
   <div><a class="back-link" href="/materials?channel={{ channel.id }}">← {{ channel.name }}</a><h1>{{ title }}</h1><p class="subtle">候補を比べて、動画に使う素材を選びます。</p></div>
-  <div class="actions"><a class="button" href="/progress/{{ job_id }}">制作の進み具合</a><button class="button" id="refresh">素材を読み込む ↻</button></div>
+  <div class="actions"><a class="button" href="/progress/{{ job_id }}">詳しい進捗・手直し</a><button class="button" id="refresh">素材を読み込む ↻</button></div>
 </section>
 <div class="summary-bar"><div><strong id="adoption-count">読込中…</strong><span id="job-status" class="subtle"></span></div><div class="actions"><button class="button compact" id="undo">直前の採用操作を戻す</button><a class="button dark compact" id="download" href="/materials/jobs/{{ job_id }}/download">採用素材をダウンロード ↓</a></div></div>
-<div class="library-controls"><nav class="filters" aria-label="素材の絞り込み"><button data-filter="all" class="active">すべて</button><button data-filter="pending">未採用</button><button data-filter="selected">採用済み</button><button data-filter="flagged">要修正</button></nav><input id="search" type="search" placeholder="原稿から検索" aria-label="原稿から検索"></div>
-<p id="operation-state" class="info" hidden></p>
+<div class="selection-summary" id="selection-summary" aria-live="polite"></div>
+<p id="export-state" class="hint" role="status"></p>
+<div class="library-controls"><nav class="filters selection-filters" aria-label="素材の絞り込み"><button data-filter="all" data-tone="neutral" class="active" aria-pressed="true">すべて</button><button data-filter="pending" data-tone="queued" aria-pressed="false">未採用</button><button data-filter="selected" data-tone="done" aria-pressed="false">採用済み</button><button data-filter="flagged" data-tone="attention" aria-pressed="false">要修正</button></nav><input id="search" type="search" placeholder="原稿から検索" aria-label="原稿から検索"></div>
+<div class="library-location"><label for="chapter-filter">章</label><select id="chapter-filter"><option value="">すべての章</option></select><button id="clear-view" class="text-button" type="button">絞り込みを解除</button><button id="restore-view" class="button compact" type="button" hidden>前回の位置へ</button><span id="visible-count" class="hint" role="status"></span></div>
+<p class="hint selection-help">採用・要修正は保存されます。章と表示位置は、このブラウザで続きから開けます。ダウンロードは絞り込みに関係なく全体が対象です。</p>
+<p id="operation-state" class="operation-status" data-tone="working" hidden></p>
 <section id="rows" aria-label="原稿と候補"><p class="empty">素材を読み込んでいます。</p></section>
 <footer><a href="/api/material-jobs/{{ job_id }}/handoff" target="_blank" rel="noopener">AI編集用の採用情報（JSON）</a><p>ダウンロードには、採用した画像・原稿との対応・素材の版が含まれます。音声との時刻合わせと動画の最終確認は、編集側で行います。</p><p id="cost-note">追加生成の回数を記録します。費用は利用先の請求と照合して振り返ります。</p></footer>
 <dialog id="variant-dialog">
@@ -22,8 +26,11 @@
   </form>
 </dialog>
 <dialog id="preview-dialog" class="image-dialog"><button class="icon-button" data-close="preview-dialog" aria-label="閉じる">×</button><img id="preview-image" alt="候補の拡大表示"></dialog>
+<dialog id="flag-dialog" aria-labelledby="flag-title"><form id="flag-form"><div class="dialog-heading"><h2 id="flag-title">要修正のメモ</h2><button class="icon-button" type="button" data-close="flag-dialog" aria-label="閉じる">×</button></div><label for="flag-note">確認・修正したい内容</label><textarea id="flag-note" maxlength="500" rows="3" required placeholder="例：画面内の文字を確認する"></textarea><p class="hint">採用や手直しをしても、このメモは残ります。確認後に自分で解除してください。</p><div class="actions"><button class="button" type="button" id="clear-flag">要修正を解除</button><button class="button dark" type="submit">メモを保存</button></div></form></dialog>
+<dialog id="export-dialog" aria-labelledby="export-title"><div class="dialog-heading"><h2 id="export-title">途中の採用素材を書き出します</h2><button class="icon-button" data-close="export-dialog" aria-label="閉じる">×</button></div><p id="export-warning"></p><p class="hint">採用されている素材だけを書き出します。要修正の採用画像も含まれます。素材の準備完了・動画の最終承認にはなりません。</p><div class="actions"><button class="button" data-close="export-dialog" type="button">確認を続ける</button><button class="button dark" id="export-confirm" type="button">途中版として書き出す</button></div></dialog>
 {% endblock %}
 {% block scripts %}
 <script>window.materialJobId = {{ job_id | tojson }};</script>
+<script src="{{ url_for('static', filename='material_view.js') }}"></script>
 <script src="{{ url_for('static', filename='material_library.js') }}"></script>
 {% endblock %}

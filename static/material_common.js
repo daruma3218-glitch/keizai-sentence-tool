@@ -20,3 +20,4 @@ window.Studio = {
     return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   }
 };
+document.querySelectorAll('[data-studio-status]').forEach(element => StudioStatus.apply(element, element.dataset.studioStatus));

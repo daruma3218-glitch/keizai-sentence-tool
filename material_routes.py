@@ -20,6 +20,30 @@ ACTIVE = set()
 
 def register(module):
     bp = Blueprint("materials", __name__)
+    image_activity = {"count": 0}
+
+    @module.app.before_request
+    def track_image_work():
+        path = request.path
+        if request.method == "POST" and (path.startswith("/api/regenerate/") or path == "/api/scene-fix"
+                or path.startswith("/api/scene-fix/") and path.endswith("/revise")
+                or path.startswith("/api/material-jobs/") and path.endswith("/variant")):
+            with store.LOCK:
+                image_activity["count"] += 1
+            request.environ["material.image_work"] = True
+
+    @module.app.teardown_request
+    def finish_image_work(error):
+        if request.environ.pop("material.image_work", False):
+            with store.LOCK:
+                image_activity["count"] -= 1
+
+    def board_snapshot():
+        guard = getattr(module, "_deploy_guard", None)
+        with store.LOCK:
+            count = image_activity["count"]
+        return {**module.generation_board(), "other_operations": count,
+                "accepting": guard.intake_open() if guard else True}
 
     def token():
         if not session.get("material_csrf"):
@@ -75,8 +99,21 @@ def register(module):
                                 "/?channel_id=" + project["source_channel_id"] + "&project_id=" + project["project_id"])
         return render_template("materials.html", channels=channels(), selected=selected,
                                history=material_history.index(module, selected) if selected else None, csrf=token(),
+                               board=board_snapshot(),
                                prefill_title=request.args.get("title", "")[:160],
                                prefill_trello=card)
+
+    @bp.route("/api/material-generation-board")
+    @module.login_required
+    def generation_board():
+        response = jsonify(board_snapshot())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @bp.route("/materials/guide")
+    @module.login_required
+    def guide():
+        return render_template("material_guide.html", csrf=token())
 
     @bp.route("/api/material-jobs/<job_id>/resume", methods=["POST"])
     @module.login_required
@@ -87,8 +124,8 @@ def register(module):
             state = store.read(d / "job.json", {}) or {}
             if not isinstance(state, dict) or not isinstance(state.get("status", ""), str):
                 raise ValueError("制作記録を読み込めません。画面を更新して確認してください")
-            if state.get("status") in {"running", "queued", "completed"}:
-                raise ValueError("制作中・待機中・完了済みのジョブは再開できません。画面を更新してください")
+            if state.get("status") not in {"error", "failed", "interrupted", "cancelled"}:
+                raise ValueError("中断・失敗を確認できたジョブだけ再開できます。画面を更新してください")
             return module.api_resume(job_id)
 
     @bp.route("/api/material-projects", methods=["POST"])
@@ -127,8 +164,10 @@ def register(module):
 
     def payload(d):
         lib = store.load_library(d)
+        receipt = store.read(d / "material_last_export.json")
         return {"library": lib, "rows": store.source_rows(d),
                 "context": store.read(d / "material_context.json"),
+                "export": {"last": receipt, "changed": bool(receipt and receipt.get("selection_hash") != store.selection_hash(d, lib))},
                 "status": (store.read(d / "job.json", {}) or {}).get("status", "unknown")}
 
     @bp.route("/api/material-jobs/<job_id>")
@@ -301,14 +340,27 @@ def register(module):
     @bp.route("/api/material-jobs/<job_id>/handoff")
     @module.login_required
     def handoff(job_id):
-        return jsonify(store.handoff(job(job_id)))
+        with store.LOCK:
+            return jsonify(store.handoff(job(job_id)))
 
     @bp.route("/materials/jobs/<job_id>/download")
     @module.login_required
     def download(job_id):
+        return build_download(job_id)
+
+    @bp.route("/api/material-jobs/<job_id>/export", methods=["POST"])
+    @module.login_required
+    def export(job_id):
+        body = request.get_json(silent=True) or {}
+        return build_download(job_id, record=True, expected_revision=body.get("revision"),
+                              expected_hash=body.get("selection_hash"))
+
+    def build_download(job_id, record=False, expected_revision=None, expected_hash=None):
         d = job(job_id)
         with store.LOCK:
             data = store.handoff(d)
+            if record and (expected_revision != data["material_revision"] or expected_hash != data["selection_hash"]):
+                raise ValueError("書き出す内容が更新されました。もう一度内容を確認してください")
             tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
             tmp.close()
             with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_STORED) as archive:
@@ -326,6 +378,9 @@ def register(module):
                     archive.write(store.safe_path(d, filename), filename)
                 archive.writestr("README.txt", "採用した素材と原稿の対応です。推定時刻は音声に未同期です。\n"
                                  "ready_for_editing は素材の準備状態で、動画の最終承認ではありません。\n")
+            if record:
+                store.save(d / "material_last_export.json", {"revision": data["material_revision"],
+                           "selection_hash": data["selection_hash"], "exported_at": data["exported_at"]})
         return module._send_temp_zip(tmp.name, "materials_" + job_id + ".zip")
 
     module.app.register_blueprint(bp)

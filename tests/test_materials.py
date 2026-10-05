@@ -76,11 +76,115 @@ def test_auth_csrf_and_login_return(studio):
     assert client.post("/api/material-projects", json={}).status_code == 403
     client.get("/logout")
     assert client.get("/api/material-projects/x").status_code == 401
+    assert client.get("/api/material-generation-board").status_code == 401
     assert client.post("/api/material-projects", json={}, headers=headers).status_code == 401
     response = client.get("/materials?channel=economy")
     assert response.status_code == 302
     response = client.post("/login", data={"password": "test-password"})
     assert response.headers["Location"] == "/materials?channel=economy"
+
+
+def test_live_board_is_global_fifo_read_only_and_excludes_private_settings(studio, monkeypatch):
+    client, _, root = studio
+    monkeypatch.setattr(appmod, "_RUNNING", {"job_id": "other-channel"})
+    monkeypatch.setattr(appmod, "_QUEUE", ["queued-first", "queued-second"])
+    states = {
+        "other-channel": {"channel_id": "roshia", "title": "他のチャンネル", "status": "running", "percent": 34},
+        "queued-first": {"channel_id": "keizai", "title_override": "入力した題", "status": "queued"},
+        "queued-second": {"channel_id": "seikou", "title": "次の案件", "status": "queued"},
+    }
+    for state in states.values():
+        state.update(openai_api_key="not-for-the-browser", manuscript_text="private-full-script")
+    monkeypatch.setattr(appmod, "_get_job_state", lambda jid: states[jid])
+    before = sorted(str(p) for p in root.rglob("*"))
+    response = client.get("/api/material-generation-board")
+    board = response.get_json()
+    assert response.headers["Cache-Control"] == "no-store"
+    assert board["running"]["id"] == "other-channel"
+    assert [j["id"] for j in board["waiting"]] == ["queued-first", "queued-second"]
+    assert board["waiting"][0]["title"] == "入力した題"
+    for path in ("/materials", "/materials?channel=economy"):
+        assert "他のチャンネル" in client.get(path).text
+        assert "順番待ち" in client.get(path).text
+    assert "not-for-the-browser" not in response.text and "private-full-script" not in response.text
+    assert sorted(str(p) for p in root.rglob("*")) == before
+    monkeypatch.setattr(appmod, "_RUNNING", {"job_id": None})
+    monkeypatch.setattr(appmod, "_QUEUE", [])
+    assert client.get("/api/material-generation-board").get_json() == {"running": None, "waiting": [], "accepting": True, "other_operations": 0}
+
+
+def test_scene_fix_entry_preserves_chosen_channel(studio):
+    client, _, _ = studio
+    page = client.get("/scene-fix?channel_id=keizai")
+    assert '<option value="keizai" selected>' in page.text
+    assert client.get("/scene-fix?channel_id=unknown").status_code == 400
+
+
+def test_manual_revision_flag_survives_adoption_and_export_records_content(studio):
+    client, headers, root = studio
+    d, _, candidate = make_job(root)
+    lib = store.selection_change(d, {"revision":store.load_library(d)["revision"], "no":1, "action":"flag", "note":"文字を確認"})
+    lib = store.selection_change(d, {"revision":lib["revision"], "no":1, "action":"select", "candidate_id":candidate["id"]})
+    assert lib["flags"]["1"] == "文字を確認"
+    plan = client.get("/api/material-jobs/sample/handoff").get_json()
+    assert not plan["ready_for_editing"] and plan["missing"][0]["reason"] == "文字を確認"
+    expected = {"revision":plan["material_revision"], "selection_hash":plan["selection_hash"]}
+    assert client.post("/api/material-jobs/sample/export", json=expected).status_code == 403
+    response = client.post("/api/material-jobs/sample/export", json=expected, headers=headers)
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        exported = json.loads(archive.read("material-handoff.json"))
+        assert exported["selection_hash"] == plan["selection_hash"]
+        assert not exported["ready_for_editing"]
+    receipt = client.get("/api/material-jobs/sample").get_json()["export"]
+    assert receipt["last"] and not receipt["changed"]
+    store.selection_change(d, {"revision":lib["revision"], "no":1, "action":"unflag"})
+    assert client.get("/api/material-jobs/sample").get_json()["export"]["changed"]
+    assert client.post("/api/material-jobs/sample/export", json=expected, headers=headers).status_code == 409
+    assert store.read(d / "material_last_export.json")["selection_hash"] == plan["selection_hash"]
+
+
+def test_same_job_cannot_resume_twice_across_old_and_new_entries(studio, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    _, _, root = studio
+    legacy_job(root, "resume-race", "interrupted")
+    monkeypatch.setattr(appmod, "_jobs", {})
+    monkeypatch.setattr(appmod, "_QUEUE", [])
+    monkeypatch.setattr(appmod, "_RUNNING", {"job_id": None})
+    monkeypatch.setattr(appmod, "_build_resume_args", lambda jid: ((jid,), None))
+    launched = []
+    monkeypatch.setattr(appmod, "threading", SimpleNamespace(Thread=lambda **kw: SimpleNamespace(start=lambda: launched.append(kw["args"]))))
+    def post(path):
+        client = appmod.app.test_client()
+        with client.session_transaction() as session:
+            session.update(authenticated=True, material_csrf="token")
+        return client.post(path, headers={"X-Material-CSRF":"token"}).status_code
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(post, ["/api/resume/resume-race", "/api/material-jobs/resume-race/resume"]))
+    assert sorted(results) == [200,409] and launched == [("resume-race",)]
+
+
+def test_generation_board_reports_guard_intake_without_private_details(studio, monkeypatch):
+    from types import SimpleNamespace
+    client, _, _ = studio
+    monkeypatch.setattr(appmod, "_deploy_guard", SimpleNamespace(intake_open=lambda: False), raising=False)
+    board = client.get("/api/material-generation-board").get_json()
+    assert board["accepting"] is False
+    assert set(board) == {"running", "waiting", "accepting", "other_operations"}
+
+
+def test_individual_work_counter_includes_legacy_route_and_releases_on_failure(studio, monkeypatch):
+    client, _, _ = studio
+    def individual_job(job_id, no):
+        with appmod.app.test_client() as other:
+            with other.session_transaction() as session:
+                session["authenticated"] = True
+            assert other.get("/api/material-generation-board").get_json()["other_operations"] == 1
+        return appmod.jsonify(error="synthetic failure"), 500
+    monkeypatch.setitem(appmod.app.view_functions, "api_regenerate", individual_job)
+    assert client.post("/api/regenerate/synthetic/1").status_code == 500
+    assert client.get("/api/material-generation-board").get_json()["other_operations"] == 0
 
 
 def test_trello_identity_and_profile_freeze(studio):
@@ -389,7 +493,7 @@ def test_resume_is_explicit_csrf_protected_and_refuses_active_jobs(studio, monke
     assert not calls
     assert client.post("/api/material-jobs/stopped/resume", headers=headers).status_code == 200
     assert calls == ["stopped"]
-    for status in ("running", "queued", "completed"):
+    for status in ("running", "queued", "completed", "unknown"):
         legacy_job(root, status, status)
         assert client.post("/api/material-jobs/" + status + "/resume", headers=headers).status_code == 409
     assert calls == ["stopped"]

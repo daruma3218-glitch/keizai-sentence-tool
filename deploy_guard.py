@@ -121,6 +121,11 @@ class DeployGuard:
         tmp.write_text(json.dumps(state), encoding="utf-8")
         os.replace(tmp, self.file)
 
+    def intake_open(self):
+        """Public availability only; never expose deployment credentials or controls."""
+        with self.lock:
+            return self.root.is_dir() and self._read() is None
+
     def _busy(self):
         if self.writes or self.background:
             return True
@@ -374,6 +379,7 @@ def install(module, root):
     if upstream and guard.hook:
         print(f"[deploy-watch] Watching {slug}@{branch} for new commits; deploys between generations", flush=True)
     module._run_pipeline_thread = guard.background_task(module._run_pipeline_thread)
+    module._deploy_guard = guard
     threading.Thread(target=guard.watch, daemon=True, name="deployment-guard").start()
     return guard
 

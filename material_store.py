@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
 
-VERSION = "2026-10-05.2"
+VERSION = "2026-10-05.3"
 LOCK = threading.RLock()
 CHANNELS = {
     "russia": {"id": "russia", "source_id": "roshia", "name": "ロシア解体新書", "color": "#a32b35",
@@ -225,7 +225,6 @@ def selection_change(job_dir, body):
             picked = candidate(lib, no, body.get("candidate_id"))
             lib["selections"][no] = picked["id"]
             lib["display"][no] = "image"
-            lib["flags"].pop(no, None)
         elif action == "clear":
             lib["selections"].pop(no, None)
         elif action == "flag":
@@ -237,7 +236,6 @@ def selection_change(job_dir, body):
         elif action in {"hold", "none"}:
             lib["display"][no] = action
             lib["selections"].pop(no, None)
-            lib["flags"].pop(no, None)
         elif action == "undo":
             previous = read(Path(job_dir) / "material_previous.json")
             if not previous or previous["after_revision"] != lib["revision"]:
@@ -251,6 +249,17 @@ def selection_change(job_dir, body):
              {k: old[k] for k in ("selections", "display", "flags")} | {"after_revision": lib["revision"] + 1})
         commit_library(job_dir, lib, action, {"no": no})
         return lib
+
+
+def selection_hash(job_dir, lib=None):
+    """Stable export identity, excluding unused candidates and operation history."""
+    lib = lib if lib is not None else load_library(job_dir)
+    row_keys = ("no", "chapter_index", "block_index", "sentence", "display", "route", "est_start")
+    selected = {no: candidate(lib, no, cid) for no, cid in lib["selections"].items()}
+    contents = {"rows": [{k: row.get(k) for k in row_keys} for row in source_rows(job_dir)],
+                "selections": selected, "display": lib["display"], "flags": lib["flags"],
+                "source_job_status": (read(Path(job_dir) / "job.json", {}) or {}).get("status", "unknown")}
+    return hashlib.sha256(json.dumps(contents, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def handoff(job_dir):
@@ -294,6 +303,7 @@ def handoff(job_dir):
     return {"schema": "material-studio-handoff", "schema_version": 1,
             "context": {k: v for k, v in context.items() if k != "profile"},
             "profile": context["profile"], "material_revision": lib["revision"],
+            "selection_hash": selection_hash(job_dir, lib),
             "source_job_status": status, "status": "materials_ready" if ready else "selection_pending",
             "ready_for_editing": ready, "missing": missing, "rows": rows, "exported_at": now(),
             "approval": {"video_approved": False, "note": "素材の採用は動画の最終承認とは別"},

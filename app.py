@@ -350,6 +350,7 @@ _GENERATION_SLOT = threading.Lock()
 _QUEUE_LOCK = threading.Lock()
 _QUEUE: list = []            # 順番待ちの job_id（先頭が次）
 _RUNNING = {"job_id": None}  # いま作っている job_id
+_RESUME_LOCK = threading.Lock()
 
 
 def generation_board() -> dict:
@@ -360,9 +361,10 @@ def generation_board() -> dict:
     def brief(job_id):
         st = _get_job_state(job_id) if job_id else {}
         channel = get_channel(st.get("channel_id", "")) if st else {}
-        return {"id": job_id, "title": st.get("title") or "（題を分析中）",
+        return {"id": job_id, "title": st.get("title") or st.get("title_override") or "（題を分析中）",
                 "creator": st.get("creator", ""), "channel": channel.get("name", ""),
-                "percent": st.get("percent", 0), "started": _job_started_jst(job_id)}
+                "percent": st.get("percent", 0), "started": _job_started_jst(job_id),
+                "status": st.get("status", "unknown"), "message": st.get("message", "")}
     return {"running": brief(running) if running else None, "waiting": [brief(j) for j in waiting]}
 
 
@@ -810,6 +812,9 @@ def _save_scene_fix_reference(job_dir: Path):
 @login_required
 def scene_fix_page():
     channels = load_channels()
+    selected_channel = request.args.get("channel_id", "")
+    if selected_channel and not any(c.get("id") == selected_channel for c in channels):
+        return "チャンネルが見つかりません", 400
     for c in channels:
         keys = resolve_channel_keys(c)
         c["_has_gemini"] = bool(keys["gemini"])
@@ -818,6 +823,7 @@ def scene_fix_page():
     return render_template(
         "scene_fix.html",
         channels=channels,
+        selected_channel=selected_channel,
         providers=VALID_PROVIDERS,
     )
 
@@ -1450,16 +1456,22 @@ def _build_resume_args(job_id: str):
 @login_required
 def api_resume(job_id):
     """途中で止まったジョブを再開する（完了済みの成果物はスキップして残りだけ実行）。"""
-    with _jobs_lock:
-        st = (_jobs.get(job_id) or {}).get("status")
-    if st == "running":
-        return jsonify({"error": "このジョブは現在実行中です"}), 409
-    args, err = _build_resume_args(job_id)
-    if err:
-        return jsonify({"error": err}), 400
-    _set_job_state(job_id, status="queued", phase=0, message="再開の準備中...", percent=0)
-    _add_log(job_id, "system", "再開リクエストを受け付けました（完了済みの成果物は再利用します）")
-    threading.Thread(target=_run_pipeline_thread, args=args, daemon=True).start()
+    with _RESUME_LOCK:
+        state = _get_job_state(job_id)
+        with _QUEUE_LOCK:
+            active = job_id == _RUNNING["job_id"] or job_id in _QUEUE
+        if active or state.get("status") not in {"error", "failed", "interrupted", "cancelled"}:
+            return jsonify({"error": "実行中・待機中・完了済み、または状態未確認のため再開できません。画面を更新してください"}), 409
+        args, err = _build_resume_args(job_id)
+        if err:
+            return jsonify({"error": err}), 400
+        _set_job_state(job_id, status="queued", phase=0, message="再開の準備中...", percent=0)
+        _add_log(job_id, "system", "再開リクエストを受け付けました（完了済みの成果物は再利用します）")
+        try:
+            threading.Thread(target=_run_pipeline_thread, args=args, daemon=True).start()
+        except Exception:
+            _set_job_state(job_id, status="interrupted", message="再開を開始できませんでした。保存済みの素材は保持しています")
+            return jsonify({"error": "再開を開始できませんでした。画面を更新してください"}), 503
     return jsonify({"ok": True, "job_id": job_id, "redirect": f"/progress/{job_id}"})
 
 

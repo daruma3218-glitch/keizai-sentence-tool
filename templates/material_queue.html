@@ -1,0 +1,12 @@
+<section class="queue-board" aria-labelledby="queue-heading">
+  <div class="queue-heading"><div><p class="eyebrow">全チャンネル共通</p><h2 id="queue-heading">原稿からの一括生成</h2></div><span id="queue-freshness" class="hint" role="status">5秒ごとに自動更新</span></div>
+  <p id="queue-intake" class="operation-status" data-tone="attention" {% if board.accepting %}hidden{% endif %}>更新準備中のため新規受付を一時停止しています。保存済みの素材は閲覧できます。</p>
+  <div id="queue-content">
+    {% if board.running %}<a class="queue-running" data-tone="working" href="/progress/{{ board.running.id }}"><span class="status-badge" data-tone="working">↻ 生成中</span><strong>{{ board.running.title }}</strong><span>{{ board.running.channel }}{% if board.running.creator %} · {{ board.running.creator }}{% endif %}</span><span>詳しい進捗 →</span></a>{% elif board.waiting %}<p class="queue-empty">順番に開始する準備をしています。</p>{% else %}<p class="queue-empty">現在、原稿からの一括生成はありません。</p>{% endif %}
+    {% if board.waiting %}<ol class="queue-waiting">{% for job in board.waiting %}<li data-tone="queued"><span class="queue-position">{{ loop.index }}</span><a href="/progress/{{ job.id }}"><strong>{{ job.title }}</strong><span>{{ job.channel }}{% if job.creator %} · {{ job.creator }}{% endif %}</span></a><span class="status-badge" data-tone="queued">◷ 順番待ち</span></li>{% endfor %}</ol>{% endif %}
+  </div>
+  <div id="queue-finished" class="queue-finished" hidden role="status"></div>
+  <p id="queue-other" class="hint">素材の手直し・追加：{{ board.other_operations }} 件処理中（一括生成とは別）</p>
+  <p class="queue-help">原稿からの一括生成は、受付順に1件ずつ進みます。前の生成が終わると自動で開始します。<a href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">ロシアの図解は別サービスです。進捗は図解スタジオで確認 ↗</a></p>
+</section>
+<script id="queue-initial" type="application/json">{{ board | tojson }}</script>

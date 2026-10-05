@@ -36,7 +36,7 @@
             <span class="block text-sm font-semibold mb-1">チャンネル</span>
             <select name="channel_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
               {% for ch in channels %}
-              <option value="{{ ch.id }}">{{ ch.name }}</option>
+              <option value="{{ ch.id }}" {% if ch.id == selected_channel %}selected{% endif %}>{{ ch.name }}</option>
               {% endfor %}
             </select>
           </label>

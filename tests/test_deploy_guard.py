@@ -45,7 +45,11 @@ def test_signed_control_rejects_password_session_and_stale_requests(guard):
 
 
 def test_idle_is_sealed_until_matching_replacement(guard):
+    assert guard.intake_open()
     assert guard.drain(SHA)["ready"]
+    assert not guard.intake_open()
+    for path in ("/api/resume/example", "/api/material-jobs/example/resume", "/api/material-jobs/example/sync", "/api/material-jobs/example/export"):
+        assert request(guard, path=path)[0] == "503 Service Unavailable"
     assert request(guard)[0] == "503 Service Unavailable"
     assert request(guard, "GET")[0] == "200 OK"
     assert request(guard, path="/login")[0] == "200 OK"

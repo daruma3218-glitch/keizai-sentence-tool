@@ -3,6 +3,7 @@
 {% if not selected %}
 <section class="intro"><p class="eyebrow">MATERIAL STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">いつものチャンネルから、新しい制作も、前回の続きも。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
 {% else %}<p class="eyebrow channel-switch-label">CHANNEL WORKSPACE</p>{% endif %}
+{% include "material_queue.html" %}
 <nav class="channel-grid {% if selected %}channel-grid-compact{% endif %}" aria-label="チャンネル">
 {% for ch in channels %}
 <a class="channel-card {% if selected == ch.id %}current{% endif %}" href="/materials?channel={{ ch.id }}" style="--channel:{{ ch.color }}" {% if selected == ch.id %}aria-current="page"{% endif %}>
@@ -19,13 +20,19 @@
 <section class="legacy-workspace"><div><strong>いつもの図解スタジオで作った素材</strong><p>制作中の図解と過去の履歴は、図解スタジオに保存されています。</p></div><a class="button dark" href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">図解の履歴・続きへ ↗</a></section>
 {% endif %}
 {% if selected == 'china' %}<p class="info">中国チャンネルは準備用の枠です。正式な画風・キャラクターは未設定です。専用の生成設定を用意してから制作を始めます。</p>{% endif %}
+<nav class="studio-tools" aria-label="制作ツール">
+  <a href="/?channel_id={{ chosen.source_id }}"><strong>原稿から素材を作る →</strong><span>章ごとの生成・図解・写真・出典</span></a>
+  <a href="/scene-fix?channel_id={{ chosen.source_id }}"><strong>1場面を手直し →</strong><span>原稿の一部と画像から案を作る</span></a>
+  <a href="/compare"><strong>生成した版を比較 →</strong><span>設定の違うジョブを文ごとに並べる</span></a>
+  <a href="/materials/guide"><strong>使える機能一覧 →</strong><span>従来の便利な機能と開く場所</span></a>
+</nav>
 {% if history.warning %}<p class="info" role="status">一部の制作記録を読み込めませんでした。表示できた履歴は下に残しています。少し待って画面を更新してください。</p>{% endif %}
 <section class="workspace-layout">
 <div class="workspace-history">
 {% if history.jobs %}
 {% set recent = history.jobs[0] %}
-<section class="continue-card" aria-label="直近の作業">
-  <div class="continue-top"><p class="eyebrow">CONTINUE</p><span class="job-status {{ recent.tone }}">{{ recent.status_label }}</span></div>
+<section class="continue-card" data-tone="{{ recent.tone }}" aria-label="直近の作業">
+  <div class="continue-top"><p class="eyebrow">CONTINUE</p><span class="status-badge" data-studio-status="{{ recent.status }}" data-tone="{{ recent.tone }}">{{ recent.status_label }}</span></div>
   <p class="hint">直近の作業 · {{ recent.date }} 更新（日本時間）</p><h2>{{ recent.title }}</h2>
   <div class="continue-bottom"><p class="subtle">{% if recent.bucket == 'completed' %}保存した候補と採用状態から、素材選びを続けられます。{% else %}途中までの素材と、制作の進み具合を確認できます。{% endif %}</p><a class="button dark" href="{{ recent.href }}">続きから開く →</a></div>
 </section>
@@ -39,12 +46,13 @@
 </div><label class="history-search"><span class="sr-only">制作履歴を検索</span><input id="history-search" type="search" placeholder="タイトル・ジョブIDで検索"></label></div>
 <div id="job-history" class="job-history">
 {% for j in history.jobs %}
-<article class="job-row" data-job="{{ j.id }}" data-bucket="{{ j.bucket }}" data-search="{{ j.title }} {{ j.id }} {{ j.project_id }}">
-  <div class="job-row-main"><div class="job-meta"><span class="job-status {{ j.tone }}">{{ j.status_label }}</span><span>{{ j.source_label }}</span><time>{{ j.date }}</time></div>
+<article class="job-row" data-tone="{{ j.tone }}" data-job="{{ j.id }}" data-bucket="{{ j.bucket }}" data-search="{{ j.title }} {{ j.id }} {{ j.project_id }}">
+  <div class="job-row-main"><div class="job-meta"><span class="status-badge" data-studio-status="{{ j.status }}" data-tone="{{ j.tone }}">{{ j.status_label }}</span><span>{{ j.source_label }}</span><time>{{ j.date }}</time></div>
     <h3><a href="{{ j.href }}">{{ j.title }}</a></h3>
     <p class="job-detail">{% if j.generated %}画像 {{ j.generated }} 枚{% if j.total %} · 原稿 {{ j.total }} 文{% endif %} · {% endif %}{% if j.selected %}採用 {{ j.selected }} 件 · {% endif %}<span class="job-id">{{ j.id }}</span></p>
   </div>
   <div class="job-row-actions"><a class="button compact" href="{{ j.href }}">{{ j.action }}</a>
+    {% if j.bucket == 'completed' %}<a class="quiet-link" href="/progress/{{ j.id }}">詳しい進捗・手直し</a>{% endif %}
     {% if j.resumable %}<button type="button" class="text-button resume-job" data-job-id="{{ j.id }}" data-job-title="{{ j.title }}">残りの生成を再開</button>{% endif %}
     {% if j.trello_url %}<a class="quiet-link" href="{{ j.trello_url }}" target="_blank" rel="noopener">案件カード ↗</a>{% endif %}
     {% if j.project_id %}<a class="quiet-link" href="/?channel_id={{ chosen.source_id }}&amp;project_id={{ j.project_id }}">同じ案件に原稿を追加</a>{% endif %}
@@ -69,10 +77,10 @@
   {% if not chosen.ready %}<p class="hint">案件の保存はできます。AI生成には、このチャンネルの生成設定が必要です。</p>{% endif %}
 </form>
 </section>
-<dialog id="resume-dialog" aria-labelledby="resume-heading"><div class="dialog-heading"><h2 id="resume-heading">残りの生成を再開</h2><button class="icon-button" type="button" data-close-resume aria-label="閉じる">×</button></div><p id="resume-title"></p><p class="hint">作成済みの素材と保存された設定を使い、残りの処理を再開します。追加の画像生成には利用料金が発生します。</p><div class="actions"><button class="button" type="button" data-close-resume>戻る</button><button id="confirm-resume" class="button dark" type="button">残りの生成を開始</button></div></dialog>
+<dialog id="resume-dialog" aria-labelledby="resume-heading"><div class="dialog-heading"><h2 id="resume-heading">残りの生成を再開</h2><button class="icon-button" type="button" data-close-resume aria-label="閉じる">×</button></div><p id="resume-title"></p><p class="hint">保存済みで再利用できる素材は残し、保存された設定で残りの処理を再開します。途中で画像を保存できなかった処理は、もう一度生成します。追加の画像生成には利用料金が発生します。</p><div class="actions"><button class="button" type="button" data-close-resume>戻る</button><button id="confirm-resume" class="button dark" type="button">残りの生成を開始</button></div></dialog>
 {% else %}
 <div class="welcome-note"><span>01</span><div><strong>まずはチャンネルを選んでください。</strong><p class="subtle">過去の制作履歴と「続きから」を開けます。新しい案件も同じ場所から。</p></div></div>
 {% endif %}
 <footer>素材の採用情報は、原稿とセットでAI編集へ渡せます。動画の確認・最終承認は編集後に行います。</footer>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='material_home.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='material_home.js') }}"></script><script src="{{ url_for('static', filename='material_queue.js') }}"></script>{% endblock %}

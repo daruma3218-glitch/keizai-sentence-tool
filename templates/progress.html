@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>生成中... - センテンスつくーる</title>
+  <title>制作の進捗 - 素材スタジオ</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,6 +30,8 @@
     .editor-field { width: 100%; border: 1px solid #d1d5db; border-radius: 0.5rem; padding: 0.5rem 0.65rem; font-size: 12px; line-height: 1.45; background: #fff; }
     .editor-field:focus { outline: none; border-color: #0891b2; box-shadow: 0 0 0 2px rgba(8,145,178,0.15); }
   </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='studio_status.css') }}">
+  <script src="{{ url_for('static', filename='studio_status.js') }}"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
 
@@ -42,6 +44,7 @@
         <span class="font-bold text-gray-900 text-base">センテンスつくーる</span>
       </a>
       <div class="flex items-center gap-3">
+        <a href="/materials" class="text-sm text-gray-600 hover:underline">素材スタジオ</a>
         {% if material_supported %}<a href="/materials/jobs/{{ job_id }}" class="text-sm font-bold text-emerald-700">候補を比較・採用する →</a>{% endif %}
         <span class="text-xs text-gray-400 font-mono">{{ job_id }}</span>
         <a href="/" class="text-xs text-cyan-600 hover:underline">+ 新規ジョブ</a>
@@ -52,16 +55,13 @@
   <div class="max-w-[1600px] mx-auto px-6 py-6">
 
     <!-- ヘッダー & 進捗バー -->
-    <div class="bg-white rounded-2xl border border-gray-200 p-6 mb-6 shadow-sm">
+    <div id="jobOverview" data-tone="neutral" class="bg-white rounded-2xl border border-gray-200 p-6 mb-6 shadow-sm">
       <div class="flex items-start justify-between gap-4 mb-4">
         <div class="flex-1 min-w-0">
-          <h1 id="jobTitle" class="text-xl font-bold text-gray-900 truncate">生成中...</h1>
-          <p id="jobMessage" class="text-sm text-gray-500 mt-1">原稿を分析しています...</p>
+          <h1 id="jobTitle" class="text-xl font-bold text-gray-900">制作状況を読み込んでいます...</h1>
+          <p id="jobMessage" class="text-sm text-gray-500 mt-1">保存された制作状況を確認しています...</p>
         </div>
-        <div id="statusBadge" class="flex-shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 text-sm font-medium">
-          <span class="w-2 h-2 bg-blue-500 rounded-full ring-pulse"></span>
-          <span>実行中</span>
-        </div>
+        <div id="statusBadge" class="status-badge" data-tone="neutral" role="status"><span class="status-icon" aria-hidden="true">…</span><span>読み込み中</span></div>
       </div>
 
       <div class="mb-4">
@@ -69,7 +69,7 @@
           <div class="flex gap-3 text-xs text-gray-500">
             <span>Phase <span id="phaseNum" class="font-semibold text-gray-900">0</span>/3</span>
             <span class="text-gray-300">|</span>
-            <span class="font-semibold text-cyan-600" id="overallPercent">0%</span>
+            <span class="font-semibold status-text" id="overallPercent">0%</span>
           </div>
           <div class="text-xs text-gray-500 hidden md:block">
             並列: <span id="concurrencyVal" class="font-semibold text-gray-900">--</span>枚同時 ·
@@ -77,28 +77,22 @@
           </div>
         </div>
         <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
-          <div id="overallBar" class="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-500" style="width:0%"></div>
+          <div id="overallBar" class="h-full status-fill" style="width:0%"></div>
         </div>
       </div>
 
-      <div class="grid grid-cols-4 gap-3" id="rowSummary">
-        <div class="bg-gray-50 rounded-lg p-3 text-center">
-          <div class="text-2xl font-bold text-gray-900" id="totalCount">0</div>
-          <div class="text-xs text-gray-500 mt-0.5">合計</div>
-        </div>
-        <div class="bg-yellow-50 rounded-lg p-3 text-center">
-          <div class="text-2xl font-bold text-yellow-600" id="generatingCount">0</div>
-          <div class="text-xs text-gray-500 mt-0.5">生成中</div>
-        </div>
-        <div class="bg-green-50 rounded-lg p-3 text-center">
-          <div class="text-2xl font-bold text-green-600" id="completedCount">0</div>
-          <div class="text-xs text-gray-500 mt-0.5">完了</div>
-        </div>
-        <div class="bg-red-50 rounded-lg p-3 text-center">
-          <div class="text-2xl font-bold text-red-600" id="failedCount">0</div>
-          <div class="text-xs text-gray-500 mt-0.5">失敗</div>
-        </div>
+      <p class="text-xs text-gray-500 mb-3">状態をクリックして絞り込めます。要確認・失敗を分けた内訳です。生成完了後に、使う素材を採用します。</p>
+      <div class="generation-summary" id="rowSummary">
+        <button type="button" class="summary-tile" data-tone="neutral" data-summary-filter="all" aria-pressed="true" onclick="setRowFilter('all')"><strong id="totalCount">0</strong><span>全体</span></button>
+        <button type="button" class="summary-tile" data-tone="queued" data-summary-filter="pending" aria-pressed="false" onclick="setRowFilter('pending')"><strong id="pendingCount">0</strong><span>◷ 生成待ち</span></button>
+        <button type="button" class="summary-tile" data-tone="working" data-summary-filter="generating" aria-pressed="false" onclick="setRowFilter('generating')"><strong id="generatingCount">0</strong><span>↻ 生成中</span></button>
+        <button type="button" class="summary-tile" data-tone="done" data-summary-filter="ok" aria-pressed="false" onclick="setRowFilter('ok')"><strong id="completedCount">0</strong><span>✓ 生成済み</span></button>
+        <button type="button" class="summary-tile" data-tone="attention" data-summary-filter="attention" aria-pressed="false" onclick="setRowFilter('attention')"><strong id="attentionCount">0</strong><span>! 要確認</span></button>
+        <button type="button" class="summary-tile" data-tone="error" data-summary-filter="failed" aria-pressed="false" onclick="setRowFilter('failed')"><strong id="failedCount">0</strong><span>× 失敗</span></button>
+        <button type="button" class="summary-tile" data-tone="neutral" data-summary-filter="other" aria-pressed="false" onclick="setRowFilter('other')"><strong id="otherCount">0</strong><span>− 対象外・その他</span></button>
       </div>
+      <div id="generationReview" class="generation-notice" data-tone="attention" hidden><p id="generationReviewText"></p><button type="button" onclick="setRowFilter('issues')">確認が必要な素材を見る →</button></div>
+
 
       <div id="chapterProgressSection" class="hidden mt-5">
         <div class="flex items-center justify-between gap-3 mb-3">
@@ -136,15 +130,17 @@
 
       <div class="lg:col-span-3">
         <div class="bg-white rounded-2xl border border-gray-200 p-3 shadow-sm">
-          <div class="flex items-center justify-between mb-3 px-2 pt-1">
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-3 px-2 pt-1">
             <h2 class="text-sm font-semibold text-gray-900">センテンス図解テーブル</h2>
-            <div class="flex items-center gap-2 text-xs text-gray-400">
-              <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-gray-300"></span>待機</span>
-              <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span>生成中</span>
-              <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-green-500"></span>完了</span>
-              <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-red-500"></span>失敗</span>
-              <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-purple-400"></span>スキップ</span>
+            <div class="status-legend" aria-label="状態の色">
+              <span class="status-badge" data-tone="queued">◷ 待機</span>
+              <span class="status-badge" data-tone="working">↻ 生成中</span>
+              <span class="status-badge" data-tone="done">✓ 生成済み</span>
+              <span class="status-badge" data-tone="attention">! 要確認</span>
+              <span class="status-badge" data-tone="error">× 失敗</span>
             </div>
+
+
           </div>
           <div class="flex flex-wrap items-center justify-between gap-3 px-2 pb-3">
             <div class="flex flex-wrap items-center gap-2">
@@ -167,7 +163,7 @@
                   <th class="px-2 py-2 text-left">センテンス</th>
                   <th class="px-2 py-2 text-center w-14">№</th>
                   <th class="px-2 py-2 text-center w-20">ソース</th>
-                  <th class="px-2 py-2 text-center w-24">図解</th>
+                  <th class="px-2 py-2 text-center w-28">素材・状態</th>
                   <th class="px-2 py-2 text-center w-28">Web画像</th>
                 </tr>
               </thead>
@@ -279,7 +275,7 @@
     let lastRows = [];
     let rowFilter = 'all';
     let chapterFilter = null;
-    let lastJobStatus = 'running';
+    let lastJobStatus = 'unknown';
     let currentModalNo = null;
 
     const els = {
@@ -293,6 +289,8 @@
       providerLabel: document.getElementById('providerLabel'),
       totalCount: document.getElementById('totalCount'),
       generatingCount: document.getElementById('generatingCount'),
+      pendingCount: document.getElementById('pendingCount'),
+      attentionCount: document.getElementById('attentionCount'),
       completedCount: document.getElementById('completedCount'),
       failedCount: document.getElementById('failedCount'),
       rowsTbody: document.getElementById('rowsTbody'),
@@ -310,17 +308,6 @@
       if (s === null || s === undefined) return '';
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
               .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-    }
-
-    function statusBadgeHtml(status) {
-      const map = {
-        running:    { color: 'bg-blue-50 text-blue-700',   dot: 'bg-blue-500 ring-pulse',   label: '実行中' },
-        queued:     { color: 'bg-gray-100 text-gray-700',  dot: 'bg-gray-400',             label: '待機中' },
-        completed:  { color: 'bg-green-50 text-green-700', dot: 'bg-green-500',            label: '完了' },
-        error:      { color: 'bg-red-50 text-red-700',     dot: 'bg-red-500',              label: 'エラー' },
-      };
-      const v = map[status] || map.running;
-      return `<span class="w-2 h-2 ${v.dot} rounded-full"></span><span>${v.label}</span>`;
     }
 
     function regenBtn(no, route = '') {
@@ -369,25 +356,19 @@
     }
 
     function thumbCellHtml(row) {
-      const status = row.status || 'pending';
-      const filename = row.filename;
+      const status = row.status || 'pending', filename = row.filename;
+      const view = StudioStatus.row(status, rowHasIssue(row));
+      const label = '<span class="row-state-label">' + StudioStatus.html(view) + '</span>';
       if (status === 'ok' && filename) {
-        return `<img src="/results/${JOB_ID}/images/${filename}?t=${Date.now()}" class="thumb-img pop-in" onclick='openModal(${row.no})' alt="" loading="lazy">${chartVariantHtml(row)}<br>${regenBtn(row.no, row.route || '')}`;
-      } else if (status === 'generating') {
-        return `<div class="skeleton w-20 h-[45px] rounded flex items-center justify-center mx-auto">
-                  <div class="w-4 h-4 border-2 border-cyan-200 border-t-cyan-600 rounded-full animate-spin"></div>
-                </div>`;
-      } else if (status === 'failed') {
-        return `<div class="w-20 h-[45px] bg-red-50 rounded flex items-center justify-center mx-auto" title="${escapeHtml(row.error || '失敗')}">
-                  <svg class="w-4 h-4 text-red-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                </div>${regenBtn(row.no, row.route || '')}`;
-      } else if (status === 'skipped') {
-        return `<div class="w-20 h-[45px] bg-purple-50 rounded flex items-center justify-center mx-auto text-purple-400 text-[10px]">スキップ</div>`;
-      } else if (status === 'thinned' || status === 'skipped_limit') {
-        return `<div class="w-20 h-[45px] bg-orange-50 rounded flex items-center justify-center mx-auto text-orange-400 text-[10px]" title="均等配置のため間引き">間引き</div>`;
-      } else {
-        return `<div class="w-20 h-[45px] bg-gray-50 rounded flex items-center justify-center mx-auto text-gray-300 text-[10px]">待機</div>`;
+        return label + '<img src="/results/' + JOB_ID + '/images/' + filename + '?t=' + Date.now() + '" class="thumb-img pop-in" onclick="openModal(' + row.no + ')" alt="" loading="lazy">' + chartVariantHtml(row) + '<br>' + regenBtn(row.no, row.route || '');
       }
+      if (status === 'generating') {
+        return '<div class="status-preview" data-tone="working"><span class="state-spinner" aria-hidden="true"></span><span>生成中</span></div>';
+      }
+      if (status === 'failed') {
+        return '<div class="status-preview" data-tone="error" title="' + escapeHtml(row.error || '生成失敗') + '">× 生成失敗</div>' + regenBtn(row.no, row.route || '');
+      }
+      return label;
     }
 
     function webCellHtml(row) {
@@ -483,11 +464,12 @@
       rows.forEach(row => {
         const idx = String(row.chapter_index ?? 1);
         if (!map.has(idx)) {
-          map.set(idx, { index: idx, title: chapterLabel(row), total: 0, ok: 0, generating: 0, failed: 0, issue: 0 });
+          map.set(idx, { index: idx, title: chapterLabel(row), total: 0, ok: 0, finished: 0, generating: 0, failed: 0, issue: 0 });
         }
         const s = map.get(idx);
         s.total += 1;
-        if (row.status === 'ok') s.ok += 1;
+        if (row.status === 'ok' && !rowHasIssue(row)) s.ok += 1;
+        if (['ok', 'skipped', 'thinned', 'skipped_limit'].includes(row.status)) s.finished += 1;
         if (row.status === 'generating') s.generating += 1;
         if (row.status === 'failed') s.failed += 1;
         if (rowHasIssue(row)) s.issue += 1;
@@ -498,46 +480,32 @@
     function updateChapterCards(rows) {
       if (!els.chapterCards || !els.chapterProgressSection) return;
       const chapters = chapterStats(rows);
-      if (!chapters.length) {
-        els.chapterProgressSection.classList.add('hidden');
-        return;
-      }
-      els.chapterProgressSection.classList.remove('hidden');
+      els.chapterProgressSection.classList.toggle('hidden', !chapters.length);
       els.chapterCards.innerHTML = chapters.map(ch => {
-        const pct = ch.total ? Math.round((ch.ok / ch.total) * 100) : 0;
+        const pct = ch.total ? Math.round((ch.finished / ch.total) * 100) : 0;
         const active = chapterFilter !== null && String(chapterFilter) === String(ch.index);
-        const state = ch.issue > 0 ? '要確認' : (ch.generating > 0 ? '生成中' : (pct >= 100 ? '完了' : '待機'));
-        const color = ch.issue > 0
-          ? 'border-rose-200 bg-rose-50'
-          : (ch.generating > 0 ? 'border-amber-200 bg-amber-50' : (pct >= 100 ? 'border-emerald-200 bg-emerald-50' : 'border-gray-200 bg-white'));
-        const bar = ch.issue > 0 ? 'bg-rose-500' : (ch.generating > 0 ? 'bg-amber-500' : 'bg-cyan-600');
-        return `
-          <button onclick="setChapterFilter('${escapeHtml(ch.index)}')" class="text-left rounded-xl border ${color} ${active ? 'ring-2 ring-cyan-500' : ''} p-3 hover:shadow-sm transition">
-            <div class="flex items-center justify-between gap-2">
-              <div class="text-xs font-semibold text-gray-900 truncate">${escapeHtml(ch.title)}</div>
-              <span class="text-[10px] font-medium ${ch.issue > 0 ? 'text-rose-700' : 'text-gray-500'}">${state}</span>
-            </div>
-            <div class="mt-2 h-1.5 bg-white/70 rounded-full overflow-hidden">
-              <div class="h-full ${bar}" style="width:${pct}%"></div>
-            </div>
-            <div class="mt-2 grid grid-cols-4 gap-1 text-center text-[10px] text-gray-500">
-              <span><b class="text-gray-900">${ch.total}</b><br>文</span>
-              <span><b class="text-emerald-700">${ch.ok}</b><br>完了</span>
-              <span><b class="text-amber-700">${ch.generating}</b><br>中</span>
-              <span><b class="text-rose-700">${ch.issue}</b><br>要確認</span>
-            </div>
-          </button>
-        `;
+        const state = StudioStatus.chapter(ch), tone = StudioStatus.describe(state).tone;
+        return '<button onclick="setChapterFilter(\'' + escapeHtml(ch.index) + '\')" class="chapter-status-card text-left rounded-xl p-3 hover:shadow-sm transition ' + (active ? 'is-active' : '') + '" data-tone="' + tone + '" aria-pressed="' + active + '">' +
+          '<div class="flex items-center justify-between gap-2"><div class="text-xs font-semibold truncate">' + escapeHtml(ch.title) + '</div>' + StudioStatus.html(state) + '</div>' +
+          '<div class="mt-2 h-1.5 bg-white/70 rounded-full overflow-hidden"><div class="h-full status-fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="mt-2 grid grid-cols-4 gap-1 text-center text-[10px] text-gray-600">' +
+          '<span><b>' + ch.total + '</b><br>文</span><span class="status-text" data-tone="done"><b>' + ch.ok + '</b><br>生成済み</span>' +
+          '<span class="status-text" data-tone="working"><b>' + ch.generating + '</b><br>生成中</span>' +
+          '<span class="status-text" data-tone="attention"><b>' + ch.issue + '</b><br>確認対象</span></div></button>';
       }).join('');
     }
 
     function setRowFilter(filter) {
       rowFilter = filter;
+      const tones = {all:'neutral',pending:'queued',generating:'working',ok:'done',issues:'attention',attention:'attention',failed:'error'};
       document.querySelectorAll('.row-filter-btn').forEach(btn => {
-        const active = btn.getAttribute('data-row-filter') === rowFilter;
-        btn.className = active
-          ? 'row-filter-btn px-3 py-1.5 rounded-lg bg-cyan-600 text-white text-xs font-medium'
-          : 'row-filter-btn px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200';
+        const value = btn.getAttribute('data-row-filter');
+        btn.className = 'row-filter-btn state-filter px-3 py-1.5 rounded-lg text-xs font-medium';
+        btn.dataset.tone = tones[value] || 'neutral';
+        btn.setAttribute('aria-pressed', String(value === rowFilter));
+      });
+      document.querySelectorAll('[data-summary-filter]').forEach(btn => {
+        btn.setAttribute('aria-pressed', String(btn.dataset.summaryFilter === rowFilter));
       });
       applyRowFilters();
     }
@@ -560,8 +528,12 @@
       const ch = tr.getAttribute('data-chapter-index') || '';
       if (chapterFilter !== null && ch !== String(chapterFilter)) return false;
       if (rowFilter === 'issues') return issue;
+      if (rowFilter === 'pending') return ['pending','queued',''].includes(status) && !issue;
+      if (rowFilter === 'failed') return status === 'failed';
+      if (rowFilter === 'attention') return issue && !['failed','generating'].includes(status);
       if (rowFilter === 'generating') return status === 'generating';
-      if (rowFilter === 'ok') return status === 'ok';
+      if (rowFilter === 'ok') return status === 'ok' && !issue;
+      if (rowFilter === 'other') return !['pending','queued','generating','ok','failed'].includes(status) && !issue;
       return true;
     }
 
@@ -577,7 +549,7 @@
           if (tr.getAttribute('data-issue') === '1') issuesVisible += 1;
         }
       });
-      const filterLabel = rowFilter === 'issues' ? '失敗・要確認' : (rowFilter === 'generating' ? '生成中' : (rowFilter === 'ok' ? '完了' : '全て'));
+      const filterLabel = ({all:'全て',issues:'失敗・要確認',pending:'生成待ち',generating:'生成中',ok:'生成済み',attention:'要確認',failed:'失敗',other:'対象外・その他'})[rowFilter] || '全て';
       const chLabel = chapterFilter !== null ? ` / 章 ${chapterFilter}` : '';
       if (els.activeFilterLabel) els.activeFilterLabel.textContent = `${filterLabel}${chLabel}: ${visible}件`;
       if (els.regenIssuesBtn) els.regenIssuesBtn.disabled = issuesVisible === 0;
@@ -614,7 +586,7 @@
 
         const prevVariant = tr.getAttribute('data-chart-variant') || '';
         const nextVariant = chartVariantKey(row);
-        if (prevStatus !== row.status || prevVariant !== nextVariant) {
+        if (prevStatus !== row.status || prevVariant !== nextVariant || prevIssue !== nextIssue) {
           tr.setAttribute('data-chart-variant', nextVariant);
           tr.setAttribute('data-status', row.status || 'pending');
           tr.setAttribute('data-filename', row.filename || '');
@@ -694,7 +666,7 @@
       const badge = `<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${v.cls}" title="${reason}">${v.icon} ${v.label}</span>`;
       const verifyTags = Array.isArray(row.verify_issue_tags) ? row.verify_issue_tags : [];
       const verifyHtml = row.verify_issue
-        ? `<div class="mt-0.5 text-[9px] text-rose-600 leading-tight" title="${escapeHtml(row.verify_reason || '')}">要確認${verifyTags.length ? ': ' + escapeHtml(verifyTags.slice(0, 2).join(', ')) : ''}</div>`
+        ? `<div class="mt-0.5 text-[9px] status-text leading-tight" data-tone="attention" title="${escapeHtml(row.verify_reason || '')}">要確認${verifyTags.length ? ': ' + escapeHtml(verifyTags.slice(0, 2).join(', ')) : ''}</div>`
         : row.verify_fixed
           ? `<div class="mt-0.5 text-[9px] text-emerald-600 leading-tight">検証修正済み</div>`
         : '';
@@ -704,14 +676,19 @@
     }
 
     function updateSummary(rows) {
-      const total = rows.length;
-      const completed = rows.filter(r => r.status === 'ok').length;
-      const generating = rows.filter(r => r.status === 'generating').length;
-      const failed = rows.filter(r => rowHasIssue(r)).length;
-      els.totalCount.textContent = total;
-      els.completedCount.textContent = completed;
-      els.generatingCount.textContent = generating;
+      const counts = StudioStatus.summary(rows, rowHasIssue);
+      const {failed, attention} = counts;
+      els.totalCount.textContent = rows.length;
+      els.completedCount.textContent = counts.ok;
+      els.generatingCount.textContent = counts.generating;
+      els.pendingCount.textContent = counts.pending;
+      document.getElementById('otherCount').textContent = counts.other;
       els.failedCount.textContent = failed;
+      els.attentionCount.textContent = attention;
+      const notice = document.getElementById('generationReview');
+      notice.hidden = lastJobStatus !== 'completed' || failed + attention === 0;
+      notice.dataset.tone = failed ? 'error' : 'attention';
+      document.getElementById('generationReviewText').textContent = '生成処理は完了しました。失敗 ' + failed + ' 件・要確認 ' + attention + ' 件の素材を確認してください。';
       updateChapterCards(rows);
     }
 
@@ -720,7 +697,7 @@
         const res = await fetch(`/api/status/${JOB_ID}`);
         if (!res.ok) return;
         const state = await res.json();
-        lastJobStatus = state.status || 'running';
+        lastJobStatus = state.status || 'unknown';
         els.jobMessage.textContent = state.message || '...';
         els.phaseNum.textContent = state.phase || 0;
         els.overallBar.style.width = `${state.percent || 0}%`;
@@ -731,16 +708,13 @@
             ? `gpt-image-2 (${state.openai_quality || 'medium'})`
             : 'nanobanana';
         }
-        if (state.title) els.jobTitle.textContent = state.title;
+        els.jobTitle.textContent = state.title || state.title_override || JOB_ID;
+        document.title = els.jobTitle.textContent + ' - 制作の進捗';
 
-        els.statusBadge.innerHTML = statusBadgeHtml(state.status);
-        const colorMap = {
-          running: 'bg-blue-50 text-blue-700',
-          queued: 'bg-gray-100 text-gray-700',
-          completed: 'bg-green-50 text-green-700',
-          error: 'bg-red-50 text-red-700',
-        };
-        els.statusBadge.className = `flex-shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${colorMap[state.status] || 'bg-gray-100 text-gray-700'}`;
+        StudioStatus.apply(els.statusBadge, state.status);
+        document.getElementById('jobOverview').dataset.tone = StudioStatus.describe(state.status).tone;
+        if (lastRows.length) { rebuildTable(lastRows); updateSummary(lastRows); }
+        if (state.status !== 'completed') els.actions.classList.add('hidden');
 
         if (state.status === 'completed') {
           stopped = true;
@@ -759,7 +733,7 @@
             }
           } catch (e) {}
         }
-        if (state.status === 'error') stopped = true;
+        if (['error','failed','interrupted','cancelled'].includes(state.status)) stopped = true;
       } catch (e) { console.error('status error', e); }
     }
 
@@ -1189,6 +1163,7 @@
         setTimeout(async () => { await Promise.all([pollRows(), pollLogs()]); }, 1500);
       }
     }
+    setRowFilter('all');
     tick();
   </script>
 </body>

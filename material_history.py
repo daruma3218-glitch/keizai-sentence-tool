@@ -5,14 +5,14 @@ import material_store as store
 
 JST = timezone(timedelta(hours=9))
 STATUS = {
-    "queued": ("順番待ち", "working"),
+    "queued": ("順番待ち", "queued"),
     "running": ("制作中", "working"),
     "completed": ("生成完了", "done"),
-    "error": ("要確認", "attention"),
-    "failed": ("要確認", "attention"),
+    "error": ("処理エラー", "error"),
+    "failed": ("生成失敗", "error"),
     "interrupted": ("中断", "attention"),
-    "cancelled": ("停止済み", "attention"),
-    "unknown": ("状態を確認", "attention"),
+    "cancelled": ("停止済み", "neutral"),
+    "unknown": ("状態不明", "neutral"),
 }
 
 
@@ -105,7 +105,7 @@ def index(module, channel_id):
         completed = status == "completed"
         selections = library.get("selections", {})
         selected = len(selections) if isinstance(selections, dict) else 0
-        resumable = (status in {"error", "failed", "interrupted", "cancelled", "unknown"}
+        resumable = (status in {"error", "failed", "interrupted", "cancelled"}
                      and not paths[1].exists() and (folder / "manuscript.txt").is_file()
                      and str(paths[0]) not in issues)
         jobs.append({
