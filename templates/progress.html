@@ -67,7 +67,7 @@
       <div class="mb-4">
         <div class="flex items-center justify-between mb-2">
           <div class="flex gap-3 text-xs text-gray-500">
-            <span>Phase <span id="phaseNum" class="font-semibold text-gray-900">0</span>/3</span>
+            <span>全体の進み具合</span>
             <span class="text-gray-300">|</span>
             <span class="font-semibold status-text" id="overallPercent">0%</span>
           </div>
@@ -282,7 +282,6 @@
       jobTitle: document.getElementById('jobTitle'),
       jobMessage: document.getElementById('jobMessage'),
       statusBadge: document.getElementById('statusBadge'),
-      phaseNum: document.getElementById('phaseNum'),
       overallBar: document.getElementById('overallBar'),
       overallPercent: document.getElementById('overallPercent'),
       concurrencyVal: document.getElementById('concurrencyVal'),
@@ -699,7 +698,6 @@
         const state = await res.json();
         lastJobStatus = state.status || 'unknown';
         els.jobMessage.textContent = state.message || '...';
-        els.phaseNum.textContent = state.phase || 0;
         els.overallBar.style.width = `${state.percent || 0}%`;
         els.overallPercent.textContent = `${state.percent || 0}%`;
         if (state.concurrency) els.concurrencyVal.textContent = state.concurrency;
