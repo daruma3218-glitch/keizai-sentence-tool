@@ -12,6 +12,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, send_f
 from PIL import Image, ImageOps
 
 import material_store as store
+import material_history
 
 IMAGE_SLOTS = threading.BoundedSemaphore(2)
 ACTIVE = set()
@@ -57,16 +58,6 @@ def register(module):
             result.append({**ch, "ready": bool(keys["openai"] or keys["gemini"])})
         return result
 
-    def project_list(ch=None):
-        result = []
-        folder = module.OUTPUT_ROOT / "material_projects"
-        if folder.exists():
-            for file in folder.glob("*.json"):
-                p = store.read(file)
-                if p and (ch is None or p.get("channel_id") == ch):
-                    result.append({k: v for k, v in p.items() if k != "profile"})
-        return sorted(result, key=lambda p: p["created_at"], reverse=True)
-
     @bp.route("/materials")
     @module.login_required
     def home():
@@ -78,12 +69,27 @@ def register(module):
             if project:
                 if project["channel_id"] != selected:
                     raise ValueError("このカードは別チャンネルの案件です")
-                return redirect("/materials/jobs/" + project["jobs"][-1] if project["jobs"] else
+                history = material_history.index(module, selected)
+                recent = next((j for j in history["jobs"] if j["project_id"] == project["project_id"]), None)
+                return redirect(recent["href"] if recent else
                                 "/?channel_id=" + project["source_channel_id"] + "&project_id=" + project["project_id"])
         return render_template("materials.html", channels=channels(), selected=selected,
-                               projects=project_list(selected), csrf=token(),
+                               history=material_history.index(module, selected) if selected else None, csrf=token(),
                                prefill_title=request.args.get("title", "")[:160],
                                prefill_trello=card)
+
+    @bp.route("/api/material-jobs/<job_id>/resume", methods=["POST"])
+    @module.login_required
+    def resume(job_id):
+        d = job(job_id)
+        # Reuse the existing checkpoint runner, with studio CSRF and click serialization.
+        with store.LOCK:
+            state = store.read(d / "job.json", {}) or {}
+            if not isinstance(state, dict) or not isinstance(state.get("status", ""), str):
+                raise ValueError("制作記録を読み込めません。画面を更新して確認してください")
+            if state.get("status") in {"running", "queued", "completed"}:
+                raise ValueError("制作中・待機中・完了済みのジョブは再開できません。画面を更新してください")
+            return module.api_resume(job_id)
 
     @bp.route("/api/material-projects", methods=["POST"])
     @module.login_required

@@ -17,13 +17,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
 
-VERSION = "2026-10-05.1"
+VERSION = "2026-10-05.2"
 LOCK = threading.RLock()
 CHANNELS = {
     "russia": {"id": "russia", "source_id": "roshia", "name": "ロシア解体新書", "color": "#a32b35",
-               "mark": "ろ", "default_mode": "diagram", "description": "図解を作り、候補を選ぶ。原稿に沿った制作も選べます。"},
+               "mark": "ろ", "logo": "channel-logos/roshia.png", "default_mode": "diagram", "description": "図解を作り、候補を選ぶ。原稿に沿った制作も選べます。"},
     "economy": {"id": "economy", "source_id": "keizai", "name": "日本カラクリ経済学", "color": "#28785c",
-                "mark": "経", "default_mode": "sentence", "description": "先生の世界観を保ち、原稿に沿って素材をそろえます。"},
+                "mark": "経", "logo": "channel-logos/keizai.png", "default_mode": "sentence", "description": "先生の世界観を保ち、原稿に沿って素材をそろえます。"},
     "china": {"id": "china", "source_id": "china", "name": "中国チャンネル", "color": "#227887",
               "mark": "中", "default_mode": "sentence", "description": "これからの制作に。画風と生成設定を準備してから始めます。"},
     "success": {"id": "success", "source_id": "seikou", "name": "成功の法則", "color": "#b86429",

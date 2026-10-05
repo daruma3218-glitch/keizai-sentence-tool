@@ -1,66 +1,78 @@
 {% extends "material_base.html" %}
 {% block content %}
-<section class="intro"><p class="eyebrow">MATERIAL STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">原稿を入れる → 候補を比べる → 採用する。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
-<nav class="channel-grid" aria-label="チャンネル">
+{% if not selected %}
+<section class="intro"><p class="eyebrow">MATERIAL STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">いつものチャンネルから、新しい制作も、前回の続きも。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
+{% else %}<p class="eyebrow channel-switch-label">CHANNEL WORKSPACE</p>{% endif %}
+<nav class="channel-grid {% if selected %}channel-grid-compact{% endif %}" aria-label="チャンネル">
 {% for ch in channels %}
 <a class="channel-card {% if selected == ch.id %}current{% endif %}" href="/materials?channel={{ ch.id }}" style="--channel:{{ ch.color }}" {% if selected == ch.id %}aria-current="page"{% endif %}>
-  <span class="channel-mark">{{ ch.mark }}</span><span class="channel-name">{{ ch.name }}</span>
-  <span class="channel-description">{{ ch.description }}</span><span class="channel-link">{% if selected == ch.id %}選択中{% else %}案件を開く →{% endif %}</span>
+  {% if ch.logo %}<img class="channel-logo" src="{{ url_for('static', filename=ch.logo) }}" alt="{{ ch.name }}のロゴ" width="104" height="104">{% else %}<span class="channel-mark" aria-hidden="true">{{ ch.mark }}</span>{% endif %}
+  <span class="channel-name">{{ ch.name }}</span><span class="channel-description">{{ ch.description }}</span>
+  <span class="channel-link">{% if selected == ch.id %}選択中{% else %}制作・履歴を開く →{% endif %}</span>
 </a>
 {% endfor %}
 </nav>
 {% if selected %}
 {% set chosen = (channels | selectattr('id','equalto',selected) | first) %}
-<section class="workspace-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h2>{{ chosen.name }}</h2></div><span class="pill">案件ごとに画風と設定を保存</span></section>
+<section class="workspace-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h1>{{ chosen.name }}</h1><p class="subtle">前回の続きから、制作を始めましょう。</p></div><a class="button" href="#new-project">＋ 新しい案件</a></section>
 {% if selected == 'russia' %}
-<div class="russia-routes">
-  <div><strong>いつもの図解スタジオ</strong><p>制作中の図解は、これまでの画面で続けられます。</p><a class="button dark" href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">図解スタジオを開く ↗</a></div>
-  <div><strong>原稿に沿って素材を作る</strong><p>下で案件を作り、新しい素材スタジオも試せます。両方の制作履歴はそれぞれ保持されます。</p><a class="button" href="#new-project">新しい案件を作る ↓</a></div>
-</div>
+<section class="legacy-workspace"><div><strong>いつもの図解スタジオで作った素材</strong><p>制作中の図解と過去の履歴は、図解スタジオに保存されています。</p></div><a class="button dark" href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">図解の履歴・続きへ ↗</a></section>
 {% endif %}
 {% if selected == 'china' %}<p class="info">中国チャンネルは準備用の枠です。正式な画風・キャラクターは未設定です。専用の生成設定を用意してから制作を始めます。</p>{% endif %}
-<section class="project-layout">
-<form id="new-project" class="panel" data-channel="{{ selected }}">
-  <h3>新しい案件</h3><label for="project-title">動画のタイトル</label><input id="project-title" name="title" required maxlength="160" value="{{ prefill_title }}" placeholder="例：どうして値上げが続くのか">
+{% if history.warning %}<p class="info" role="status">一部の制作記録を読み込めませんでした。表示できた履歴は下に残しています。少し待って画面を更新してください。</p>{% endif %}
+<section class="workspace-layout">
+<div class="workspace-history">
+{% if history.jobs %}
+{% set recent = history.jobs[0] %}
+<section class="continue-card" aria-label="直近の作業">
+  <div class="continue-top"><p class="eyebrow">CONTINUE</p><span class="job-status {{ recent.tone }}">{{ recent.status_label }}</span></div>
+  <p class="hint">直近の作業 · {{ recent.date }} 更新（日本時間）</p><h2>{{ recent.title }}</h2>
+  <div class="continue-bottom"><p class="subtle">{% if recent.bucket == 'completed' %}保存した候補と採用状態から、素材選びを続けられます。{% else %}途中までの素材と、制作の進み具合を確認できます。{% endif %}</p><a class="button dark" href="{{ recent.href }}">続きから開く →</a></div>
+</section>
+{% endif %}
+<div class="history-heading"><h2>制作履歴 <span class="count">{{ history.jobs | length }} 件</span></h2><a class="quiet-link" href="/materials?channel={{ selected }}">最新の状態に更新</a></div>
+{% if history.jobs %}
+<div class="history-tools"><div class="filters history-filters" role="group" aria-label="制作履歴の状態">
+  <button type="button" class="active" data-history-filter="all" aria-pressed="true">すべて</button>
+  <button type="button" data-history-filter="unfinished" aria-pressed="false">作業途中 <span>{{ history.unfinished }}</span></button>
+  <button type="button" data-history-filter="completed" aria-pressed="false">生成済み <span>{{ history.completed }}</span></button>
+</div><label class="history-search"><span class="sr-only">制作履歴を検索</span><input id="history-search" type="search" placeholder="タイトル・ジョブIDで検索"></label></div>
+<div id="job-history" class="job-history">
+{% for j in history.jobs %}
+<article class="job-row" data-job="{{ j.id }}" data-bucket="{{ j.bucket }}" data-search="{{ j.title }} {{ j.id }} {{ j.project_id }}">
+  <div class="job-row-main"><div class="job-meta"><span class="job-status {{ j.tone }}">{{ j.status_label }}</span><span>{{ j.source_label }}</span><time>{{ j.date }}</time></div>
+    <h3><a href="{{ j.href }}">{{ j.title }}</a></h3>
+    <p class="job-detail">{% if j.generated %}画像 {{ j.generated }} 枚{% if j.total %} · 原稿 {{ j.total }} 文{% endif %} · {% endif %}{% if j.selected %}採用 {{ j.selected }} 件 · {% endif %}<span class="job-id">{{ j.id }}</span></p>
+  </div>
+  <div class="job-row-actions"><a class="button compact" href="{{ j.href }}">{{ j.action }}</a>
+    {% if j.resumable %}<button type="button" class="text-button resume-job" data-job-id="{{ j.id }}" data-job-title="{{ j.title }}">残りの生成を再開</button>{% endif %}
+    {% if j.trello_url %}<a class="quiet-link" href="{{ j.trello_url }}" target="_blank" rel="noopener">案件カード ↗</a>{% endif %}
+    {% if j.project_id %}<a class="quiet-link" href="/?channel_id={{ chosen.source_id }}&amp;project_id={{ j.project_id }}">同じ案件に原稿を追加</a>{% endif %}
+  </div>
+</article>
+{% endfor %}
+</div>
+<p id="history-no-match" class="empty" hidden>条件に合う制作履歴はありません。</p>
+<div class="history-pagination"><p id="history-count" class="hint" aria-live="polite"></p><button id="history-more" class="button" type="button" hidden>さらに表示</button></div>
+<p class="hint history-note">従来のセンテンスで作ったジョブも表示しています。生成済みは、素材選びの前の段階です。</p>
+{% else %}<div class="empty"><span>▧</span><p>このチャンネルの制作履歴はまだありません。</p><p class="hint">新しい案件から原稿を入れると、ここに続きが保存されます。{% if selected == 'russia' %}<br>従来の図解は「図解の履歴・続きへ」から開けます。{% endif %}</p></div>{% endif %}
+{% if history.drafts %}
+<section class="draft-list"><h3>原稿を入れる案件 <span class="count">{{ history.drafts | length }} 件</span></h3>
+{% for p in history.drafts %}<article class="draft-row"><div><h3>{{ p.title }}</h3><p class="hint">{% if p.missing_jobs %}過去の制作データが見つかりません。案件の設定は保存されています。{% else %}案件を作成済み · 原稿の入力待ち{% endif %}</p></div><a class="button compact" href="/?channel_id={{ p.source_channel_id }}&amp;project_id={{ p.project_id }}">原稿を入れる →</a></article>{% endfor %}
+</section>{% endif %}
+</div>
+<form id="new-project" class="panel new-project" data-channel="{{ selected }}">
+  <p class="eyebrow">NEW PROJECT</p><h2>新しい案件</h2><p class="hint">チャンネルの画風と設定を引き継ぎます。</p>
+  <label for="project-title">動画のタイトル</label><input id="project-title" name="title" required maxlength="160" value="{{ prefill_title }}" placeholder="例：どうして値上げが続くのか">
   <label for="trello-url">案件カードのURL <span class="subtle">任意</span></label><input id="trello-url" name="trello_url" type="url" value="{{ prefill_trello }}" placeholder="https://trello.com/c/…">
-  <p class="hint">同じTrelloカードから開くと、同じ案件に戻れます。</p>
-  <button class="button dark wide" type="submit">案件を作る →</button>
+  <p class="hint">同じTrelloカードから開くと、同じ案件に戻れます。</p><button class="button dark wide" type="submit">案件を作る →</button>
   {% if not chosen.ready %}<p class="hint">案件の保存はできます。AI生成には、このチャンネルの生成設定が必要です。</p>{% endif %}
 </form>
-<div><h3 class="project-list-heading">続きから作業する <span class="count">{{ projects | length }}</span></h3>
-<div id="project-list">
-{% for p in projects %}
-<article class="project panel">
-  <h3>{{ p.title }}</h3><p class="hint">作成 {{ p.created_at[:10] }} · 原稿 {{ p.jobs | length }} 件</p>
-  <div class="actions">
-    {% if p.jobs %}<a class="button dark" href="/materials/jobs/{{ p.jobs[-1] }}">素材を選ぶ →</a><a class="button" href="/progress/{{ p.jobs[-1] }}">制作の進み具合</a>{% endif %}
-    <a class="button" href="/?channel_id={{ p.source_channel_id }}&amp;project_id={{ p.project_id }}">{% if p.jobs %}原稿を追加{% else %}原稿を入れる →{% endif %}</a>
-    {% if p.trello_url %}<a class="quiet-link" href="{{ p.trello_url }}" target="_blank" rel="noopener">案件カード ↗</a>{% endif %}
-  </div>
-  {% if p.jobs | length > 1 %}<details><summary>過去の原稿・制作</summary>{% for job in p.jobs[:-1] | reverse %}<a class="history-job" href="/materials/jobs/{{ job }}">{{ job }}</a>{% endfor %}</details>{% endif %}
-</article>
-{% else %}<div class="empty"><span>▧</span><p>このチャンネルの案件はまだありません。</p><p class="hint">左から案件を作ると、原稿を入れられます。<br>従来の案件は「従来の制作画面・履歴」から取り込めます。</p></div>{% endfor %}
-</div></div>
 </section>
+<dialog id="resume-dialog" aria-labelledby="resume-heading"><div class="dialog-heading"><h2 id="resume-heading">残りの生成を再開</h2><button class="icon-button" type="button" data-close-resume aria-label="閉じる">×</button></div><p id="resume-title"></p><p class="hint">作成済みの素材と保存された設定を使い、残りの処理を再開します。追加の画像生成には利用料金が発生します。</p><div class="actions"><button class="button" type="button" data-close-resume>戻る</button><button id="confirm-resume" class="button dark" type="button">残りの生成を開始</button></div></dialog>
 {% else %}
-<div class="welcome-note"><span>01</span><div><strong>まずはチャンネルを選んでください。</strong><p class="subtle">チャンネルの画風・キャラクター・生成設定を引き継いで始めます。</p></div></div>
+<div class="welcome-note"><span>01</span><div><strong>まずはチャンネルを選んでください。</strong><p class="subtle">過去の制作履歴と「続きから」を開けます。新しい案件も同じ場所から。</p></div></div>
 {% endif %}
 <footer>素材の採用情報は、原稿とセットでAI編集へ渡せます。動画の確認・最終承認は編集後に行います。</footer>
 {% endblock %}
-{% block scripts %}
-<script>
-document.getElementById('new-project')?.addEventListener('submit', async event => {
-  event.preventDefault();
-  const form = event.currentTarget, button = form.querySelector('button');
-  button.disabled = true;
-  try {
-    const result = await Studio.api('/api/material-projects', {method:'POST', body:JSON.stringify({
-      channel_id:form.dataset.channel, title:form.elements.namedItem('title').value, trello_url:form.elements.namedItem('trello_url').value
-    })});
-    location.href = result.project.jobs.length
-      ? '/materials/jobs/' + encodeURIComponent(result.project.jobs.at(-1))
-      : '/?channel_id=' + encodeURIComponent(result.project.source_channel_id) + '&project_id=' + encodeURIComponent(result.project.project_id);
-  } catch (error) { Studio.notice(error.message, true); button.disabled = false; }
-});
-</script>
-{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='material_home.js') }}"></script>{% endblock %}

@@ -279,3 +279,128 @@ def test_new_studio_does_not_force_hold_scenes_into_images():
     pipeline.coverage_mode = "scene"
     pipeline.beat_mode = True
     assert pipeline._force_high_coverage_images([{"no": 1, "display": "hold"}], []) == 0
+def legacy_job(root, name, status="completed", channel="keizai", updated="2026-10-01T01:00:00Z"):
+    d = root / "output" / name
+    d.mkdir()
+    store.save(d / "job.json", {"status": status, "channel_id": channel, "title_override": name + "の原稿",
+                               "updated_at": updated, "generated": 3})
+    if status == "completed":
+        store.save(d / "manifest.json", {"channel_id": channel, "title": name + "の完成原稿",
+                                       "generated": 3, "total_sentences": 8})
+    else:
+        (d / "manuscript.txt").write_text("保存された原稿です。" * 100, encoding="utf-8")
+    return d
+
+
+def test_history_includes_legacy_scoped_sorted_and_read_only(studio):
+    import material_history
+    client, _, root = studio
+    legacy_job(root, "older")
+    legacy_job(root, "stopped", "error", updated="2026-10-02T02:00:00Z")
+    legacy_job(root, "other-channel", channel="roshia")
+    legacy_job(root, "scene_fix_old")
+    before = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    history = material_history.index(appmod, "economy")
+    assert [j["id"] for j in history["jobs"]] == ["stopped", "older"]
+    assert history["jobs"][0]["href"] == "/progress/stopped"
+    assert history["jobs"][0]["date"] == "2026/10/02 11:00"
+    assert history["jobs"][0]["resumable"]
+    assert history["jobs"][1]["href"] == "/materials/jobs/older"
+    assert not history["jobs"][1]["resumable"]
+    html = client.get("/materials?channel=economy").text
+    assert 'data-job="older"' in html and "other-channel" not in html and "scene_fix_old" not in html
+    assert "stoppedの原稿" in html and "従来のセンテンス" in html
+    assert before == {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_studio_history_preserves_selection_and_does_not_duplicate_project_jobs(studio):
+    import material_history
+    client, _, root = studio
+    d, p, original = make_job(root)
+    choose(d, original)
+    history = material_history.index(appmod, "economy")
+    assert len(history["jobs"]) == 1 and not history["drafts"]
+    assert history["jobs"][0]["selected"] == 1
+    assert history["jobs"][0]["source_label"] == "素材スタジオ"
+    html = client.get("/materials?channel=economy").text
+    assert html.count('data-job="sample"') == 1
+    assert p["project_id"] in html and "同じ案件に原稿を追加" in html
+    assert store.load_library(d)["selections"]["1"] == original["id"]
+
+
+def test_unreadable_history_keeps_other_jobs_and_missing_jobs_keep_project(studio):
+    import material_history
+    client, _, root = studio
+    legacy_job(root, "valid")
+    broken = legacy_job(root, "broken")
+    (broken / "job.json").write_text("{updating", encoding="utf-8")
+    store.save(root / "material_projects" / "bad.json", [])
+    project = store.create_project(root, "economy", "原稿待ちの案件", {})
+    missing = store.create_project(root, "economy", "保存された案件", {})
+    missing["jobs"] = ["removed-job"]
+    store.save(store.project_file(root, missing["project_id"]), missing)
+    history = material_history.index(appmod, "economy")
+    assert history["warning"] and len(history["jobs"]) == 2
+    item = next(j for j in history["jobs"] if j["id"] == "broken")
+    assert item["status"] == "unknown" and not item["resumable"]
+    assert {p["project_id"] for p in history["drafts"]} == {project["project_id"], missing["project_id"]}
+    response = client.get("/materials?channel=economy")
+    assert response.status_code == 200 and "一部の制作記録" in response.text
+    assert "/materials/jobs/removed-job" not in response.text
+
+
+def test_history_keeps_jobs_beyond_old_thirty_item_limit(studio):
+    import material_history
+    client, _, root = studio
+    for i in range(35):
+        legacy_job(root, "job-" + str(i).zfill(2))
+    history = material_history.index(appmod, "economy")
+    assert len(history["jobs"]) == 35
+    html = client.get("/materials?channel=economy").text
+    assert html.count('class="job-row"') == 35
+    assert "history-search" in html and "history-more" in html
+
+
+def test_card_returns_to_recent_stage_and_skips_missing_job(studio):
+    client, _, root = studio
+    project = store.create_project(root, "economy", "同じ案件", {}, "https://trello.com/c/Card1234")
+    complete = legacy_job(root, "complete")
+    pending = legacy_job(root, "pending", "queued", updated="2030-10-02T01:00:00Z")
+    store.bind_job(root, complete, project)
+    store.bind_job(root, pending, project)
+    project = store.get_project(root, project["project_id"])
+    project["jobs"].append("does-not-exist")
+    store.save(store.project_file(root, project["project_id"]), project)
+    response = client.get("/materials?channel=economy&trello=https://trello.com/c/Card1234")
+    assert response.status_code == 302 and response.headers["Location"] == "/progress/pending"
+
+
+def test_resume_is_explicit_csrf_protected_and_refuses_active_jobs(studio, monkeypatch):
+    client, headers, root = studio
+    legacy_job(root, "stopped", "error")
+    calls = []
+    def resume(job_id):
+        calls.append(job_id)
+        return appmod.jsonify(ok=True, redirect="/progress/" + job_id)
+    monkeypatch.setattr(appmod, "api_resume", resume)
+    client.get("/materials?channel=economy")
+    assert not calls
+    assert client.post("/api/material-jobs/stopped/resume").status_code == 403
+    assert not calls
+    assert client.post("/api/material-jobs/stopped/resume", headers=headers).status_code == 200
+    assert calls == ["stopped"]
+    for status in ("running", "queued", "completed"):
+        legacy_job(root, status, status)
+        assert client.post("/api/material-jobs/" + status + "/resume", headers=headers).status_code == 409
+    assert calls == ["stopped"]
+
+
+def test_existing_logos_are_served_in_channel_entry(studio):
+    client, _, _ = studio
+    html = client.get("/materials").text
+    assert '/static/channel-logos/roshia.png' in html and '/static/channel-logos/keizai.png' in html
+    assert "channel-logos/china" not in html
+    for name in ("roshia", "keizai"):
+        response = client.get("/static/channel-logos/" + name + ".png")
+        assert response.status_code == 200
+        assert Image.open(io.BytesIO(response.data)).size == (320, 320)
