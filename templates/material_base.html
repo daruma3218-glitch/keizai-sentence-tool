@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="material-csrf" content="{{ csrf }}">
+  <title>{% block title %}素材スタジオ{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='materials.css') }}">
+</head>
+<body>
+  <header class="studio-header"><a class="brand" href="/materials"><span class="brand-icon">▧</span>素材スタジオ</a><span class="header-note">原稿から、使う素材まで。</span><a class="quiet-link" href="/">従来の制作画面・履歴</a></header>
+  <main>{% block content %}{% endblock %}</main>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <script src="{{ url_for('static', filename='material_common.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

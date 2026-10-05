@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>センテンスつくーる</title>
+  <title>素材スタジオ｜原稿から素材をそろえる</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -75,7 +75,14 @@
           </div>
         </div>
 
+        <p class="mb-4"><a href="/materials" class="text-cyan-700 font-bold">← 素材スタジオ・チャンネルと案件</a></p>
+        {% if material_project %}
+        <div class="mb-4 p-4 bg-emerald-50 rounded-xl border border-emerald-200">
+          <strong>{{ material_project.title }}</strong><br><small>この案件のチャンネル設定を使います。</small>
+        </div>
+        {% endif %}
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
+          {% if material_project %}<input type="hidden" name="project_id" value="{{ material_project.project_id }}">{% endif %}
 
           <!-- 作る人の名前（任意）。いま作成中の表示と完了の知らせに出す。このパソコンで覚える -->
           <div>
@@ -566,6 +573,8 @@
         try { localStorage.setItem(LAST_CHANNEL_KEY, channelSelect.value); } catch (e) {}
         applyChannelDefaults();
       });
+      const requestedChannel = {{ selected_channel | default('') | tojson }};
+      if (requestedChannel && [...channelSelect.options].some(o => o.value === requestedChannel)) channelSelect.value = requestedChannel;
       applyChannelDefaults();  // 初期チャンネルの設定を反映
     }
 

@@ -132,6 +132,30 @@
       }
     },
     {
+      "id": "china",
+      "name": "中国チャンネル（準備中）",
+      "api_env_prefix": "CHINA",
+      "dedicated_keys_only": true,
+      "defaults": {
+        "provider": "gpt-image",
+        "openai_quality": "medium",
+        "style_preset": "flat_infographic",
+        "route_mode": "auto",
+        "worldview_mode": false,
+        "worldview_desc": "",
+        "style_lock": false,
+        "character_ref": "",
+        "concurrency": 2,
+        "max_diagrams": 80,
+        "beat_mode": true,
+        "verify_diagrams": true,
+        "skip_decorative": false,
+        "web_image_count": 30,
+        "allow_maps": false,
+        "user_instructions": "画風・キャラクターは未確定。原稿の人物、国、場所、数値を変えず、実在資料と説明用イラストを区別する。"
+      }
+    },
+    {
       "id": "seikou",
       "name": "成功の法則",
       "api_env_prefix": "SEIKOU",

@@ -89,12 +89,14 @@ class SentencePipeline:
         allow_ai_realphoto: bool = True,    # False: AI実写風(realphoto)を作らず世界観イラストにする
         style_check: bool = False,          # 検品で画風も判定し、外れた画像を1回だけ作り直す
         limb_check: bool = False,           # 人物の腕・手の崩れを2つのAIで検品し、最大2回作り直す
+        coverage_mode: str = "legacy",
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable] = None,
         item_callback: Optional[Callable] = None,
     ):
         self.resume = bool(resume)
         self.build_source_pack = bool(build_source_pack)
+        self.coverage_mode = coverage_mode
         self.source_videos_per_chapter = max(1, min(int(source_videos_per_chapter or 3), 5))
         self.manuscript_text = manuscript_text
         self.output_dir = Path(output_dir)
@@ -497,7 +499,7 @@ class SentencePipeline:
         250〜300枚指定ではユーザー期待は「ほぼ全文に画像を付ける」こと。
         そのため display=hold/none や route=skip も、上限に届くまで画像対象へ戻す。
         """
-        if not self.beat_mode or not rows:
+        if getattr(self, "coverage_mode", "legacy") == "scene" or not self.beat_mode or not rows:
             return 0
 
         total = len(rows)

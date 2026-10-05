@@ -1,0 +1,66 @@
+{% extends "material_base.html" %}
+{% block content %}
+<section class="intro"><p class="eyebrow">MATERIAL STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">原稿を入れる → 候補を比べる → 採用する。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
+<nav class="channel-grid" aria-label="チャンネル">
+{% for ch in channels %}
+<a class="channel-card {% if selected == ch.id %}current{% endif %}" href="/materials?channel={{ ch.id }}" style="--channel:{{ ch.color }}" {% if selected == ch.id %}aria-current="page"{% endif %}>
+  <span class="channel-mark">{{ ch.mark }}</span><span class="channel-name">{{ ch.name }}</span>
+  <span class="channel-description">{{ ch.description }}</span><span class="channel-link">{% if selected == ch.id %}選択中{% else %}案件を開く →{% endif %}</span>
+</a>
+{% endfor %}
+</nav>
+{% if selected %}
+{% set chosen = (channels | selectattr('id','equalto',selected) | first) %}
+<section class="workspace-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h2>{{ chosen.name }}</h2></div><span class="pill">案件ごとに画風と設定を保存</span></section>
+{% if selected == 'russia' %}
+<div class="russia-routes">
+  <div><strong>いつもの図解スタジオ</strong><p>制作中の図解は、これまでの画面で続けられます。</p><a class="button dark" href="https://zukai-studio.onrender.com/" target="_blank" rel="noopener">図解スタジオを開く ↗</a></div>
+  <div><strong>原稿に沿って素材を作る</strong><p>下で案件を作り、新しい素材スタジオも試せます。両方の制作履歴はそれぞれ保持されます。</p><a class="button" href="#new-project">新しい案件を作る ↓</a></div>
+</div>
+{% endif %}
+{% if selected == 'china' %}<p class="info">中国チャンネルは準備用の枠です。正式な画風・キャラクターは未設定です。専用の生成設定を用意してから制作を始めます。</p>{% endif %}
+<section class="project-layout">
+<form id="new-project" class="panel" data-channel="{{ selected }}">
+  <h3>新しい案件</h3><label for="project-title">動画のタイトル</label><input id="project-title" name="title" required maxlength="160" value="{{ prefill_title }}" placeholder="例：どうして値上げが続くのか">
+  <label for="trello-url">案件カードのURL <span class="subtle">任意</span></label><input id="trello-url" name="trello_url" type="url" value="{{ prefill_trello }}" placeholder="https://trello.com/c/…">
+  <p class="hint">同じTrelloカードから開くと、同じ案件に戻れます。</p>
+  <button class="button dark wide" type="submit">案件を作る →</button>
+  {% if not chosen.ready %}<p class="hint">案件の保存はできます。AI生成には、このチャンネルの生成設定が必要です。</p>{% endif %}
+</form>
+<div><h3 class="project-list-heading">続きから作業する <span class="count">{{ projects | length }}</span></h3>
+<div id="project-list">
+{% for p in projects %}
+<article class="project panel">
+  <h3>{{ p.title }}</h3><p class="hint">作成 {{ p.created_at[:10] }} · 原稿 {{ p.jobs | length }} 件</p>
+  <div class="actions">
+    {% if p.jobs %}<a class="button dark" href="/materials/jobs/{{ p.jobs[-1] }}">素材を選ぶ →</a><a class="button" href="/progress/{{ p.jobs[-1] }}">制作の進み具合</a>{% endif %}
+    <a class="button" href="/?channel_id={{ p.source_channel_id }}&amp;project_id={{ p.project_id }}">{% if p.jobs %}原稿を追加{% else %}原稿を入れる →{% endif %}</a>
+    {% if p.trello_url %}<a class="quiet-link" href="{{ p.trello_url }}" target="_blank" rel="noopener">案件カード ↗</a>{% endif %}
+  </div>
+  {% if p.jobs | length > 1 %}<details><summary>過去の原稿・制作</summary>{% for job in p.jobs[:-1] | reverse %}<a class="history-job" href="/materials/jobs/{{ job }}">{{ job }}</a>{% endfor %}</details>{% endif %}
+</article>
+{% else %}<div class="empty"><span>▧</span><p>このチャンネルの案件はまだありません。</p><p class="hint">左から案件を作ると、原稿を入れられます。<br>従来の案件は「従来の制作画面・履歴」から取り込めます。</p></div>{% endfor %}
+</div></div>
+</section>
+{% else %}
+<div class="welcome-note"><span>01</span><div><strong>まずはチャンネルを選んでください。</strong><p class="subtle">チャンネルの画風・キャラクター・生成設定を引き継いで始めます。</p></div></div>
+{% endif %}
+<footer>素材の採用情報は、原稿とセットでAI編集へ渡せます。動画の確認・最終承認は編集後に行います。</footer>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('new-project')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget, button = form.querySelector('button');
+  button.disabled = true;
+  try {
+    const result = await Studio.api('/api/material-projects', {method:'POST', body:JSON.stringify({
+      channel_id:form.dataset.channel, title:form.elements.namedItem('title').value, trello_url:form.elements.namedItem('trello_url').value
+    })});
+    location.href = result.project.jobs.length
+      ? '/materials/jobs/' + encodeURIComponent(result.project.jobs.at(-1))
+      : '/?channel_id=' + encodeURIComponent(result.project.source_channel_id) + '&project_id=' + encodeURIComponent(result.project.project_id);
+  } catch (error) { Studio.notice(error.message, true); button.disabled = false; }
+});
+</script>
+{% endblock %}

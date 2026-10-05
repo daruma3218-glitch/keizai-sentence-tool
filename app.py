@@ -11,6 +11,7 @@ import csv
 import json
 import os
 import secrets
+import sys
 import shutil
 import threading
 import zipfile
@@ -32,6 +33,7 @@ from flask import (
 )
 
 from utils import load_env, load_json, SNAPSHOT_IO_LOCK
+import material_store
 from pipeline import SentencePipeline, VALID_STYLES
 from generator import (PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS,
                        OPENAI_IMAGE_MODEL_CHOICES, resolve_openai_image_model)
@@ -88,7 +90,7 @@ def resolve_channel_keys(channel: dict) -> dict:
             v = os.environ.get(f"{prefix}_{name}", "").strip()
             if v:
                 return v
-        return os.environ.get(name, "").strip()
+        return "" if channel.get("dedicated_keys_only") else os.environ.get(name, "").strip()
     return {
         "anthropic": pick("ANTHROPIC_API_KEY"),
         "gemini": pick("GEMINI_API_KEY"),
@@ -183,6 +185,7 @@ def login_required(f):
             # JSON で 401 を返し、UI に「ログインし直して」と表示させる。
             if request.path.startswith("/api/") or request.path == "/start":
                 return jsonify({"error": "ログインセッションが切れました。ページを再読み込みしてログインし直してください。"}), 401
+            session["login_next"] = request.full_path.rstrip("?") if request.path.startswith(("/materials", "/progress/")) else "/"
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
@@ -245,6 +248,8 @@ def version():
         subsk_worker = False
     return jsonify({
         "service": "keizai-sentence-tool",
+        "material_studio": {"version": material_store.VERSION, "entry": "/materials",
+                            "immutable_candidates": True, "handoff_schema": 1},
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
         "service_name": os.environ.get("RENDER_SERVICE_NAME", ""),
         "template_has_style_preset_input": 'name="style_preset"' in upload_html,
@@ -276,7 +281,8 @@ def login():
         if request.form.get("password", "") == APP_PASSWORD:
             session.permanent = True  # 14日間有効（PERMANENT_SESSION_LIFETIME）
             session["authenticated"] = True
-            return redirect(url_for("index"))
+            destination = session.pop("login_next", "/")
+            return redirect(destination if destination.startswith("/") and not destination.startswith("//") and "\\" not in destination else "/")
         error = "パスワードが正しくありません"
     return render_template("login.html", error=error)
 
@@ -471,7 +477,7 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
                          channel_id: str = "default", ch_keys: dict = None,
                          character_ref_path: str = "",
                          title_override: str = "", fact_context: str = "",
-                         resume: bool = False, openai_model: str = ""):
+                         resume: bool = False, openai_model: str = "", profile_override: dict = None):
     job_dir = OUTPUT_DIR / job_id
     ch_keys = ch_keys or {}
     provider_label = ("nanobanana (Gemini)" if provider == PROVIDER_NANOBANANA
@@ -495,7 +501,10 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
         def on_item(info):
             pass  # rows_progress.json 経由でフロントへ
 
-        defaults = get_channel(channel_id).get("defaults") or {}
+        saved_context = material_store.read(job_dir / "material_context.json") or {}
+        defaults = profile_override if profile_override is not None else saved_context.get("profile")
+        if defaults is None:
+            defaults = get_channel(channel_id).get("defaults") or {}
         # タイプ別プロバイダ: キー未設定の指定は主プロバイダに自動代替（ジョブを止めない）
         _effective_tp, _tp_notes = _effective_type_providers(defaults, ch_keys)
         for _n in _tp_notes:
@@ -551,6 +560,7 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
             allow_ai_realphoto=bool(defaults.get("allow_ai_realphoto", True)),
             style_check=bool(defaults.get("style_check", False)),
             limb_check=bool(defaults.get("limb_check", False)),
+            coverage_mode=defaults.get("coverage_mode", "legacy"),
             progress_callback=on_progress,
             log_callback=on_log,
             item_callback=on_item,
@@ -593,6 +603,19 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
 @app.route("/")
 @login_required
 def index():
+    selected_channel = request.args.get("channel_id", "")
+    if selected_channel and selected_channel not in {c["id"] for c in load_channels()}:
+        return "チャンネルを選び直してください", 400
+    selected_project = None
+    project_id = request.args.get("project_id", "")
+    if project_id:
+        try:
+            selected_project = material_store.get_project(OUTPUT_ROOT, project_id)
+            if selected_channel and selected_channel != selected_project["source_channel_id"]:
+                return "案件とチャンネルが一致しません", 409
+            selected_channel = selected_project["source_channel_id"]
+        except ValueError as exc:
+            return str(exc), 404
     past_jobs = []
     if OUTPUT_DIR.exists():
         for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
@@ -623,6 +646,8 @@ def index():
     # 各チャンネルのキー設定状況（UI 表示用）
     channels = load_channels()
     for c in channels:
+        if selected_project and c["id"] == selected_channel:
+            c["defaults"] = selected_project["profile"]
         keys = resolve_channel_keys(c)
         c["_has_gemini"] = bool(keys["gemini"])
         c["_has_openai"] = bool(keys["openai"])
@@ -634,7 +659,9 @@ def index():
         "upload.html",
         openai_image_models=[{"id": m, "label": l} for m, l in OPENAI_IMAGE_MODEL_CHOICES],
         past_jobs=past_jobs[:30],
-        channels=usable or channels,
+        channels=[c for c in channels if c["id"] == selected_channel] if selected_channel else (usable or channels),
+        selected_channel=selected_channel,
+        material_project=selected_project,
         board=generation_board(),
         has_anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
         has_gemini=bool(os.environ.get("GEMINI_API_KEY")),
@@ -1138,7 +1165,18 @@ def download_scene_fix_zip(job_id):
 def start_job():
     # チャンネル選択 → そのチャンネルの API キーを解決
     channel_id = request.form.get("channel_id", "default")
+    if channel_id not in {c["id"] for c in load_channels()}:
+        return jsonify(error="チャンネルを選び直してください"), 400
     channel = get_channel(channel_id)
+    material_project = None
+    if request.form.get("project_id"):
+        try:
+            material_project = material_store.get_project(OUTPUT_ROOT, request.form["project_id"])
+            if material_project["source_channel_id"] != channel_id:
+                raise ValueError("案件とチャンネルが一致しません")
+            channel = dict(channel, defaults=material_project["profile"])
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
     channel_id = channel.get("id", "default")
     ch_keys = resolve_channel_keys(channel)
 
@@ -1197,7 +1235,8 @@ def start_job():
         missing.append("OPENAI_API_KEY")
     if missing:
         pfx = channel.get("api_env_prefix", "")
-        hint = f"（チャンネル「{channel.get('name','')}」用に {pfx}_... を設定するか共通キーを設定）" if pfx else ""
+        hint = (f"（チャンネル「{channel.get('name','')}」用に {pfx}_... を設定）" if channel.get("dedicated_keys_only")
+                else f"（チャンネル「{channel.get('name','')}」用に {pfx}_... を設定するか共通キーを設定）") if pfx else ""
         return jsonify({"error": f"{', '.join(missing)} が設定されていません{hint}"}), 400
 
     # 原稿取得（.docx は見出しを章として解析 / .json または貼り付けJSONは原稿パイプライン final.json 直結）
@@ -1254,9 +1293,19 @@ def start_job():
     if not user_instructions:
         user_instructions = (channel.get("defaults", {}) or {}).get("user_instructions", "").strip()
 
-    job_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    job_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(3)
     job_dir = OUTPUT_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    if material_project:
+        context = material_store.bind_job(OUTPUT_ROOT, job_dir, material_project)
+        context["generation_settings"] = dict(
+            provider=provider, openai_image_model=openai_model, openai_quality=openai_quality,
+            style_preset=style_preset, worldview_desc=worldview_desc, worldview_mode=worldview_on,
+            style_lock=bool(defaults.get("style_lock")) and bool(worldview_desc),
+            character_ref=defaults.get("character_ref", "") if worldview_on else "",
+            route_mode=route_mode, max_diagrams=max_diagrams, user_instructions=user_instructions)
+        material_store.save(job_dir / "material_context.json", context)
+        title_override = material_project["title"]
     (job_dir / "manuscript.txt").write_text(manuscript_text, encoding="utf-8")
     if user_instructions:
         (job_dir / "user_instructions.txt").write_text(user_instructions, encoding="utf-8")
@@ -1304,7 +1353,8 @@ def start_job():
         args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
               skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
               channel_id, ch_keys, character_ref_path, title_override, fact_context),
-        kwargs={"openai_model": openai_model},
+        kwargs={"openai_model": openai_model,
+                "profile_override": material_project["profile"] if material_project else None},
         daemon=True,
     )
     thread.start()
@@ -1489,7 +1539,12 @@ def api_web_pick(job_id, no):
 @app.route("/progress/<job_id>")
 @login_required
 def progress_page(job_id):
-    return render_template("progress.html", job_id=job_id)
+    d = _safe_job_dir(job_id)
+    state = load_json(d / "job.json", {}) if d else {}
+    manifest = load_json(d / "manifest.json", {}) if d else {}
+    channel_id = (state or {}).get("channel_id") or (manifest or {}).get("channel_id")
+    return render_template("progress.html", job_id=job_id,
+                           material_supported=channel_id in material_store.ALIASES)
 
 
 @app.route("/api/status/<job_id>")
@@ -2652,6 +2707,10 @@ def download_zip(job_id):
                 zf.write(p, arc)
 
     return _send_temp_zip(tmp_path, f"{safe_title}_{job_id}.zip")
+
+
+import material_routes
+material_routes.register(sys.modules[__name__])
 
 
 if __name__ == "__main__":

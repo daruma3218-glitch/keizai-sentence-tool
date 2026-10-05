@@ -1,0 +1,29 @@
+{% extends "material_base.html" %}
+{% block title %}{{ title }}｜素材スタジオ{% endblock %}
+{% block content %}
+<section class="library-heading">
+  <div><a class="back-link" href="/materials?channel={{ channel.id }}">← {{ channel.name }}</a><h1>{{ title }}</h1><p class="subtle">候補を比べて、動画に使う素材を選びます。</p></div>
+  <div class="actions"><a class="button" href="/progress/{{ job_id }}">制作の進み具合</a><button class="button" id="refresh">素材を読み込む ↻</button></div>
+</section>
+<div class="summary-bar"><div><strong id="adoption-count">読込中…</strong><span id="job-status" class="subtle"></span></div><div class="actions"><button class="button compact" id="undo">直前の採用操作を戻す</button><a class="button dark compact" id="download" href="/materials/jobs/{{ job_id }}/download">採用素材をダウンロード ↓</a></div></div>
+<div class="library-controls"><nav class="filters" aria-label="素材の絞り込み"><button data-filter="all" class="active">すべて</button><button data-filter="pending">未採用</button><button data-filter="selected">採用済み</button><button data-filter="flagged">要修正</button></nav><input id="search" type="search" placeholder="原稿から検索" aria-label="原稿から検索"></div>
+<p id="operation-state" class="info" hidden></p>
+<section id="rows" aria-label="原稿と候補"><p class="empty">素材を読み込んでいます。</p></section>
+<footer><a href="/api/material-jobs/{{ job_id }}/handoff" target="_blank" rel="noopener">AI編集用の採用情報（JSON）</a><p>ダウンロードには、採用した画像・原稿との対応・素材の版が含まれます。音声との時刻合わせと動画の最終確認は、編集側で行います。</p><p id="cost-note">追加生成の回数を記録します。費用は利用先の請求と照合して振り返ります。</p></footer>
+<dialog id="variant-dialog">
+  <form id="variant-form">
+    <div class="dialog-heading"><h2 id="variant-title">候補を追加</h2><button type="button" class="icon-button" data-close="variant-dialog" aria-label="閉じる">×</button></div>
+    <p id="variant-scene" class="subtle"></p><img id="variant-preview" class="variant-preview" alt="手直しする候補" hidden>
+    <label id="instruction-label" for="instruction">どんな案にするか</label><textarea id="instruction" rows="3" maxlength="2000" placeholder="例：主役を大きく、余白を減らして"></textarea>
+    <label id="file-label" for="image-file" hidden>画像を選ぶ</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+    <div id="count-field"><label for="variant-count">生成する候補数</label><select id="variant-count"><option value="1">1案</option><option value="2">2案を比較する</option></select></div>
+    <p id="variant-help" class="hint">現在の候補を残して、別の候補を追加します。採用は自分で選べます。</p>
+    <div class="actions"><button type="button" class="button" data-close="variant-dialog">キャンセル</button><button id="variant-submit" type="submit" class="button dark">候補を作る</button></div>
+  </form>
+</dialog>
+<dialog id="preview-dialog" class="image-dialog"><button class="icon-button" data-close="preview-dialog" aria-label="閉じる">×</button><img id="preview-image" alt="候補の拡大表示"></dialog>
+{% endblock %}
+{% block scripts %}
+<script>window.materialJobId = {{ job_id | tojson }};</script>
+<script src="{{ url_for('static', filename='material_library.js') }}"></script>
+{% endblock %}

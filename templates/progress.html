@@ -42,6 +42,7 @@
         <span class="font-bold text-gray-900 text-base">センテンスつくーる</span>
       </a>
       <div class="flex items-center gap-3">
+        {% if material_supported %}<a href="/materials/jobs/{{ job_id }}" class="text-sm font-bold text-emerald-700">候補を比較・採用する →</a>{% endif %}
         <span class="text-xs text-gray-400 font-mono">{{ job_id }}</span>
         <a href="/" class="text-xs text-cyan-600 hover:underline">+ 新規ジョブ</a>
       </div>
