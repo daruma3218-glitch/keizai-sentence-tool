@@ -17,11 +17,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
 
-VERSION = "2026-10-09.3"
+VERSION = "2026-10-09.4"
 LOCK = threading.RLock()
 CHANNELS = {
     "otona": {"id": "otona", "source_id": "otona", "name": "大人の学び直しTV", "color": "#305a75",
-               "mark": "学", "default_mode": "sentence", "description": "仕組み説明の素材を少数試作。必要な場面の原稿を入れ、採用するものを選びます。"},
+               "mark": "学", "logo": "channel-logos/otona.png", "logo_format": "wide", "default_mode": "sentence", "description": "仕組み説明の素材を少数試作。必要な場面の原稿を入れ、採用するものを選びます。"},
     "russia": {"id": "russia", "source_id": "roshia", "name": "ロシア解体新書", "color": "#a32b35",
                "mark": "ろ", "logo": "channel-logos/roshia.png", "default_mode": "diagram", "description": "図解を作り、候補を選ぶ。原稿に沿った制作も選べます。"},
     "economy": {"id": "economy", "source_id": "keizai", "name": "日本カラクリ経済学", "color": "#28785c",
