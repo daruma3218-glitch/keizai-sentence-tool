@@ -132,6 +132,32 @@
       }
     },
     {
+      "id": "otona",
+      "name": "大人の学び直しTV",
+      "api_env_prefix": "OTONA",
+      "_pilot_note": "2026-10-09会議に基づく素材生成の試用入口。編集者の素材収集・Premiere仮並べは既存基盤を継続。全編量産や公開を承認した設定ではない。",
+      "defaults": {
+        "provider": "gpt-image",
+        "openai_image_model": "gpt-image-2.5-flare",
+        "openai_quality": "medium",
+        "style_preset": "flat_infographic",
+        "route_mode": "auto",
+        "worldview_mode": false,
+        "worldview_desc": "",
+        "style_lock": false,
+        "allow_ai_realphoto": false,
+        "character_ref": "",
+        "concurrency": 2,
+        "max_diagrams": 6,
+        "beat_mode": true,
+        "verify_diagrams": true,
+        "skip_decorative": true,
+        "web_image_count": 0,
+        "allow_maps": false,
+        "user_instructions": "大人の学び直しTVの編集用素材の試作。原稿全文の一括量産ではなく、必要な説明場面を抜粋して試す。原稿の問いと結論、条件、因果関係を保ち、何を見せるかを先に決める。お金の矢印は出し手から受け手へ。比較の条件・人物・位置・尺度を揃え、変わらない条件は固定する。写真が事実の根拠となる場面をAIの実写風画像で代用しない。生成イラストは説明用で、史実・実物の写真とは区別する。すあし社長のキャラクターは承認済み参照画像がある場合だけ使用し、参照がない時は似たキャラを新作しない。数値グラフ・地図は検証済みデータから別工程で作る。背景は説明を読みやすくし、強調する言葉と通常の文字に差をつける。黒背景の一律禁止やキャラの常設はしない。生成物は候補であり、そのまま採用・公開されたものと扱わない。"
+      }
+    },
+    {
       "id": "china",
       "name": "中国チャンネル（準備中）",
       "api_env_prefix": "CHINA",
