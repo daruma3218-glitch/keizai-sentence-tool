@@ -6,8 +6,8 @@
 {% if not selected %}{% include "material_queue.html" %}{% endif %}
 <nav class="channel-grid {% if selected %}channel-grid-compact{% endif %}" aria-label="チャンネル">
 {% for ch in channels %}
-<a class="channel-card {% if ch.logo_format == 'wide' %}logo-wide{% endif %} {% if selected == ch.id %}current{% endif %}" href="/materials?channel={{ ch.id }}" style="--channel:{{ ch.color }}" {% if selected == ch.id %}aria-current="page"{% endif %}>
-  {% if ch.logo %}<img class="channel-logo" src="{{ url_for('static', filename=ch.logo) }}" alt="{{ ch.name }}のロゴ" width="104" height="104">{% else %}<span class="channel-mark" aria-hidden="true">{{ ch.mark }}</span>{% endif %}
+<a class="channel-card {% if selected == ch.id %}current{% endif %}" href="/materials?channel={{ ch.id }}" style="--channel:{{ ch.color }}" {% if selected == ch.id %}aria-current="page"{% endif %}>
+  {% if ch.logo %}<img class="channel-logo" src="{{ url_for('static', filename=ch.logo) }}" alt="{{ ch.logo_alt|default(ch.name ~ 'のロゴ') }}" width="104" height="104">{% else %}<span class="channel-mark" aria-hidden="true">{{ ch.mark }}</span>{% endif %}
   <span class="channel-name">{{ ch.name }}</span><span class="channel-description">{{ ch.description }}</span>
   <span class="channel-link">{% if selected == ch.id %}選択中{% else %}制作・履歴を開く →{% endif %}</span>
 </a>
