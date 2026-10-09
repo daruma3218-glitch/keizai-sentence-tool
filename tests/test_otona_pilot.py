@@ -1,5 +1,6 @@
 """The new channel reaches the existing workflow without changing other channels."""
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 import sys
 
@@ -37,6 +38,29 @@ def test_otona_uses_only_approved_material_key(monkeypatch):
     monkeypatch.setenv('OTONA_OPENAI_API_KEY', 'approved-tv-material-test-key')
     assert appmod.resolve_channel_keys(profile) == {
         'openai': 'approved-tv-material-test-key', 'gemini': '', 'anthropic': ''}
+
+
+def test_browser_can_represent_each_channels_diagram_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmod, 'OUTPUT_ROOT', tmp_path)
+    monkeypatch.setattr(appmod, 'OUTPUT_DIR', tmp_path/'output')
+    monkeypatch.setattr(appmod, 'APP_PASSWORD', '')
+    monkeypatch.setattr(appmod, 'resolve_channel_keys', lambda c: {'openai': 'test-only', 'gemini': '', 'anthropic': ''})
+
+    class Slider(HTMLParser):
+        attributes = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == 'input' and attrs.get('name') == 'max_diagrams':
+                self.attributes = attrs
+
+    slider = Slider()
+    slider.feed(appmod.app.test_client().get('/?channel_id=otona').get_data(as_text=True))
+    assert slider.attributes, 'Rendered upload form must include the diagram limit'
+    low, high, step = (int(slider.attributes[k]) for k in ('min', 'max', 'step'))
+    for channel in appmod.load_channels():
+        limit = channel['defaults'].get('max_diagrams', 150)
+        assert low <= limit <= high and (limit-low) % step == 0, channel['id']
 
 
 def test_authenticated_entry_and_channel_isolation(tmp_path, monkeypatch):
