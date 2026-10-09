@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
 
-VERSION = "2026-10-09.1"
+VERSION = "2026-10-09.2"
 LOCK = threading.RLock()
 CHANNELS = {
     "otona": {"id": "otona", "source_id": "otona", "name": "大人の学び直しTV", "color": "#305a75",

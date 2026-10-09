@@ -28,6 +28,17 @@ def test_registry_profiles_resolve_exactly():
         assert appmod.get_channel(channel['source_id'])['id'] == channel['source_id']
 
 
+def test_otona_uses_only_approved_material_key(monkeypatch):
+    for name in ('OPENAI_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY'):
+        monkeypatch.setenv(name, 'unrelated-common-test-key')
+        monkeypatch.delenv('OTONA_' + name, raising=False)
+    profile = appmod.get_channel('otona')
+    assert appmod.resolve_channel_keys(profile) == {'openai': '', 'gemini': '', 'anthropic': ''}
+    monkeypatch.setenv('OTONA_OPENAI_API_KEY', 'approved-tv-material-test-key')
+    assert appmod.resolve_channel_keys(profile) == {
+        'openai': 'approved-tv-material-test-key', 'gemini': '', 'anthropic': ''}
+
+
 def test_authenticated_entry_and_channel_isolation(tmp_path, monkeypatch):
     monkeypatch.setattr(appmod, 'OUTPUT_ROOT', tmp_path)
     monkeypatch.setattr(appmod, 'OUTPUT_DIR', tmp_path/'output')

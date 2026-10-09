@@ -135,6 +135,7 @@
       "id": "otona",
       "name": "大人の学び直しTV",
       "api_env_prefix": "OTONA",
+      "dedicated_keys_only": true,
       "_pilot_note": "2026-10-09会議に基づく素材生成の試用入口。編集者の素材収集・Premiere仮並べは既存基盤を継続。全編量産や公開を承認した設定ではない。",
       "defaults": {
         "provider": "gpt-image",
