@@ -24,7 +24,8 @@ from google.genai import types
 
 # Pillow（クロップ用）
 from PIL import Image
-from channel_styles import is_suasi_style, SUASI_REFERENCE_INSTRUCTION
+from channel_styles import is_suasi_style
+from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artwork
 
 
 # ===== モデル設定 =====
@@ -803,9 +804,9 @@ class ParallelImageGenerator:
                 self.reference_bytes = None
 
         self.edit_reference_bytes = None
-        # This look promises the approved mascot; missing art must not become a lookalike.
-        if is_suasi_style(self.style_lock_text) and not self.reference_bytes:
-            raise ValueError("すあし社長の承認済み参照画像が見つかりません。生成を開始できません")
+        # Also correct saved V1 projects, whose profile points at the award avatar.
+        # Their saved profile/history stays intact; new output uses the exact original.
+        self.suasi_artwork = load_artwork() if is_suasi_style(self.style_lock_text) else None
         self.edit_reference_mime = "image/png"
         if edit_image_path:
             try:
@@ -815,6 +816,9 @@ class ParallelImageGenerator:
                     self.edit_reference_mime = "image/jpeg" if ep.suffix.lower() in (".jpg", ".jpeg") else "image/png"
             except Exception:
                 self.edit_reference_bytes = None
+        if self.suasi_artwork and self.edit_reference_bytes:
+            self.edit_reference_bytes = diagram_edit_source(self.edit_reference_bytes)
+            self.edit_reference_mime = "image/png" if self.edit_reference_bytes.startswith(b"\x89PNG") else "image/jpeg"
 
         # クライアント初期化（必要な分だけ）
         self.gemini_client = None
@@ -936,16 +940,14 @@ class ParallelImageGenerator:
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(
                 prompt_text, prompt_type, self.style_lock_text)
-            suasi_presenter = is_suasi_style(self.style_lock_text) and prompt_type in ("illustration", "diagram")
-            shows_professor = shows_professor or suasi_presenter
+            suasi_presenter = bool(self.suasi_artwork) and prompt_type in ("illustration", "diagram")
             # 世界観ロック中は、先生が文面に出てこない画像（簡易の指示文を含む）にも参照画像を渡す
             style_reference_only = (not shows_professor and bool(self.style_lock_text)
                                     and prompt_type in STYLE_LOCK_TYPES)
-            use_reference = self.reference_bytes is not None and (shows_professor or style_reference_only)
+            use_reference = (not self.suasi_artwork and self.reference_bytes is not None
+                             and (shows_professor or style_reference_only))
             if use_reference:
-                if is_suasi_style(self.style_lock_text):
-                    lock = SUASI_REFERENCE_INSTRUCTION
-                elif style_reference_only:
+                if style_reference_only:
                     lock = _STYLE_REFERENCE_INSTRUCTION
                 elif prompt_type == "illustration":
                     lock = _CHARACTER_LOCK_INSTRUCTION
@@ -960,15 +962,19 @@ class ParallelImageGenerator:
             if prompt_entry.get("edit_source") and self.edit_reference_bytes:
                 ref_override = self.edit_reference_bytes
                 ref_mime_override = self.edit_reference_mime
-                full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
+                if not self.suasi_artwork:
+                    full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
 
-            if entity_role == "follower" and not use_reference:
+            if entity_role == "follower" and not use_reference and not self.suasi_artwork:
                 if self.provider == PROVIDER_NANOBANANA and entity_ref_bytes:
                     ref_override = entity_ref_bytes
                     ref_mime_override = "image/png"
                     full_prompt = _ENTITY_LOCK_INSTRUCTION + "\n\n" + full_prompt
                 else:
                     full_prompt = _ENTITY_LOCK_TEXT_ONLY + "\n\n" + full_prompt
+
+            if self.suasi_artwork:
+                full_prompt = BOARD_INSTRUCTION + "\n\n" + full_prompt + "\n\n" + BOARD_INSTRUCTION
 
             loop = asyncio.get_running_loop()
 
@@ -991,6 +997,13 @@ class ParallelImageGenerator:
                 success, error = False, f"timeout (> {PER_IMAGE_HARD_TIMEOUT}s)"
             except Exception as e:
                 success, error = False, str(e)[:200]
+
+            presenter_recipe = None
+            if success and suasi_presenter:
+                try:
+                    presenter_recipe = compose_presenter(output_path, self.suasi_artwork)
+                except Exception as exc:
+                    success, error = False, f"すあし社長の原画配置に失敗: {str(exc)[:150]}"
 
             # v3 Step5: realphoto は「イメージ」を焼き込む（報道映像との誤認防止）
             if success and prompt_type == "realphoto" and self.realphoto_watermark:
@@ -1040,6 +1053,8 @@ class ParallelImageGenerator:
                 "success": success,
                 "error": error if not success else "",
             }
+            if presenter_recipe:
+                result["presenter"] = presenter_recipe
 
             self.progress_callback({
                 "index": idx,

@@ -28,16 +28,3 @@ def resolve_style(channel, style_id=""):
     defaults.update(deepcopy(choice.get("overrides", {})))
     defaults.update(style_id=choice["id"], style_name=choice["name"])
     return defaults
-
-
-SUASI_REFERENCE_INSTRUCTION = (
-    "APPROVED SUASI SHACHO CHARACTER REFERENCE: The attached image is the exact mascot. "
-    "Preserve his distinctive upright foot-shaped head with five toe bumps across the top, "
-    "large open oval eyes, the reference's friendly smile, rosy cheeks and navy business suit. "
-    "Draw Suasi Shacho exactly once as a small presenter beside the explanation, occupying "
-    "roughly 12-18% of the canvas width, pointing toward its important relationship. "
-    "Change his gesture to fit the explanation. Do not copy the blue square background "
-    "or the creator award; omit the award unless the scene asks for it. "
-    "Keep the actual mechanism, arrows and labels dominant. Do not repeat his face on icons. "
-    "Use the warm restrained B look specified below for the rest of the diagram."
-)
