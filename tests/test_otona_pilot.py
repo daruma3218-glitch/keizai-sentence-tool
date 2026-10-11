@@ -3,6 +3,7 @@ import json
 from html.parser import HTMLParser
 from pathlib import Path
 import sys
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as appmod
@@ -40,7 +41,8 @@ def test_otona_uses_only_approved_material_key(monkeypatch):
         'openai': 'approved-tv-material-test-key', 'gemini': '', 'anthropic': ''}
 
 
-def test_browser_can_represent_each_channels_diagram_limit(tmp_path, monkeypatch):
+@pytest.mark.parametrize('field', ['max_diagrams', 'web_image_count'])
+def test_browser_can_represent_each_channels_diagram_limit(tmp_path, monkeypatch, field):
     monkeypatch.setattr(appmod, 'OUTPUT_ROOT', tmp_path)
     monkeypatch.setattr(appmod, 'OUTPUT_DIR', tmp_path/'output')
     monkeypatch.setattr(appmod, 'APP_PASSWORD', '')
@@ -51,7 +53,7 @@ def test_browser_can_represent_each_channels_diagram_limit(tmp_path, monkeypatch
 
         def handle_starttag(self, tag, attrs):
             attrs = dict(attrs)
-            if tag == 'input' and attrs.get('name') == 'max_diagrams':
+            if tag == 'input' and attrs.get('name') == field:
                 self.attributes = attrs
 
     slider = Slider()
@@ -59,7 +61,7 @@ def test_browser_can_represent_each_channels_diagram_limit(tmp_path, monkeypatch
     assert slider.attributes, 'Rendered upload form must include the diagram limit'
     low, high, step = (int(slider.attributes[k]) for k in ('min', 'max', 'step'))
     for channel in appmod.load_channels():
-        limit = channel['defaults'].get('max_diagrams', 150)
+        limit = channel['defaults'].get(field, 150 if field == 'max_diagrams' else 0)
         assert low <= limit <= high and (limit-low) % step == 0, channel['id']
 
 

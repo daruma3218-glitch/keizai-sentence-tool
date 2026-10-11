@@ -220,13 +220,13 @@
               <input type="checkbox" name="worldview_mode" id="worldviewMode" class="mt-1 w-4 h-4 text-emerald-600 rounded" checked>
               <div>
                 <span class="text-sm font-medium text-gray-700 block">🎭 世界観・キャラクター統一モード（推奨・デフォルトON）</span>
-                <span class="text-xs text-gray-400">登場人物・画風・色調を動画全体で統一して、単調さ・バラつきを防ぎます。下の設定文は自由に編集できます。</span>
+                <span id="worldviewHelp" class="text-xs text-gray-400">登場人物・画風・色調を動画全体で統一して、単調さ・バラつきを防ぎます。下の設定文は自由に編集できます。</span>
               </div>
             </label>
             <textarea name="worldview_desc" id="worldviewDesc" rows="5"
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs leading-relaxed"
               placeholder="統一したい世界観・キャラクターの設定を書いてください">Consistent warm, modern educational illustration world used throughout the whole video. Recurring characters: a friendly young Japanese university student (same simple design every time) and a kind professor character. Soft, cohesive color palette (warm tones with one calm accent color — not always blue). Clean flat-vector style with gentle shading, approachable and trustworthy mood. Keep the same character design, line weight, and palette across every scene so the video feels like one unified series.</textarea>
-            <p class="text-[10px] text-gray-400 mt-1">※ 実写・グラフには適用されません（イラスト/図解のみ統一）。OFFにすると従来通りシーンごとに最適な画風になります。</p>
+            <p id="worldviewToggleHelp" class="text-[10px] text-gray-400 mt-1">※ 実写・グラフには適用されません（イラスト/図解のみ統一）。OFFにすると従来通りシーンごとに最適な画風になります。</p>
             <p id="styleLockNote" class="hidden text-[11px] text-emerald-800 bg-emerald-50 rounded-lg px-3 py-2 mt-2 leading-relaxed">
               🔒 このチャンネルは<strong>世界観ロック</strong>です。上の設定文を、すべてのイラスト・図解の生成指示にそのまま入れて、シーンごとに画風が変わらないようにします。
               <span id="noRealphotoNote" class="hidden">AIの実写風画像は作りません（本物の写真が必要な文は Commons の写真、それ以外は同じ画風のイラスト）。</span>
@@ -277,7 +277,7 @@
               <p class="text-[10px] text-gray-400 mb-2">全文を均等に間引いて配置（例: 250文 → 50枚なら 5文ごとに 1 枚）</p>
               <input type="range" name="max_diagrams" id="maxDiagrams" min="1" max="300" step="1" value="150" class="w-full">
               <div class="flex justify-between text-xs text-gray-400 mt-1">
-                <span>10</span><span>150</span><span>300</span>
+                <span>1</span><span>150</span><span>300</span>
               </div>
             </div>
 
@@ -287,7 +287,7 @@
                 <span class="ml-1 text-purple-600 font-bold" id="webImageCountLabel">50</span>
                 <span class="text-xs text-gray-400">件</span>
               </label>
-              <input type="range" name="web_image_count" id="webImageCount" min="0" max="100" step="10" value="50" class="w-full">
+              <input type="range" name="web_image_count" id="webImageCount" min="0" max="100" step="1" value="50" class="w-full">
               <div class="flex justify-between text-xs text-gray-400 mt-1">
                 <span>0 (オフ)</span><span>50</span><span>100</span>
               </div>
@@ -475,6 +475,10 @@
       if (d.route_mode) setRadio('route_mode', d.route_mode);
       setCheckbox('worldview_mode', d.worldview_mode);
       document.getElementById('worldviewMode').disabled = !!d.style_id;
+      document.getElementById('worldviewHelp').textContent = d.style_id
+        ? 'この案件で選んだ「' + d.style_name + '」を使います。別のテイストは素材スタジオの「新しく作る」で選べます。'
+        : '登場人物・画風・色調を動画全体で統一して、単調さ・バラつきを防ぎます。下の設定文は自由に編集できます。';
+      document.getElementById('worldviewToggleHelp').hidden = !!d.style_id;
       setCheckbox('verify_diagrams', d.verify_diagrams);
       setCheckbox('skip_decorative', d.skip_decorative);
       if (d.worldview_desc !== undefined) { const t = document.getElementById('worldviewDesc'); if (t) { t.value = d.worldview_desc; t.readOnly = !!d.style_id; } }
@@ -528,7 +532,7 @@
         ? `すべて ${engineName([...byEngine.keys()][0])}`
         : [...byEngine].map(([engine, labels]) => `${labels.join('・')}＝${engineName(engine)}`).join('／');
       if (byEngine.has('gpt-image')) models += `（品質 ${quality}）`;
-      const worldOn = fd.get('worldview_mode') === 'on';
+      const worldOn = !!d.style_id || fd.get('worldview_mode') === 'on';
       const world = !worldOn ? '世界観の統一: オフ（シーンごとに画風が変わります）'
         : d.style_lock ? '🔒 世界観ロック: チャンネルの絵柄に固定' : '世界観の統一: オン';
       const verify = fd.get('verify_diagrams') === 'on';
@@ -538,7 +542,9 @@
       const items = [
         `画像モデル: ${models}`,
         world,
-        d.allow_ai_realphoto === false ? '実写: AIの実写風は作らない（本物の写真は Commons から）' : null,
+        d.allow_ai_realphoto === false ? (d.photo_source === 'commons_then_quote'
+          ? '実写: Commons・出典付き写真の候補を探す（AIの実写風は作らない）'
+          : '実写: AIの実写風は作らない（本物の写真は Commons から）') : null,
         check,
         `枚数: 画像は最大 ${fd.get('max_diagrams')} 枚・Web写真は ${fd.get('web_image_count')} 件まで`,
       ].filter(Boolean);
