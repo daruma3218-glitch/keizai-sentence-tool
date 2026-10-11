@@ -56,6 +56,45 @@ def choose(d, candidate):
                                       "action": "select", "candidate_id": candidate["id"]})
 
 
+def test_suasi_pose_selector_is_scoped_and_saved_with_new_candidate(studio, monkeypatch):
+    import generator
+    import suasi_presenter
+    client, headers, root = studio
+    d, _, old = make_job(root, channel="otona")
+    context = store.read(d/'material_context.json')
+    context['profile']['worldview_desc'] = '[OTONA_SUASI_B_V1]'
+    store.save(d/'material_context.json', context)
+    assert 'id="suasi-pose"' in client.get('/materials/jobs/sample').text
+    monkeypatch.setattr(appmod, 'resolve_channel_keys', lambda c: {'openai':'test-only','gemini':'','anthropic':''})
+    seen=[]
+    def generate(**kwargs):
+        entry = kwargs['prompts'][0]
+        seen.append(entry)
+        target = kwargs['output_dir']/'1.png'
+        Image.new('RGB',(800,450),'white').save(target)
+        recipe = suasi_presenter.compose_presenter(target,suasi_presenter.load_artwork(entry['suasi_pose']),entry['suasi_pose'])
+        return [{'success':True,'filename':'1.png','presenter':recipe}]
+    monkeypatch.setattr(generator,'run_parallel_generation',generate)
+    revision = store.load_library(d)['revision']
+    body={'request_id':'pose-choice','revision':revision,'no':'1','kind':'generate','count':'1','suasi_pose':'explaining'}
+    response=client.post('/api/material-jobs/sample/variant',data=body,headers=headers)
+    assert response.status_code == 200, response.text
+    candidates=response.get_json()['library']['candidates']['1']
+    assert candidates[0]['id'] == old['id'] and len(candidates)==2
+    assert candidates[1]['presenter']['pose_id']=='explaining'
+    assert seen[0]['suasi_pose_override'] is True
+    assert response.get_json()['library']['selections']=={}
+    body.update(request_id='bad-pose',revision=response.get_json()['library']['revision'],suasi_pose='unknown')
+    assert client.post('/api/material-jobs/sample/variant',data=body,headers=headers).status_code==409
+    assert len(seen)==1
+    context['profile']['worldview_desc']='[OTONA_TV_V1]'
+    store.save(d/'material_context.json',context)
+    assert 'id="suasi-pose"' not in client.get('/materials/jobs/sample').text
+    body.update(request_id='wrong-style',suasi_pose='pointing')
+    assert client.post('/api/material-jobs/sample/variant',data=body,headers=headers).status_code==409
+    assert len(seen)==1
+
+
 def test_channel_entry_templates_and_no_secret_output(studio, monkeypatch):
     client, _, root = studio
     monkeypatch.setenv("KEIZAI_OPENAI_API_KEY", "do-not-print-this")

@@ -162,7 +162,10 @@ def register(module):
         manifest = store.read(d / "manifest.json", {}) or {}
         source_channel = (context or {}).get("source_channel_id") or manifest.get("channel_id") or state.get("channel_id")
         ch = store.channel(source_channel)
+        from channel_styles import is_suasi_style
+        saved = dict((context or {}).get("profile") or {}, **((context or {}).get("generation_settings") or {}))
         return render_template("material_library.html", job_id=job_id, channel=ch, csrf=token(),
+                               suasi_presenter_enabled=is_suasi_style(saved.get("worldview_desc", "")),
                                style_name=((context or {}).get("profile") or {}).get("style_name", ""),
                                title=(context or {}).get("title") or manifest.get("title") or job_id)
 
@@ -240,6 +243,11 @@ def register(module):
         config = profile(context["channel_id"])
         keys = module.resolve_channel_keys(config)
         defaults = dict(context["profile"], **context.get("generation_settings", {}))
+        from channel_styles import is_suasi_style
+        from suasi_pose import POSE_NAMES
+        pose_override = body.get("suasi_pose", "").strip()
+        if pose_override and (pose_override not in POSE_NAMES or not is_suasi_style(defaults.get("worldview_desc", ""))):
+            raise ValueError("この素材で使える表情・ポーズを選んでください")
         route = row.get("route")
         if route not in {"diagram", "illustration", "realphoto"}:
             route = "diagram"
@@ -299,6 +307,10 @@ def register(module):
                     row.get("sentence", ""), route, i, extra, defaults, fix_mode="same_style",
                     style_locked=bool(locked)), "type": route, "section": row.get("chapter_title", ""),
                     "excerpt": row.get("sentence", ""), "keypoint": row.get("sentence", "")[:30],
+                    "suasi_pose": pose_override or row.get("suasi_pose", ""),
+                    "suasi_pose_reason": "編集画面で選択" if pose_override else row.get("suasi_pose_reason", ""),
+                    "suasi_pose_override": bool(pose_override),
+                    "diagram_blueprint": row.get("diagram_blueprint", {}),
                     "style": defaults.get("style_preset", "flat_infographic"), "character": False,
                     "edit_source": kind == "edit",
                     "allowed_terms": module._scene_fix_allowed_terms(row.get("sentence", ""), route)}
@@ -321,7 +333,8 @@ def register(module):
                         produced.append((store.safe_path(output, result["filename"]),
                                          "手直し案" if kind == "edit" else "追加の候補",
                                          {"parent_id": source["id"] if source else None, "origin": "ai",
-                                          "provider": provider, "request_id": request_id}))
+                                          "provider": provider, "request_id": request_id,
+                                          "presenter": result.get("presenter")}))
                 if not produced:
                     raise ValueError("候補を作成できませんでした。元画像と採用状態は保持しています")
             with store.LOCK:

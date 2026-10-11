@@ -24,6 +24,7 @@
     <label id="instruction-label" for="instruction">どんな案にするか</label><textarea id="instruction" rows="3" maxlength="2000" placeholder="例：主役を大きく、余白を減らして"></textarea>
     <label id="file-label" for="image-file" hidden>画像を選ぶ</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
     <div id="count-field"><label for="variant-count">生成する候補数</label><select id="variant-count"><option value="1">1案</option><option value="2">2案を比較する</option></select></div>
+    {% if suasi_presenter_enabled %}<div id="pose-field"><label for="suasi-pose">すあし社長の表情・ポーズ</label><select id="suasi-pose"><option value="">おまかせ（内容に合わせる・手直しは元のポーズ）</option><option value="pointing">指差し — 仕組み・比較の説明</option><option value="thinking">考える — 問い・判断条件</option><option value="surprised">驚く — 意外な事実</option><option value="explaining">両手で説明 — 全体像・まとめ</option></select></div>{% endif %}
     <p id="variant-help" class="hint">現在の候補を残して、別の候補を追加します。採用は自分で選べます。</p>
     <div class="actions"><button type="button" class="button" data-close="variant-dialog">キャンセル</button><button id="variant-submit" type="submit" class="button dark">候補を作る</button></div>
   </form>

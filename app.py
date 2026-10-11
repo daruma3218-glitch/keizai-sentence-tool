@@ -2420,6 +2420,8 @@ def api_regenerate(job_id, no):
         "keypoint": (target.get("sentence", "") or "")[:30],
         "allowed_terms": target.get("allowed_terms", []),
         "diagram_blueprint": target.get("diagram_blueprint", {}),
+        "suasi_pose": target.get("suasi_pose", ""),
+        "suasi_pose_reason": target.get("suasi_pose_reason", ""),
         "style": style_preset,
         "edit_source": bool(edit_image_path),
         # 元の行が先生シーン(character)なら、再生成でもキャラ固定

@@ -83,10 +83,11 @@ def test_suasi_places_original_without_sending_him_for_redrawing(tmp_path, monke
     for forbidden in ('professor', 'gray tweed', 'half-lidded', 'PRESET STYLE'):
         assert forbidden not in prompt
     recipe = result[0]['presenter']
-    assert recipe['art_sha256'] == suasi_presenter.ART_SHA256
+    assert recipe['pose_id'] == 'pointing'
+    assert recipe['art_sha256'] == suasi_presenter.pose_catalog()['pointing']['sha256']
     assert recipe['diagram_box'][2] < recipe['character_box'][0]
-    with Image.open(ref) as original:
-        sprite = original.crop(original.getchannel('A').getbbox())
+    with Image.open(BytesIO(suasi_presenter.load_artwork('pointing'))) as original:
+        sprite = original.crop(original.getchannel('A').point(lambda v: 255 if v > 16 else 0).getbbox())
         x1, y1, x2, y2 = recipe['character_box']
         sprite = sprite.resize((x2-x1,y2-y1),Image.Resampling.LANCZOS)
         expected = Image.new('RGBA', sprite.size, suasi_presenter.BACKGROUND)

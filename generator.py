@@ -25,7 +25,8 @@ from google.genai import types
 # Pillow（クロップ用）
 from PIL import Image
 from channel_styles import is_suasi_style
-from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artwork
+from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
+from suasi_pose import select_pose, POSE_NAMES
 
 
 # ===== モデル設定 =====
@@ -818,7 +819,9 @@ class ParallelImageGenerator:
         self.edit_reference_bytes = None
         # Also correct saved V1 projects, whose profile points at the award avatar.
         # Their saved profile/history stays intact; new output uses the exact original.
-        self.suasi_artwork = load_artwork() if is_suasi_style(self.style_lock_text) else None
+        self.suasi_artworks = load_artworks() if is_suasi_style(self.style_lock_text) else {}
+        self.suasi_artwork = self.suasi_artworks.get("good")
+        self.suasi_edit_recipe = None
         self.edit_reference_mime = "image/png"
         if edit_image_path:
             try:
@@ -829,6 +832,7 @@ class ParallelImageGenerator:
             except Exception:
                 self.edit_reference_bytes = None
         if self.suasi_artwork and self.edit_reference_bytes:
+            self.suasi_edit_recipe = read_recipe(self.edit_reference_bytes)
             self.edit_reference_bytes = diagram_edit_source(self.edit_reference_bytes)
             self.edit_reference_mime = "image/png" if self.edit_reference_bytes.startswith(b"\x89PNG") else "image/jpeg"
 
@@ -956,6 +960,12 @@ class ParallelImageGenerator:
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(
                 prompt_text, prompt_type, self.style_lock_text)
             suasi_presenter = bool(self.suasi_artwork) and prompt_type in ("illustration", "diagram")
+            pose = select_pose(prompt_entry) if suasi_presenter else None
+            saved_pose = (self.suasi_edit_recipe or {}).get("pose_id")
+            if (pose and prompt_entry.get("edit_source") and saved_pose in POSE_NAMES
+                    and not prompt_entry.get("suasi_pose_override")
+                    and pose["source"] != "tone_guard"):
+                pose = {"pose_id": saved_pose, "reason": "手直し元の確認済みポーズを維持", "source": "edit_source"}
             # 世界観ロック中は、先生が文面に出てこない画像（簡易の指示文を含む）にも参照画像を渡す
             style_reference_only = (not shows_professor and bool(self.style_lock_text)
                                     and prompt_type in STYLE_LOCK_TYPES)
@@ -1016,7 +1026,8 @@ class ParallelImageGenerator:
             presenter_recipe = None
             if success and suasi_presenter:
                 try:
-                    presenter_recipe = compose_presenter(output_path, self.suasi_artwork)
+                    presenter_recipe = compose_presenter(output_path, self.suasi_artworks[pose["pose_id"]],
+                                                         pose["pose_id"], pose["reason"])
                 except Exception as exc:
                     success, error = False, f"すあし社長の原画配置に失敗: {str(exc)[:150]}"
 

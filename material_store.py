@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
 
-VERSION = "2026-10-11.4"
+VERSION = "2026-10-11.5"
 LOCK = threading.RLock()
 CHANNELS = {
     "otona": {"id": "otona", "source_id": "otona", "name": "大人の学び直しTV", "color": "#305a75",
@@ -167,6 +167,7 @@ def snapshot(job_dir, library, no, path, label, metadata=None):
         raise ValueError("画像が見つかりません")
     try:
         with Image.open(path) as image:
+            presenter_raw = image.info.get("studio_suasi_presenter")
             image.verify()
     except (OSError, SyntaxError):
         raise ValueError("画像を読み込めません。生成中の場合は少し待って読み込み直してください")
@@ -180,9 +181,16 @@ def snapshot(job_dir, library, no, path, label, metadata=None):
             temp.unlink()
             raise ValueError("画像が更新中です。少し待って読み込み直してください")
         temp.replace(blob)
+    metadata = dict(metadata or {})
+    if presenter_raw and not metadata.get("presenter"):
+        from suasi_presenter import read_recipe
+        try:
+            metadata["presenter"] = read_recipe(path.read_bytes())
+        except ValueError:
+            pass  # Imported files need not contain a valid studio recipe.
     entry = {"id": str(no) + "-" + checksum, "sha256": checksum,
              "filename": blob.relative_to(job_dir).as_posix(), "label": label,
-             "created_at": now(), **(metadata or {})}
+             "created_at": now(), **metadata}
     variants = library["candidates"].setdefault(str(no), [])
     previous = next((v for v in variants if v["id"] == entry["id"]), None)
     if not previous:

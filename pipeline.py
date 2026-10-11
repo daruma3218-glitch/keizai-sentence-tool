@@ -1072,6 +1072,8 @@ class SentencePipeline:
                 prompt=r.get("prompt", ""),
                 allowed_terms=r.get("allowed_terms", []),
                 diagram_blueprint=r.get("diagram_blueprint", {}),
+                suasi_pose=r.get("suasi_pose", ""),
+                suasi_pose_reason=r.get("suasi_pose_reason", ""),
                 type=r.get("type", "illustration"),
             )
         self._progress(2, "プロンプト生成完了", 35)
@@ -1357,6 +1359,8 @@ class SentencePipeline:
                     "keypoint": r.get("sentence", "")[:30],
                     "allowed_terms": r.get("allowed_terms", []),
                     "diagram_blueprint": r.get("diagram_blueprint", {}),
+                    "suasi_pose": r.get("suasi_pose", ""),
+                    "suasi_pose_reason": r.get("suasi_pose_reason", ""),
                     "style": self.style_preset,
                     # キャラ固定: 先生が描かれる illustration のみ参照画像を使う
                     "character": bool(r.get("character", False)) and img_type == "illustration",
@@ -1648,11 +1652,15 @@ class SentencePipeline:
                         prompt=r.get("prompt", ""),
                         allowed_terms=r.get("allowed_terms", []),
                         type=fallback_route,
+                        suasi_pose=r.get("suasi_pose", ""),
+                        suasi_pose_reason=r.get("suasi_pose_reason", ""),
                     )
                     fallback_targets.append({
                         "index": r["no"],
                         "prompt": r.get("prompt", ""),
                         "type": fallback_route,
+                        "suasi_pose": r.get("suasi_pose", ""),
+                        "suasi_pose_reason": r.get("suasi_pose_reason", ""),
                         "section": r.get("chapter_title", ""),
                         "chapter_index": r.get("chapter_index"),
                         "block_index": r.get("block_index"),

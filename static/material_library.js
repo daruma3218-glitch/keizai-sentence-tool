@@ -1,6 +1,7 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id), esc = Studio.escape;
+  const poseNames = {pointing:'指差し', thinking:'考える', surprised:'驚く', explaining:'両手で説明', good:'グッド'};
   const base = '/api/material-jobs/' + encodeURIComponent(window.materialJobId);
   let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
   const storageKey = 'material.selection.v1.' + window.materialJobId;
@@ -85,6 +86,7 @@
           return '<div class="candidate ' + (chosen ? 'selected' : '') + '" data-candidate="' + esc(c.id) + '">' +
             '<button class="image-button" data-action="preview" aria-label="候補を拡大"><img loading="lazy" src="' + src(c) + '" alt="' + esc(c.label) + '"></button>' +
             '<div class="candidate-body"><div class="candidate-caption"><strong>' + esc(c.label) + '</strong><span class="hint">' + esc(c.created_at?.slice(0,10)) + '</span></div>' +
+            (poseNames[c.presenter?.pose_id] ? '<p class="hint">すあし社長：' + esc(poseNames[c.presenter.pose_id]) + '</p>' : '') +
             '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
             '<div class="candidate-tools"><button data-action="edit">指示して手直し</button><button data-action="flip">左右反転</button></div>' +
             (c.web_source_url ? '<a class="hint" href="' + esc(/^https?:\/\//.test(c.web_source_url) ? c.web_source_url : '#') + '" target="_blank" rel="noopener">出典を確認 ↗</a>' : '') +
@@ -131,6 +133,7 @@
     $('variant-scene').textContent = row.sentence;
     $('instruction').value = ''; $('image-file').value = ''; $('variant-count').value = '1';
     const ai = kind === 'generate' || kind === 'edit';
+    if ($('pose-field')) { $('pose-field').hidden = !ai; $('suasi-pose').value = ''; }
     $('instruction').hidden = $('instruction-label').hidden = !ai;
     $('instruction').required = kind === 'edit';
     $('image-file').hidden = $('file-label').hidden = kind !== 'upload';
@@ -235,6 +238,7 @@
     const body = new FormData();
     Object.entries(operation).forEach(([key, value]) => body.append(key, value));
     body.append('instruction', $('instruction').value); body.append('count', $('variant-count').value);
+    if ($('suasi-pose') && !$('pose-field').hidden) body.append('suasi_pose', $('suasi-pose').value);
     if ($('image-file').files[0]) body.append('image', $('image-file').files[0]);
     $('variant-dialog').close(); setBusy(true);
     $('operation-state').hidden = false; $('operation-state').textContent = '候補を作成しています。このままお待ちください。';

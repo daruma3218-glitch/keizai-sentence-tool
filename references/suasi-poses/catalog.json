@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "identity_master_sha256": "eaf4886892f21ed067fa8700ed7aaa72480e3a22f68e021f44fb3f5c023c77ee",
+  "approval": "2026-10-11: 社長が4案を評価し、素材スタジオで内容に応じて使い分けるよう指示。",
+  "preparation": "承認済み図解のキャラを内蔵image_genで透過素材化。Codexが顔・全身・明暗背景・使用サイズを目視。原画は別に保持。",
+  "poses": {
+    "pointing": {
+      "name": "指差し",
+      "sha256": "5e0166d5f82941205d2cab92b25fae4259ccd01c2e5b500106407222b9806ae3",
+      "source": "01-pointing.png",
+      "file": "pointing.png",
+      "correction": "2026-10-11: 社長の「腕が少し長い」という指摘を受け、指差し腕だけを短くし肘を軽く曲げた。顔・胴・反対側の腕を保持。Codexが原画と全身・使用サイズを再確認。"
+    },
+    "thinking": {
+      "name": "考える",
+      "sha256": "c94965a6bb49592292fe14cd2edb8e556312c0ff15a5bfe25e5f74e5e1bd22dd",
+      "source": "02-thinking.png",
+      "file": "thinking.png"
+    },
+    "surprised": {
+      "name": "驚く",
+      "sha256": "18f40f4697afd32e67c4ec898e15209cf6352f41b76b69ca221db6a75d3481ea",
+      "source": "03-surprised.png",
+      "file": "surprised.png"
+    },
+    "explaining": {
+      "name": "両手で説明",
+      "sha256": "91c53b0334ecc196c16cdb51d8884814e64c5111465a320bcab0a8b33cd326af",
+      "source": "04-open-hands.png",
+      "file": "explaining.png"
+    }
+  }
+}

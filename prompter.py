@@ -15,6 +15,7 @@ import anthropic
 
 from utils import cached_user_content, claude_query, parse_json_array
 from channel_styles import is_otona_style, is_suasi_style
+from suasi_pose import POSE_PLANNING_INSTRUCTION, select_pose
 
 
 # 画像プロンプト・図解設計（blueprint）はASTRAのサブスクCLIを使う。
@@ -635,12 +636,13 @@ type が diagram 以外の項目では diagram_blueprint は空オブジェク�
 JSON のみ。"""
     )
 
+    pose_block = POSE_PLANNING_INSTRUCTION if is_suasi_style(worldview_desc) else ""
     dynamic_prompt_payload = f"""動画原稿「{title}」
 
 入力（type=その項目の描画種別。near_context は設計判断用の前後文脈。画像内ラベルは sentence / allowed_terms 由来に限定）:
 {inputs_json}
 
-{user_block}{kaizen_block}{worldview_block}
+{user_block}{kaizen_block}{worldview_block}{pose_block}
 
 必ず {len(rows_batch)} 件返すこと（順序は入力と同じ）。"""
 
@@ -817,6 +819,10 @@ def generate_all_prompts(
         merged_row["allowed_terms"] = p.get("allowed_terms", [])
         merged_row["diagram_blueprint"] = p.get("diagram_blueprint", {})
         merged_row["character"] = bool(p.get("character", False))  # キャラ固定フラグを引き継ぐ
+        if is_suasi_style(worldview_desc) and merged_row["type"] in ("illustration", "diagram"):
+            pose = select_pose({**merged_row, "suasi_pose": p.get("suasi_pose"),
+                                "suasi_pose_reason": p.get("suasi_pose_reason")})
+            merged_row.update(suasi_pose=pose["pose_id"], suasi_pose_reason=pose["reason"])
         out_rows.append(merged_row)
 
     return out_rows
