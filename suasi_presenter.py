@@ -83,9 +83,16 @@ def read_recipe(data):
                 raise ValueError("invalid diagram bounds")
             if recipe.get("version") == RECIPE_VERSION:
                 pose_id = recipe["pose_id"]
-                expected = ART_SHA256 if pose_id == "good" else pose_catalog()[pose_id]["sha256"]
+                if pose_id == "good":
+                    readable_hashes = {ART_SHA256}
+                else:
+                    pose = pose_catalog()[pose_id]
+                    # Old candidates remain editable after a sprite correction.
+                    # Only the diagram is read; rendering always loads current art.
+                    readable_hashes = {pose["sha256"], *pose.get("retired_sha256", [])}
                 char = recipe["character_box"]
-                if (recipe.get("art_sha256") != expected or len(char) != 4
+                if (recipe.get("identity_master_sha256") != ART_SHA256
+                        or recipe.get("art_sha256") not in readable_hashes or len(char) != 4
                         or not all(type(v) is int for v in char)
                         or not (box[2] < char[0] < char[2] <= image.width
                                 and 0 <= char[1] < char[3] <= image.height)):

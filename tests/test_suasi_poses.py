@@ -102,6 +102,48 @@ def test_missing_pose_blocks_before_paid_client_initialisation(tmp_path,monkeypa
                                          style_lock_text='[OTONA_SUASI_B_V1]')
 
 
+def test_retired_pointing_image_edits_diagram_and_uses_current_art(tmp_path,monkeypatch):
+    source=tmp_path/'retired-pointing.png'
+    Image.new('RGB',(1024,576),'white').save(source)
+    recipe=presenter.compose_presenter(source,presenter.load_artwork('pointing'),'pointing')
+    retired=presenter.pose_catalog()['pointing']['retired_sha256'][0]
+    recipe['art_sha256']=retired
+    with Image.open(source) as saved:
+        old=saved.convert('RGB')
+    ImageDraw.Draw(old).rectangle(recipe['character_box'],fill='red')
+    meta=PngImagePlugin.PngInfo()
+    meta.add_text(presenter.RECIPE_KEY,json.dumps(recipe))
+    old.save(source,pnginfo=meta)
+    gen=generator.ParallelImageGenerator(provider='gpt-image',openai_api_key='test-only',
+        style_lock_text='[OTONA_SUASI_B_V1]',edit_image_path=str(source))
+    with Image.open(BytesIO(gen.edit_reference_bytes)) as board:
+        assert board.getextrema()==((255,255),(255,255),(255,255))
+    def dispatch(prompt,path,*args):
+        Image.new('RGB',(1024,576),'white').save(path)
+        return True,''
+    monkeypatch.setattr(gen,'_dispatch_sync_generate',dispatch)
+    result=asyncio.run(gen.generate_all([{'index':1,'type':'diagram','prompt':'Keep labels',
+        'excerpt':'条件を比べます。','edit_source':True}],tmp_path/'fixed'))[0]
+    assert result['success']
+    assert result['presenter']['pose_id']=='pointing'
+    assert result['presenter']['art_sha256']==presenter.pose_catalog()['pointing']['sha256']
+    assert result['presenter']['art_sha256']!=retired
+
+
+def test_unknown_artwork_hash_cannot_claim_retired_compatibility(tmp_path):
+    source=tmp_path/'unknown.png'
+    Image.new('RGB',(1024,576),'white').save(source)
+    recipe=presenter.compose_presenter(source,presenter.load_artwork('pointing'),'pointing')
+    recipe['art_sha256']='0'*64
+    with Image.open(source) as saved:
+        image=saved.copy()
+    meta=PngImagePlugin.PngInfo()
+    meta.add_text(presenter.RECIPE_KEY,json.dumps(recipe))
+    image.save(source,pnginfo=meta)
+    with pytest.raises(ValueError,match='図解範囲'):
+        presenter.diagram_edit_source(source.read_bytes())
+
+
 def test_planner_pose_survives_merging_and_regular_style_is_unaffected(monkeypatch):
     def batch(*args,**kwargs):
         return [{'no':1,'type':'diagram','prompt':'Show the mechanism','suasi_pose':'explaining',
