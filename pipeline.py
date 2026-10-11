@@ -2591,7 +2591,7 @@ class SentencePipeline:
 
         md: list = [f"# 制作資料パック: {title}",
                     "",
-                    f"生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} / センテンスつくーる",
+                    f"生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} / 素材スタジオ",
                     "",
                     "元ネタ動画は裏取り・演出参考用です（動画内への転用は権利確認のうえで）。",
                     ""]
@@ -2675,7 +2675,7 @@ a{{color:#0e7490;text-decoration:none}} a:hover{{text-decoration:underline}}
 <p class="note">元ネタ動画は裏取り・演出参考用です（動画内への転用は権利確認のうえで）。
 写真の差し替えは進捗ページの「🖼候補」からワンクリックでできます。</p>
 {''.join(hsec)}
-<p style="color:#9ca3af;font-size:11px;margin-top:24px">生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} / センテンスつくーる</p>
+<p style="color:#9ca3af;font-size:11px;margin-top:24px">生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} / 素材スタジオ</p>
 </body></html>"""
         (self.output_dir / "sources.html").write_text(html_doc, encoding="utf-8")
 

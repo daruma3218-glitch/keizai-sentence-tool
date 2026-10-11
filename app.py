@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""センテンスつくーる - Flask Web アプリ
+"""素材スタジオ（旧センテンスつくーる） - Flask Web アプリ
 
 原稿をセンテンス単位に分割して、各文に対応する図解を一括生成する。
 出力: テーブル表示（Web）+ CSV ダウンロード（Excel / Sheets 用）
@@ -449,11 +449,11 @@ def _job_done_message(job_id: str, state: dict, rows: list, next_job: Optional[d
     url = f"{PUBLIC_BASE_URL}/progress/{job_id}"
     if state.get("status") == "completed":
         flagged = sum(1 for r in rows if r.get("verify_issue"))
-        body = (f"[info][title]🤖 センテンスつくーる：「{title}」ができました{creator}[/title]"
+        body = (f"[info][title]🤖 素材スタジオ：「{title}」ができました{creator}[/title]"
                 f"画像 {state.get('generated', 0)} 枚（全 {state.get('total_sentences', 0)} 文）"
                 + (f"・要確認⚠ {flagged} 枚" if flagged else "") + f"\n{url}")
     else:
-        body = (f"[info][title]🤖 センテンスつくーる：「{title}」が途中で止まりました{creator}[/title]"
+        body = (f"[info][title]🤖 素材スタジオ：「{title}」が途中で止まりました{creator}[/title]"
                 f"{str(state.get('message') or '')[:120]}\n画面の「再開」から続きを作れます。\n{url}")
     if next_job:
         who = f"（{next_job['creator']}さん）" if next_job.get("creator") else ""
@@ -2695,7 +2695,7 @@ def download_block_zip(job_id, chapter_index, block_index):
             "merge_hint": "Sort blocks by block_order_key, then concatenate rows/images in sentence_nos order.",
         }, ensure_ascii=False, indent=2))
         zf.writestr("README.txt", (
-            "このZIPはセンテンスつくーるのブロック単位出力です。\n"
+            "このZIPは素材スタジオのブロック単位出力です。\n"
             "後で結合する場合は block_manifest.json の block_order_key 順に並べ、"
             "block.csv と images/ を結合してください。\n"
         ))
@@ -2758,7 +2758,7 @@ if __name__ == "__main__":
     app.before_request(WorkerRecovery(sys.modules[__name__]))
     port = int(os.environ.get("PORT", 3002))
     print("\n" + "=" * 50)
-    print("  センテンスつくーる 起動中...")
+    print("  素材スタジオ 起動中...")
     print(f"  http://localhost:{port}")
     print("=" * 50 + "\n")
     app.run(host="0.0.0.0", port=port, debug=False)
