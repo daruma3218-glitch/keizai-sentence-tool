@@ -24,6 +24,7 @@ from google.genai import types
 
 # Pillow（クロップ用）
 from PIL import Image
+from channel_styles import is_suasi_style, SUASI_REFERENCE_INSTRUCTION
 
 
 # ===== モデル設定 =====
@@ -693,7 +694,7 @@ def _sync_generate_image_openai(
             if reference_bytes:
                 import io
                 bio = io.BytesIO(reference_bytes)
-                bio.name = "reference.png"  # SDK が拡張子から MIME を判定
+                bio.name = "reference.jpg" if reference_bytes.startswith(b"\xff\xd8\xff") else "reference.png"
                 response = client.images.edit(
                     model=model_name,
                     image=bio,
@@ -802,6 +803,9 @@ class ParallelImageGenerator:
                 self.reference_bytes = None
 
         self.edit_reference_bytes = None
+        # This look promises the approved mascot; missing art must not become a lookalike.
+        if is_suasi_style(self.style_lock_text) and not self.reference_bytes:
+            raise ValueError("すあし社長の承認済み参照画像が見つかりません。生成を開始できません")
         self.edit_reference_mime = "image/png"
         if edit_image_path:
             try:
@@ -932,12 +936,16 @@ class ParallelImageGenerator:
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(
                 prompt_text, prompt_type, self.style_lock_text)
+            suasi_presenter = is_suasi_style(self.style_lock_text) and prompt_type in ("illustration", "diagram")
+            shows_professor = shows_professor or suasi_presenter
             # 世界観ロック中は、先生が文面に出てこない画像（簡易の指示文を含む）にも参照画像を渡す
             style_reference_only = (not shows_professor and bool(self.style_lock_text)
                                     and prompt_type in STYLE_LOCK_TYPES)
             use_reference = self.reference_bytes is not None and (shows_professor or style_reference_only)
             if use_reference:
-                if style_reference_only:
+                if is_suasi_style(self.style_lock_text):
+                    lock = SUASI_REFERENCE_INSTRUCTION
+                elif style_reference_only:
                     lock = _STYLE_REFERENCE_INSTRUCTION
                 elif prompt_type == "illustration":
                     lock = _CHARACTER_LOCK_INSTRUCTION

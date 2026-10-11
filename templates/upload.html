@@ -78,7 +78,7 @@
         <p class="mb-4"><a href="/materials" class="text-cyan-700 font-bold">← 素材スタジオ・チャンネルと案件</a></p>
         {% if material_project %}
         <div class="mb-4 p-4 bg-emerald-50 rounded-xl border border-emerald-200">
-          <strong>{{ material_project.title }}</strong><br><small>この案件のチャンネル設定を使います。</small>
+          <strong>{{ material_project.title }}</strong><br><small>この案件のチャンネル設定を使います。{% if material_project.profile.style_name %} テイスト：{{ material_project.profile.style_name }}{% endif %}</small>
         </div>
         {% endif %}
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
@@ -474,9 +474,10 @@
       if (d.openai_quality) setRadio('openai_quality', d.openai_quality);
       if (d.route_mode) setRadio('route_mode', d.route_mode);
       setCheckbox('worldview_mode', d.worldview_mode);
+      document.getElementById('worldviewMode').disabled = !!d.style_id;
       setCheckbox('verify_diagrams', d.verify_diagrams);
       setCheckbox('skip_decorative', d.skip_decorative);
-      if (d.worldview_desc !== undefined) { const t = document.getElementById('worldviewDesc'); if (t) t.value = d.worldview_desc; }
+      if (d.worldview_desc !== undefined) { const t = document.getElementById('worldviewDesc'); if (t) { t.value = d.worldview_desc; t.readOnly = !!d.style_id; } }
       const lockNote = document.getElementById('styleLockNote');
       if (lockNote) lockNote.classList.toggle('hidden', !d.style_lock);
       const noRealNote = document.getElementById('noRealphotoNote');

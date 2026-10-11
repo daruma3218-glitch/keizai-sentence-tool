@@ -4,7 +4,8 @@ document.getElementById('new-project')?.addEventListener('submit', async event =
   button.disabled = true;
   try {
     const result = await Studio.api('/api/material-projects', {method:'POST', body:JSON.stringify({
-      channel_id:form.dataset.channel, title:form.elements.namedItem('title').value, trello_url:form.elements.namedItem('trello_url').value
+      channel_id:form.dataset.channel, title:form.elements.namedItem('title').value, trello_url:form.elements.namedItem('trello_url').value,
+      style_id:form.elements.namedItem('style_id')?.value || ''
     })});
     const project = result.project;
     location.href = project.trello_url

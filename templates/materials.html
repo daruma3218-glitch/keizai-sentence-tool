@@ -72,6 +72,14 @@
 <dialog id="new-project-dialog" aria-labelledby="new-project-title"><form id="new-project" class="panel new-project" data-channel="{{ selected }}">
   <div class="dialog-heading"><h2 id="new-project-title">新しく作る</h2><button class="icon-button" type="button" data-close-project aria-label="閉じる">×</button></div><p class="hint">チャンネルの画風と設定を引き継ぎます。</p>
   <label for="project-title">動画のタイトル</label><input id="project-title" name="title" required autofocus maxlength="160" value="{{ prefill_title }}" placeholder="例：どうして値上げが続くのか">
+  {% if chosen.styles %}
+  <fieldset class="style-choices"><legend>素材のテイスト</legend>
+    {% for style in chosen.styles %}
+    <label class="style-choice"><input type="radio" name="style_id" value="{{ style.id }}" {% if loop.first %}checked{% endif %}>
+      <span><strong>{{ style.name }}</strong><small>{{ style.description }}</small></span></label>
+    {% endfor %}
+  </fieldset><p class="hint">選んだテイストは、この案件の追加生成・手直しにも引き継ぎます。</p>
+  {% endif %}
   <label for="trello-url">案件カードのURL <span class="subtle">任意</span></label><input id="trello-url" name="trello_url" type="url" value="{{ prefill_trello }}" placeholder="https://trello.com/c/…">
   <p class="hint">同じTrelloカードから開くと、同じ案件に戻れます。</p><button class="button dark wide" type="submit">原稿の入力へ →</button>
   {% if not chosen.ready %}<p class="hint">案件の保存はできます。AI生成には、このチャンネルの生成設定が必要です。</p>{% endif %}

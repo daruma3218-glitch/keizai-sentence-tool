@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import anthropic
 
 from utils import cached_user_content, claude_query, parse_json_array
+from channel_styles import is_otona_style, is_suasi_style
 
 
 # 画像プロンプト・図解設計（blueprint）はASTRAのサブスクCLIを使う。
@@ -322,6 +323,23 @@ LOCKED_STRUCTURE_RULES_JA = (
 
 def _style_lock_block(worldview_desc: str) -> str:
     """世界観ロック中のプロンプター向け指示（何を描くか・誰を描くか）。"""
+    if is_otona_style(worldview_desc):
+        presenter = (
+            'すあし社長を図解の脇に小さく1人置く。承認済み参照画像の足形の頭・目・紺のスーツを保つ。'
+            '図や文字を主役にし、顔の反復や賞状・盾の常設をしない。'
+            if is_suasi_style(worldview_desc) else
+            '固定キャラの常設はしない。参照なしにすあし社長を描き起こさない。'
+        )
+        return f"""
+【大人の学び直しTVの世界観ロック】
+{worldview_desc.strip()}
+- prompt は画面に必要な物・関係・動作・構図を指示する。1場面1論点、主役は大きく。
+- {presenter}
+- 金融は出し手→受け手・原因→結果を矢印で結ぶ。比較は対象・時点・条件を明記する。
+- 「一部」「場合がある」など結論を変える条件を短縮で落とさない。代名詞だけなら章の文脈から対象を補い、不明なら推測しない。
+- 実在人物・ニュース映像・統計・地図は根拠資料の取得・正確な描画へ。AIで証拠写真や数値を新作しない。
+- 見出し、短いラベル、条件の順に強弱をつける。原稿全文・章帯・登録案内を画像へ焼き込まない。
+"""
     return f"""
 
 【世界観ロック（このチャンネルは画風を固定・最重要）】

@@ -13,6 +13,7 @@ from PIL import Image, ImageOps
 
 import material_store as store
 import material_history
+from channel_styles import resolve_style, style_choices
 
 IMAGE_SLOTS = threading.BoundedSemaphore(2)
 ACTIVE = set()
@@ -79,7 +80,8 @@ def register(module):
         for ch in store.CHANNELS.values():
             config = profile(ch["id"])
             keys = module.resolve_channel_keys(config)
-            result.append({**ch, "ready": bool(keys["openai"] or keys["gemini"])})
+            result.append({**ch, "ready": bool(keys["openai"] or keys["gemini"]),
+                           "styles": style_choices(config)})
         return result
 
     @bp.route("/materials")
@@ -134,7 +136,8 @@ def register(module):
         body = request.get_json(silent=True) or {}
         ch = store.channel(body.get("channel_id"))
         result = store.create_project(module.OUTPUT_ROOT, ch["id"], body.get("title", ""),
-                                      profile(ch["id"]).get("defaults", {}), body.get("trello_url", ""))
+                                      resolve_style(profile(ch["id"]), body.get("style_id", "")),
+                                      body.get("trello_url", ""))
         return jsonify(project=result)
 
     @bp.route("/api/material-projects/<project_id>")
@@ -160,6 +163,7 @@ def register(module):
         source_channel = (context or {}).get("source_channel_id") or manifest.get("channel_id") or state.get("channel_id")
         ch = store.channel(source_channel)
         return render_template("material_library.html", job_id=job_id, channel=ch, csrf=token(),
+                               style_name=((context or {}).get("profile") or {}).get("style_name", ""),
                                title=(context or {}).get("title") or manifest.get("title") or job_id)
 
     def payload(d):

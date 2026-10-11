@@ -34,6 +34,7 @@ from flask import (
 
 from utils import load_env, load_json, SNAPSHOT_IO_LOCK
 import material_store
+from channel_styles import is_suasi_style
 from pipeline import SentencePipeline, VALID_STYLES
 from generator import (PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS,
                        OPENAI_IMAGE_MODEL_CHOICES, resolve_openai_image_model)
@@ -752,6 +753,14 @@ def _style_lock_text_for(defaults: dict, manifest: Optional[dict] = None, job_st
     return (defaults.get("worldview_desc") or "").strip()
 
 
+def _job_defaults(job_dir: Path, channel: dict) -> dict:
+    """Keep the chosen project look for resume and legacy regeneration controls."""
+    context = material_store.read(job_dir / "material_context.json") or {}
+    if context.get("source_channel_id") == channel.get("id") and isinstance(context.get("profile"), dict):
+        return dict(context["profile"], **context.get("generation_settings", {}))
+    return channel.get("defaults", {}) or {}
+
+
 def _build_scene_fix_prompt(sentence: str, route: str, variant_no: int, extra: str, defaults: dict,
                             fix_mode: str = "balanced", style_locked: bool = False) -> str:
     """1シーン修正用の複数案プロンプト。制約は軽く、でも事実は増やさない。
@@ -1216,6 +1225,12 @@ def start_job():
     # これで「先生キャラ等の設定が空欄で効かない」事故を防ぐ。
     if worldview_on and not worldview_desc:
         worldview_desc = (channel.get("defaults", {}) or {}).get("worldview_desc", "").strip()
+    # Named TV looks are a saved choice. Content instructions remain editable,
+    # but a stale form must not silently drop the reference or substitute another look.
+    chosen_defaults = channel.get("defaults", {}) or {}
+    if channel_id == "otona" and chosen_defaults.get("style_id"):
+        worldview_on = True
+        worldview_desc = chosen_defaults["worldview_desc"]
     # キャラ固定の参照画像（チャンネル設定 character_ref）。存在すれば絶対パスを渡す。
     # 世界観モードON のときだけ有効（キャラ統一の一部）。
     character_ref_path = ""
@@ -1225,6 +1240,8 @@ def start_job():
             _crp = PROJECT_ROOT / _cref
             if _crp.exists():
                 character_ref_path = str(_crp)
+    if is_suasi_style(worldview_desc) and not character_ref_path:
+        return jsonify(error="すあし社長の承認済み参照画像が見つかりません"), 400
     verify_diagrams = request.form.get("verify_diagrams", "off") == "on"
     try:
         web_image_count = int(request.form.get("web_image_count", "0"))
@@ -1399,7 +1416,7 @@ def _build_resume_args(job_id: str):
     job_state = load_json(job_dir / "job.json", {})
     channel = get_channel(job_state.get("channel_id", "default"))
     channel_id = channel.get("id", "default")
-    defaults = channel.get("defaults", {}) or {}
+    defaults = _job_defaults(job_dir, channel)
     ch_keys = resolve_channel_keys(channel)
 
     user_instructions = ""
@@ -1450,6 +1467,8 @@ def _build_resume_args(job_id: str):
         _crp = PROJECT_ROOT / _cref
         if _crp.exists():
             character_ref_path = str(_crp)
+    if is_suasi_style(worldview_desc) and not character_ref_path:
+        return None, "すあし社長の承認済み参照画像が見つかりません"
 
     args = (job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
             skip_decorative, style_preset, web_image_count, max_diagrams, route_mode,
@@ -2210,7 +2229,7 @@ def api_regenerate(job_id, no):
     channel_id = params.get("channel_id", "default")
     channel = get_channel(channel_id)
     ch_keys = resolve_channel_keys(channel)
-    defaults = channel.get("defaults", {}) or {}
+    defaults = _job_defaults(job_dir, channel)
     allow_maps = bool(defaults.get("allow_maps", False))
     # 世界観ロック（1枚の作り直しでも、同じ回の画像と同じ世界観で描く）
     style_lock_text = _style_lock_text_for(defaults, manifest, job_state)

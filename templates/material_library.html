@@ -2,7 +2,7 @@
 {% block title %}{{ title }}｜素材スタジオ{% endblock %}
 {% block content %}
 <section class="library-heading">
-  <div><a class="back-link" href="/materials?channel={{ channel.id }}">← {{ channel.name }}</a><h1>{{ title }}</h1><p class="subtle">候補を比べて、動画に使う素材を選びます。</p></div>
+  <div><a class="back-link" href="/materials?channel={{ channel.id }}">← {{ channel.name }}</a><h1>{{ title }}</h1><p class="subtle">候補を比べて、動画に使う素材を選びます。{% if style_name %}<br>テイスト：{{ style_name }}{% endif %}</p></div>
   <div class="actions"><a class="button" href="/progress/{{ job_id }}">詳しい進捗・手直し</a><button class="button" id="refresh">素材を読み込む ↻</button></div>
 </section>
 <ol class="studio-steps" aria-label="素材制作の工程"><li id="library-step-generation"><b>1</b> 素材を生成</li><li id="library-step-selection" aria-current="step"><b>2</b> 確認・採用</li><li id="library-step-export"><b>3</b> 書き出し</li></ol>
