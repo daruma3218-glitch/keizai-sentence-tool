@@ -419,6 +419,7 @@ def _build_full_prompt(
     style_lock: str = "",
     backdrop: int = 0,
     board: int = 0,
+    preserve_source_text: bool = False,
 ) -> str:
     """画像生成用のシステム接頭辞を付与
 
@@ -428,6 +429,7 @@ def _build_full_prompt(
     style_lock にチャンネルの世界観の設定文を渡すと、STYLE_LOCK_TYPES の画像では
     それを先頭に必ず入れ、画風を選ばせる指示とプリセットの配色（カラーコード付き）を外す。
     空なら従来どおり（他チャンネルの出力は変わらない）。
+    Bの画像手直しでは、元画像のラベルを継承する。再抽出できない語を消さない。
     """
     style_hints = {
         "illustration": (
@@ -526,6 +528,16 @@ def _build_full_prompt(
             "(e.g., Russian / Cyrillic for a scene in Russia or the USSR; the local language "
             "for other countries). NEVER use Japanese on signs in a foreign scene.\n"
             "- Keep such incidental text minimal and natural, like in a real documentary photo.\n"
+        )
+    elif preserve_source_text and prompt_type in ("diagram", "illustration"):
+        text_policy = (
+            "*** TEXT POLICY for EDITING THE PROVIDED DIAGRAM (CRITICAL) ***\n"
+            "- Preserve the existing Japanese labels, numbers, conditional qualifiers, and "
+            "comparison direction from the provided source image. Keep them legible.\n"
+            "- An empty or partial extracted label list is NOT an instruction to erase source text.\n"
+            "- Change text only where the editor explicitly requests a correction supported by "
+            "the source sentence. Do not invent additional claims, names, numbers, or headings.\n"
+            "- When removing the old presenter, retain all diagram content and its relationships.\n"
         )
     elif terms and prompt_type == "diagram":
         terms_str = ", ".join(terms)
@@ -935,7 +947,10 @@ class ParallelImageGenerator:
 
             full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
                                              style_preset=row_style, style_lock=self.style_lock_text,
-                                             backdrop=backdrop_key(prompt_entry), board=idx)
+                                             backdrop=backdrop_key(prompt_entry), board=idx,
+                                             preserve_source_text=bool(self.suasi_artwork
+                                                 and prompt_entry.get("edit_source")
+                                                 and self.edit_reference_bytes))
             # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(

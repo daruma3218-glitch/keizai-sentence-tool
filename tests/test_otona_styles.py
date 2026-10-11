@@ -128,6 +128,33 @@ def test_modified_original_is_rejected(tmp_path, monkeypatch):
         suasi_presenter.load_artwork()
 
 
+@pytest.mark.parametrize('terms', [[], ['配当']])
+def test_b_edit_preserves_source_labels_even_with_incomplete_extraction(tmp_path, monkeypatch, terms):
+    d = resolve_style(appmod.get_channel('otona'), 'suasi_explainer')
+    source = tmp_path/'source.png'
+    Image.new('RGB', (1024,576), 'white').save(source)
+    gen = generator.ParallelImageGenerator(provider='gpt-image', openai_api_key='test-only',
+        edit_image_path=str(source), style_lock_text=d['worldview_desc'])
+    seen = []
+    def dispatch(prompt, path, use_reference=False, ref_bytes_override=None, ref_mime_override=None):
+        assert ref_bytes_override
+        seen.append(prompt)
+        Image.new('RGB', (1024,576), 'white').save(path)
+        return True, ''
+    monkeypatch.setattr(gen, '_dispatch_sync_generate', dispatch)
+    result = asyncio.run(gen.generate_all([
+        {'index':1,'type':'diagram','prompt':'Keep the dividend conditions.',
+         'edit_source':True,'allowed_terms':terms}], tmp_path))
+    assert result[0]['success'], result
+    assert 'Preserve the existing Japanese labels' in seen[0]
+    assert 'conditional qualifiers' in seen[0]
+    assert 'NO text in this image' not in seen[0]
+    assert 'Japanese labels allowed in this diagram:' not in seen[0]
+    fresh = generator._build_full_prompt('A new diagram.', 'diagram', allowed_terms=terms)
+    assert 'Preserve the existing Japanese labels' not in fresh
+    assert ('NO text in this image' in fresh) == (not terms)
+
+
 def test_prompter_does_not_import_other_channels_presenter():
     c = appmod.get_channel('otona')
     for style in style_choices(c):
