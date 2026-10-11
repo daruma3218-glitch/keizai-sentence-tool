@@ -41,6 +41,8 @@ def test_style_choice_saved_once_and_other_channels_reject_it(client):
     result = create(client, trello_url='https://trello.com/c/abcdefgh').get_json()['project']
     assert is_suasi_style(result['profile']['worldview_desc'])
     assert result['profile']['character_ref'].endswith('otona-suasi.jpg')
+    assert 'キャラの常設はしない' not in result['profile']['user_instructions']
+    assert '通常の図解は' not in result['profile']['user_instructions']
     again = create(client, 'tv_standard', trello_url='https://trello.com/c/abcdefgh').get_json()['project']
     assert again['profile_sha256'] == result['profile_sha256']
     assert create(client, channel_id='economy').status_code == 409
