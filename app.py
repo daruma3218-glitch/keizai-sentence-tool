@@ -33,6 +33,7 @@ from flask import (
 )
 
 from utils import load_env, load_json, SNAPSHOT_IO_LOCK
+import cloudflare_access
 import material_store
 from channel_styles import is_suasi_style
 from pipeline import SentencePipeline, VALID_STYLES
@@ -175,6 +176,16 @@ def _safe_download_name(text: str, fallback: str = "download") -> str:
 
 
 # ====== 認証 ======
+@app.before_request
+def accept_cloudflare_access():
+    """新しい入口（sozai.apprendre.jp・Cloudflare のログイン）を通った人は、パスワードなしでログイン済みにする（2026-10-14）。
+    今までの住所（sentence.apprendre.jp）とパスワードはそのまま使える（並行の期間）。証明は署名・発行元・宛先・期限をすべて確かめる。
+    app の before_request なので、素材の画面（material_routes の protect_write）より前に効く。"""
+    if APP_PASSWORD and not session.get("authenticated") and cloudflare_access.verified_email(request.headers):
+        session.permanent = True
+        session["authenticated"] = True
+
+
 def login_required(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
