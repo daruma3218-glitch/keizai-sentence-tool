@@ -1,6 +1,11 @@
 # 本番更新
 
-スタッフ用URLは `https://sentence.apprendre.jp`。サーバーの契約アカウント名に依存しない入口を使用する。
+スタッフ用URLは `https://sozai.apprendre.jp/materials`（素材スタジオ）。Renderの表示・通知名は `sozai-studio`（2026-10-14変更・旧 `sentence-studio`）。サーバーの契約アカウント名に依存しない入口を使用する。
+
+- 対象サービスIDは `srv-daq9ags9v7es73catk50`。名称変更でサービスを新設・停止していない。
+- `sentence.apprendre.jp` は互換用の旧入口。新URLへの転送はまだ設定していない。新しい利用案内には `sozai.apprendre.jp` を使う。
+- 機械の稼働版確認は `https://keizai-sentence-tool-kouta.onrender.com/version`。新しい人向けURLはCloudflare Accessの認証があるため、匿名の監視には使わない。
+- リポジトリ名、Renderの内部ホスト名・`RENDER_SERVICE_NAME`、`/version` の `service`、書き出しの `source_tool=sentence` は既存連携の識別子として保持する。現在の画面名・通知名とは区別する。
 
 本番の通常ブランチは `main`。Render の Auto-Deploy は **Off**（2026-09-28 10:45 に切り替え・社長承認）。main への push は、
 本番の見張り（`deploy_guard.check_upstream`）が生成の合間に Deploy Hook で配置する（下の「新しいコミットの配置」）。

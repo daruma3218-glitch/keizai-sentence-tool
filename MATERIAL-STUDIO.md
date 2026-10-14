@@ -1,6 +1,8 @@
 # 素材スタジオ・最初の統合形
 
-2026-10-05 / 入口 https://sentence.apprendre.jp/materials
+2026-10-05 作成 / 現在の入口 https://sozai.apprendre.jp/materials （2026-10-14照合）
+
+画面名は「素材スタジオ」、Renderの表示・通知名は `sozai-studio`。旧 `sentence-studio` と同じサービスID・保存先を使う。旧URL・互換用識別子・機械の監視先は [DEPLOYMENT.md](DEPLOYMENT.md) を参照。
 
 センテンスつくーるの生成処理と保存データを使い、チャンネル選択・案件・候補比較・採用を追加する。
 既存の制作画面・進捗画面は継続利用できる。本番のRenderサービス・ディスク・認証は増やさない。

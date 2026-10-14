@@ -1,7 +1,7 @@
 {% extends "material_base.html" %}
 {% block content %}
 {% if not selected %}
-<section class="intro"><p class="eyebrow">MATERIAL STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">いつものチャンネルから、新しい制作も、前回の続きも。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
+<section class="intro"><p class="eyebrow">SOZAI STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">いつものチャンネルから、新しい制作も、前回の続きも。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
 {% endif %}
 {% if not selected %}{% include "material_queue.html" %}{% endif %}
 <nav class="channel-grid {% if selected %}channel-grid-compact{% endif %}" aria-label="チャンネル">
