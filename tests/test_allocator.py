@@ -41,7 +41,7 @@ def test_all_rows_get_fields_250():
             assert info["display"] == "none" and info["beat_id"] is None
         else:
             assert info["beat_id"] is not None, "非skip文に beat_id が無い"
-            assert info["display"] in ("image", "hold"), "display が image/hold でない"
+            assert info["display"] in ("image", "hold", "none"), "display が不正"
 
 
 def test_budget_not_exceeded():
@@ -86,6 +86,75 @@ def test_timecode_accumulates():
     a = allocate(rows, routes, max_diagrams=5, chars_per_sec=5.5, beat_mode=True)
     assert a[1]["est_start"] == "00:00"
     assert a[2]["est_start"] == "00:10"  # 55/5.5 = 10秒
+
+
+def test_continuing_route_does_not_merge_chapters():
+    # 本番の2章試験で、後の文だけが画像になり、先頭がholdになった回帰。
+    rows = [
+        {"no": 1, "chapter_index": 0, "sentence": "工場から店へ商品を運びます。"},
+        {"no": 2, "chapter_index": 1, "sentence": "商品を受け取ると在庫が増えます。"},
+    ]
+    routes = {
+        1: {"route": "diagram", "importance": 3, "beat": "new"},
+        2: {"route": "diagram", "importance": 4, "beat": "continue"},
+    }
+    a = allocate(rows, routes, max_diagrams=2)
+    assert a[1]["beat_id"] != a[2]["beat_id"]
+    assert [a[n]["display"] for n in (1, 2)] == ["image", "image"]
+
+
+def test_leading_lower_importance_row_cannot_hold_future_image():
+    rows = [{"no": 1, "sentence": "導入です。"}, {"no": 2, "sentence": "核心です。"}]
+    routes = {
+        1: {"route": "diagram", "importance": 2, "beat": "new"},
+        2: {"route": "diagram", "importance": 5, "beat": "continue"},
+    }
+    a = allocate(rows, routes, max_diagrams=1)
+    assert [a[n]["display"] for n in (1, 2)] == ["none", "image"]
+
+
+def test_unfunded_chapter_cannot_hold_previous_chapter_image():
+    rows = [
+        {"no": 1, "chapter_index": 0, "sentence": "重要な図です。"},
+        {"no": 2, "chapter_index": 1, "sentence": "別の章です。"},
+    ]
+    routes = {
+        1: {"route": "diagram", "importance": 5, "beat": "new"},
+        2: {"route": "diagram", "importance": 2, "beat": "continue"},
+    }
+    a = allocate(rows, routes, max_diagrams=1)
+    assert [a[n]["display"] for n in (1, 2)] == ["image", "none"]
+
+
+def test_skip_breaks_the_image_continuation():
+    rows = [{"no": n, "sentence": "試験文です。"} for n in (1, 2, 3)]
+    routes = {
+        1: {"route": "diagram", "importance": 5, "beat": "new"},
+        2: {"route": "skip", "importance": 1, "beat": "continue"},
+        3: {"route": "diagram", "importance": 2, "beat": "continue"},
+    }
+    a = allocate(rows, routes, max_diagrams=1)
+    assert [a[n]["display"] for n in (1, 2, 3)] == ["image", "none", "none"]
+    assert a[1]["beat_id"] != a[3]["beat_id"]
+
+
+def test_every_hold_has_an_earlier_image_in_same_unbroken_chapter():
+    rows, routes = _make(250)
+    for row in rows:
+        row["chapter_index"] = (row["no"] - 1) // 25
+    for budget in (0, 1, 5, 20, 50, 100):
+        a = allocate(rows, routes, max_diagrams=budget)
+        assert sum(info["display"] == "image" for info in a.values()) <= budget
+        chapter, has_image = None, False
+        for row in rows:
+            if row["chapter_index"] != chapter:
+                has_image = False
+            chapter = row["chapter_index"]
+            display = a[row["no"]]["display"]
+            if display == "hold":
+                assert has_image, (budget, row["no"])
+            else:
+                has_image = display == "image"
 
 
 def test_high_coverage_300_fills_hold_and_skip(tmp_path):

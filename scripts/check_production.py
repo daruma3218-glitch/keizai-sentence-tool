@@ -15,7 +15,9 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          # 2026-10-14 時間のかかる4つの操作を「受け付け → 問い合わせ」で（新しい入口は応答を約100秒しか待たない）
          "studio_operations",
          # 2026-10-14 地名が出るだけで地図にしない（図解スタジオと同じ判断）
-         "map_fit"]
+         "map_fit",
+         # 2026-10-14 章の先頭・素材なしの後で、存在しない画像を継続しない
+         "allocator"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

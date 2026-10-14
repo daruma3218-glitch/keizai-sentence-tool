@@ -49,7 +49,7 @@ def allocate(rows: list, routes: dict, max_diagrams: int,
     戻り値: {no: {beat_id, est_start, display, engine, importance}}
     - beat_mode=True: importance 加重でビート単位に画像予算(max_diagrams)を配分。
       画像が付く文は display="image"、同ビートの他文は "hold"（前の画像を継続表示）、
-      skip は "none"。
+      skip と継続元がない文は "none"。章の境界・素材なしをまたいで継続しない。
     - beat_mode=False: v2 互換。display は付けず（pipeline 側の均等間引きに委ねる）、
       beat_id / est_start のみ付与する。
     """
@@ -59,10 +59,15 @@ def allocate(rows: list, routes: dict, max_diagrams: int,
     sec_of = {}
     beat_rows = {}   # beat_id -> [no...]（順序保持）
     beat_id = -1
+    previous_chapter = None
+    after_blank = True
     cum = 0.0
 
     for r in rows:
         no = r["no"]
+        chapter = r.get("chapter_index", 0)
+        chapter_changed = chapter != previous_chapter
+        previous_chapter = chapter
         rt = routes.get(no, {}) or {}
         route = rt.get("route", "illustration")
         imp = int(rt.get("importance", 3) or 3)
@@ -80,10 +85,12 @@ def allocate(rows: list, routes: dict, max_diagrams: int,
         cum += sec
         out[no] = info
         if route == "skip":
+            after_blank = True
             continue
         beat = rt.get("beat", "continue")
-        if beat == "new" or beat_id < 0:
+        if beat == "new" or beat_id < 0 or chapter_changed or after_blank:
             beat_id += 1
+        after_blank = False
         info["beat_id"] = beat_id
         beat_rows.setdefault(beat_id, []).append(no)
 
@@ -140,6 +147,20 @@ def allocate(rows: list, routes: dict, max_diagrams: int,
         img = set(chosen.get(bid, []))
         for n in nos:
             out[n]["display"] = "image" if n in img else "hold"
+
+    # 重要な後続文が選ばれても、まだ存在しない画像を先頭から継続しない。
+    # 素材の引き継ぎと同じく、章の境界と素材なしで継続元を切る。
+    previous_chapter, has_image = None, False
+    for r in rows:
+        chapter = r.get("chapter_index", 0)
+        if chapter != previous_chapter:
+            has_image = False
+        previous_chapter = chapter
+        info = out[r["no"]]
+        if info["display"] == "hold" and not has_image:
+            info["display"] = "none"
+        if info["display"] != "hold":
+            has_image = info["display"] == "image"
 
     return out
 
