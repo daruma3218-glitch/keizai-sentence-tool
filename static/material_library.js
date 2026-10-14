@@ -242,7 +242,9 @@
     if ($('image-file').files[0]) body.append('image', $('image-file').files[0]);
     $('variant-dialog').close(); setBusy(true);
     $('operation-state').hidden = false; $('operation-state').textContent = '候補を作成しています。このままお待ちください。';
-    try { data = await Studio.api(base + '/variant', {method:'POST', body}); draw(); Studio.notice('候補を追加しました。比べてから採用できます。'); }
+    // 生成・手直しは時間がかかるので「受け付け → 問い合わせ」で待つ（左右反転・取り込みはすぐ終わるので今までどおり）
+    const slow = operation.kind === 'generate' || operation.kind === 'edit';
+    try { data = await Studio.api(base + '/variant', {method:'POST', body, poll:slow}); draw(); Studio.notice('候補を追加しました。比べてから採用できます。'); }
     catch (error) { Studio.notice(error.message, true); }
     finally { setBusy(false); await refresh(); }
   });

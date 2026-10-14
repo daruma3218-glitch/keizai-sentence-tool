@@ -350,6 +350,24 @@ def interrupt_orphaned_jobs(output_dir, clock=time.time):
     return changed
 
 
+def jobs_busy_for(module):
+    """生成中か。読めない記録は例外のまま返し、呼び出し側（_busy）が「生成中」に倒す。"""
+    # 裏で動かしている時間のかかる操作（studio_operations・2026-10-14）。受け付けの応答を返した後も、終わるまで待つ
+    import studio_operations
+    if studio_operations.running_count():
+        return True
+    with module._jobs_lock:
+        if any(state.get("status") not in TERMINAL for state in module._jobs.values()):
+            return True
+    for directory in module.OUTPUT_DIR.iterdir():
+        if not directory.is_dir():
+            continue
+        path = directory / "job.json"
+        if path.exists() and json.loads(path.read_text(encoding="utf-8")).get("status") not in TERMINAL:
+            return True
+    return False
+
+
 def install(module, root):
     try:
         orphaned = interrupt_orphaned_jobs(module.OUTPUT_DIR)
@@ -360,16 +378,7 @@ def install(module, root):
         logging.error("Orphaned job check failed; jobs left running still block deployments")
 
     def jobs_busy():
-        with module._jobs_lock:
-            if any(state.get("status") not in TERMINAL for state in module._jobs.values()):
-                return True
-        for directory in module.OUTPUT_DIR.iterdir():
-            if not directory.is_dir():
-                continue
-            path = directory / "job.json"
-            if path.exists() and json.loads(path.read_text(encoding="utf-8")).get("status") not in TERMINAL:
-                return True
-        return False
+        return jobs_busy_for(module)
     slug, branch = os.environ.get("RENDER_GIT_REPO_SLUG", ""), os.environ.get("RENDER_GIT_BRANCH", "")
     upstream = (slug, branch) if slug and branch else None
     guard = DeployGuard(module.app, root, os.environ["SECRET_KEY"],

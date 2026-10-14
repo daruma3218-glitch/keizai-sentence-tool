@@ -32,6 +32,7 @@
   </style>
   <link rel="stylesheet" href="{{ url_for('static', filename='studio_status.css') }}">
   <script src="{{ url_for('static', filename='studio_status.js') }}"></script>
+  <script src="{{ url_for('static', filename='studio_operation.js') }}"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
 
@@ -820,11 +821,14 @@
       return regenerateSceneWithRoute(no, route, ev);
     }
 
-    async function fetchWithTimeout(url, options = {}, timeoutMs = 180000) {
+    // 作り直しは「受け付け → 問い合わせ」で待つ（新しい入口は応答を約100秒しか待たないため・studio_operation.js）。
+    // サーバーは裏で続けるので、画面が待つのは15分まで（以前は1回の要求で3分）。
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 900000) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        return await fetch(url, { ...options, signal: controller.signal });
+        const send = window.StudioOperation ? (u, o) => StudioOperation.fetch(u, o) : (u, o) => fetch(u, o);  // 部品が読めない時は今までどおり
+        return await send(url, { ...options, signal: controller.signal });
       } finally {
         clearTimeout(timer);
       }
@@ -926,7 +930,7 @@
         return data;
       } catch (e) {
         const msg = e.name === 'AbortError'
-          ? '再生成が3分以内に完了しなかったため中断しました。元画像に戻します。'
+          ? '再生成が15分以内に終わらなかったため、待つのをやめました。元画像に戻します。サーバーで終われば、表を読み込み直すと出ます。'
           : '通信エラー: ' + e.message;
         alert(msg);
         restoreRegenCell(cell, previousCellHtml, no, currentRoute);
@@ -968,7 +972,7 @@
         tr.setAttribute('data-error', '');
         return { ok: true };
       } catch (e) {
-        const msg = e.name === 'AbortError' ? '再生成タイムアウト' : e.message;
+        const msg = e.name === 'AbortError' ? '再生成が15分以内に終わりませんでした' : e.message;
         restoreRegenCell(cell, previousCellHtml, no, currentRoute);
         markRowRegenFailed(tr, msg);
         return { ok: false, error: msg };

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>シーン直しつくーる</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="{{ url_for('static', filename='studio_operation.js') }}"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
@@ -109,6 +110,8 @@
   </main>
 
   <script>
+    // 時間のかかる生成は「受け付け → 問い合わせ」で待つ（studio_operation.js）。部品が読めない時は今までどおり待って受け取る
+    const sendOperation = (url, options) => (window.StudioOperation ? StudioOperation.fetch(url, options) : fetch(url, options));
     const form = document.getElementById('sceneForm');
     const results = document.getElementById('results');
     const statusBox = document.getElementById('status');
@@ -136,10 +139,8 @@
       statusBox.classList.remove('hidden');
       statusBox.textContent = '生成中です。4〜5枚なので少し待ちます。';
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 600000);
-        const res = await fetch('/api/scene-fix', { method: 'POST', body: fd, signal: controller.signal });
-        clearTimeout(timer);
+        // 受け付け → 問い合わせで待つ（新しい入口は応答を約100秒しか待たないため・studio_operation.js）
+        const res = await sendOperation('/api/scene-fix', { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
         window.currentSceneFixJob = data.job_id;
@@ -197,7 +198,7 @@
           const fd = new FormData();
           fd.append('index', reviseBtn.dataset.index);
           fd.append('instruction', instruction);
-          const res = await fetch(`/api/scene-fix/${encodeURIComponent(window.currentSceneFixJob)}/revise`, { method: 'POST', body: fd });
+          const res = await sendOperation(`/api/scene-fix/${encodeURIComponent(window.currentSceneFixJob)}/revise`, { method: 'POST', body: fd });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
           const img = card.querySelector('.resultImage');

@@ -11,7 +11,9 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          "style_lock", "style_check", "flag_check", "upload_ui", "materials", "generation_queue",
          "compare", "scene_fix", "web_pick", "regenerate_chart", "source_pack", "otona_pilot", "otona_styles", "suasi_poses",
          # 2026-10-14 Cloudflare のログイン（新しい入口 sozai.apprendre.jp）と今までのパスワードの並行
-         "cloudflare_access"]
+         "cloudflare_access",
+         # 2026-10-14 時間のかかる4つの操作を「受け付け → 問い合わせ」で（新しい入口は応答を約100秒しか待たない）
+         "studio_operations"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

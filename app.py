@@ -2764,6 +2764,10 @@ def download_zip(job_id):
 
 import material_routes
 material_routes.register(sys.modules[__name__])
+# 時間のかかる4つの操作（場面の直し・その修正・作り直し・素材の別案）を「受け付け → 問い合わせ」でも返す（2026-10-14）。
+# 新しい入口（Cloudflare）は応答を約100秒しか待たないため。印の無い要求は今までどおり。material_routes の後に登録する。
+import studio_operations
+studio_operations.register(sys.modules[__name__])
 
 
 if __name__ == "__main__":
