@@ -79,3 +79,5 @@ body:has(dialog[open]){overflow:hidden}
 @media(max-width:650px){.studio-header .brand{white-space:nowrap;flex-shrink:0;font-size:16px;gap:8px}.studio-header .header-links{max-width:135px;font-size:10px;gap:3px 10px}.review-dialog{max-width:calc(100% - 16px)}.review-choice{order:-1}.review-footer>.actions{margin:0}}
 
 .style-choices{border:0;padding:0;margin:18px 0 10px}.style-choices legend{font-weight:700;margin-bottom:10px}.style-choices .style-choice{display:flex;align-items:flex-start;gap:12px;padding:13px;border:1px solid #dce3dd;border-radius:10px;margin:8px 0;cursor:pointer}.style-choice:has(input:checked){border-color:#305a75;background:#f0f6fa}.style-choices input{width:auto;margin:4px 0 0;accent-color:#305a75;flex-shrink:0}.style-choice strong,.style-choice small{display:block}.style-choice small{font-weight:400;line-height:1.6;margin-top:5px;color:#52616d}
+/* Keep the shared hub link and existing menus accessible on narrow screens. */
+@media(max-width:650px){.studio-header{height:auto;min-height:70px;flex-wrap:wrap;padding:12px 18px}.studio-header .header-links{max-width:none;flex:1 1 100%;justify-content:flex-start;gap:8px 14px}}
