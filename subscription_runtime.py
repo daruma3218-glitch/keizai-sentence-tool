@@ -718,6 +718,12 @@ def run_local_request(request):
 
 
 def _gateway_conf():
+    # 2026-10-19: 中継は素材の保存と別の Supabase プロジェクトへ。SUBSK_GW_* があればそれだけを使い、
+    # 片方しか無ければ中継を止める（古いプロジェクトへ黙って戻らない）。無ければ従来の SUPABASE_*。
+    gw_url=os.environ.get("SUBSK_GW_SUPABASE_URL","").strip().rstrip("/")
+    gw_key=os.environ.get("SUBSK_GW_SUPABASE_KEY","").strip()
+    if gw_url or gw_key:
+        return (gw_url,gw_key) if gw_url and gw_key else None
     url=os.environ.get("SUPABASE_URL","").strip().rstrip("/")
     key=(os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
          or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
