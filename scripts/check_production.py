@@ -10,7 +10,7 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          # 2026-09-25 世界観ロック（カラクリ経済学の画風統一）: 渡し忘れ・判定の読み違いを本番前に止める
          "style_lock", "style_check", "flag_check", "upload_ui", "materials", "generation_queue",
          "compare", "scene_fix", "web_pick", "regenerate_chart", "source_pack", "otona_pilot", "otona_styles", "suasi_poses",
-         # 2026-10-14 Cloudflare のログイン（新しい入口 sozai.apprendre.jp）と今までのパスワードの並行
+         # Cloudflare の証明を毎回要求し、旧入口・旧セッションの迂回を拒否
          "cloudflare_access",
          # 2026-10-14 時間のかかる4つの操作を「受け付け → 問い合わせ」で（新しい入口は応答を約100秒しか待たない）
          "studio_operations",
@@ -24,7 +24,8 @@ if __name__ == "__main__":
     # credentials or use production storage, even when invoked from Render.
     environment = {k: v for k, v in os.environ.items()
                    if not k.endswith(("_KEY", "_TOKEN", "_PASSWORD", "_HOOK"))
-                   and k not in {"SUPABASE_URL", "DATA_DIR"}}
+                   and not k.startswith("CF_ACCESS_")
+                   and k not in {"SUPABASE_URL", "DATA_DIR", "RENDER_SERVICE_ID"}}
     with tempfile.TemporaryDirectory(prefix="sentence-checks-") as root:
         environment.update(DATA_DIR=root, SECRET_KEY="offline-tests-only", APP_PASSWORD="offline-tests-only")
         result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",

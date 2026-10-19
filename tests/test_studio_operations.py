@@ -56,10 +56,10 @@ def async_headers(op_id, **extra):
     return {"X-Studio-Async": "1", "X-Studio-Operation": op_id, **extra}
 
 
-def wait(client, op_id, timeout=10):
+def wait(client, op_id, timeout=10, headers=None):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        response = client.get("/api/operations/" + op_id)
+        response = client.get("/api/operations/" + op_id, headers=headers)
         state = response.get_json()
         if response.status_code != 200 or state.get("status") != "running":
             settle()
@@ -231,13 +231,14 @@ def test_first_login_with_cloudflare_proof_only(studio, monkeypatch):
     _, _ = studio
     fake_scene_fix(monkeypatch)
     import cloudflare_access
+    monkeypatch.setenv("CF_ACCESS_AUD", "offline-studio-audience")
     monkeypatch.setattr(cloudflare_access, "verified_email",
                         lambda headers: "someone@example.com" if headers.get(cloudflare_access.HEADER) == "valid-proof" else "")
     fresh = appmod.app.test_client()
     proof = {cloudflare_access.HEADER: "valid-proof"}
     accepted = fresh.post("/api/scene-fix", data=SCENE, headers=async_headers("first-login-operation", **proof))
     assert accepted.status_code == 202
-    code, state = wait(fresh, "first-login-operation")
+    code, state = wait(fresh, "first-login-operation", headers=proof)
     assert state["result"]["status"] == 200 and state["result"]["body"]["ok"] is True
     assert appmod.app.test_client().get("/api/operations/first-login-operation").status_code == 401
 
