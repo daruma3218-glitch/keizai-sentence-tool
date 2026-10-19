@@ -11,6 +11,7 @@ import base64
 import contextlib
 import contextvars
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -58,6 +59,10 @@ BUCKET = "subsk-gateway"
 JOB_ID = contextvars.ContextVar("subscription_job_id", default="")
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _PUMP_THREAD = None
+
+
+class RequestCancelled(RuntimeError):
+    """An explicit user stop, never a routing failure or a failure notification."""
 
 
 class SubscriptionUnavailable(RuntimeError):
@@ -678,7 +683,8 @@ def _invoke(provider, request):
         return text,payload
 
 
-def run_local_request(request):
+def run_local_request(request, cancel_check=None):
+    _cancel_checkpoint(cancel_check)
     if not isinstance(request.get("allow_fallback", True), bool):
         raise ValueError("allow_fallback must be a boolean")
     primary=request.get("primary","claude")
@@ -691,14 +697,16 @@ def run_local_request(request):
     providers = (primary,"codex" if primary=="claude" else "claude") if request.get("allow_fallback", True) else (primary,)
     for provider in providers:
         for index in range(ATTEMPTS_PER_PROVIDER):
+            _cancel_checkpoint(cancel_check)
             if index:
                 # 直前が利用上限なら長め(30秒/90秒)に待つ。一時的な 429 はこの間に解けることが多い。
                 delays=USAGE_LIMIT_DELAYS if attempts and attempts[-1].get("reason")=="usage_limit" else RETRY_DELAYS
-                time.sleep(delays[index-1])
+                _cancel_wait(delays[index-1], cancel_check)
             started=time.monotonic()
             try:
                 text,payload=_invoke(provider,request)
             except Exception as exc:
+                _cancel_checkpoint(cancel_check)
                 reason=getattr(exc,"code","local_execution_error")
                 # 2026-09-28: 経過秒数を残す(制限時間まで待った時間切れか、途中の失敗かを数字で見分ける)
                 item={"provider":provider,"attempt":index+1,"reason":reason,
@@ -709,25 +717,153 @@ def run_local_request(request):
                               "timeout"}:
                     break
             else:
+                _cancel_checkpoint(cancel_check)
                 _record(request,outcome="completed",provider=provider,attempt=index+1,
                         elapsed_s=round(time.monotonic()-started,1),total_elapsed_s=round(time.monotonic()-request_started,1),
                         requested_model=request.get("model"), **routes[provider], usage=payload.get("usage",{}))
                 payload["_attempts"]=attempts
                 return text,payload
+    _cancel_checkpoint(cancel_check)
     _terminal(request,attempts,"both_cli_unavailable" if len(providers)==2 else "primary_cli_unavailable")
 
 
-def _gateway_conf():
-    # 2026-10-19: 中継は素材の保存と別の Supabase プロジェクトへ。SUBSK_GW_* があればそれだけを使い、
-    # 片方しか無ければ中継を止める（古いプロジェクトへ黙って戻らない）。無ければ従来の SUPABASE_*。
-    gw_url=os.environ.get("SUBSK_GW_SUPABASE_URL","").strip().rstrip("/")
-    gw_key=os.environ.get("SUBSK_GW_SUPABASE_KEY","").strip()
+# ── 中継の置き場所（2026-10-19 社長「進めよう」）──
+# 中継の箱は、素材の保存に使う Supabase とは別の Cloudflare R2 に置ける。優先は
+#   1) SUBSK_GW_R2_ACCOUNT_ID / SUBSK_GW_R2_ACCESS_KEY_ID / SUBSK_GW_R2_SECRET_ACCESS_KEY（箱の名前は SUBSK_GW_R2_BUCKET・既定 subsk-gateway）
+#   2) SUBSK_GW_SUPABASE_URL / SUBSK_GW_SUPABASE_KEY（中継だけの Supabase プロジェクト）
+#   3) 従来の SUPABASE_URL / SUPABASE_KEY
+# 1) か 2) の設定が一部だけの時は中継を止める（古い置き場所へ黙って戻らない）。
+# 呼び出す側は Supabase Storage の REST の形（/storage/v1/object/...）のままで、R2 の時は relay_storage が読み替える。
+R2_ENV = ("SUBSK_GW_R2_ACCOUNT_ID", "SUBSK_GW_R2_ACCESS_KEY_ID", "SUBSK_GW_R2_SECRET_ACCESS_KEY")
+R2_SCHEME = "r2://"
+
+
+def relay_r2_conf(source=None):
+    """R2 の設定。無ければ None、一部だけ・形が違えば False、そろっていれば dict。"""
+    env = os.environ if source is None else source
+    vals = [str(env.get(k, "") or "").strip() for k in R2_ENV]
+    if not any(vals):
+        return None
+    if not all(vals):
+        return False
+    bucket = str(env.get("SUBSK_GW_R2_BUCKET", "") or "").strip() or BUCKET
+    if not re.fullmatch(r"[0-9a-f]{32}", vals[0]) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+        return False
+    return {"account": vals[0], "access_key": vals[1], "secret": vals[2], "bucket": bucket}
+
+
+def relay_conf(source=None):
+    """中継の接続先 (url, key)。R2 は ("r2://<account>/<bucket>", 秘密鍵)。使えなければ None。"""
+    env = os.environ if source is None else source
+    r2 = relay_r2_conf(env)
+    if r2 is False:
+        return None
+    if r2:
+        return (R2_SCHEME + r2["account"] + "/" + r2["bucket"], r2["secret"])
+    gw_url = str(env.get("SUBSK_GW_SUPABASE_URL", "") or "").strip().rstrip("/")
+    gw_key = str(env.get("SUBSK_GW_SUPABASE_KEY", "") or "").strip()
     if gw_url or gw_key:
-        return (gw_url,gw_key) if gw_url and gw_key else None
-    url=os.environ.get("SUPABASE_URL","").strip().rstrip("/")
-    key=(os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
-         or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-    return (url,key) if url and key else None
+        return (gw_url, gw_key) if gw_url and gw_key else None
+    url = str(env.get("SUPABASE_URL", "") or "").strip().rstrip("/")
+    key = str(env.get("SUPABASE_KEY") or env.get("SUPABASE_SERVICE_KEY")
+              or env.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    return (url, key) if url and key else None
+
+
+def _hmac_sha256(key, text):
+    return hmac.new(key, text.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _sigv4_authorization(method, uri, query, headers, payload_hash, access_key, secret, amz_date, region="auto"):
+    """AWS 署名 v4 の Authorization の値。headers は小文字の名前（host を含む）。R2 の地域は auto。"""
+    day = amz_date[:8]
+    signed = ";".join(sorted(headers))
+    canonical = "\n".join([method, uri, query, "".join(f"{k}:{str(headers[k]).strip()}\n" for k in sorted(headers)),
+                           signed, payload_hash])
+    scope = f"{day}/{region}/s3/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode("utf-8")).hexdigest()])
+    k = _hmac_sha256(("AWS4" + secret).encode("utf-8"), day)
+    for part in (region, "s3", "aws4_request"):
+        k = _hmac_sha256(k, part)
+    signature = hmac.new(k, to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={signature}"
+
+
+def _r2_request(r2, method, key="", body=None, query=None, timeout=20.0):
+    """R2 の S3 互換 API を SigV4 で1回呼ぶ。(status, bytes)。標準ライブラリだけで動く。"""
+    host = r2["account"] + ".r2.cloudflarestorage.com"
+    uri = "/" + r2["bucket"] + ("/" + urllib.parse.quote(key, safe="/-_.~") if key else "")
+    q = "&".join(urllib.parse.quote(k, safe="-_.~") + "=" + urllib.parse.quote(str(v), safe="-_.~")
+                 for k, v in sorted((query or {}).items()))
+    payload = body if isinstance(body, bytes) else (b"" if body is None else str(body).encode("utf-8"))
+    payload_hash = hashlib.sha256(payload).hexdigest()
+    amz_date = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    headers = {"host": host, "x-amz-content-sha256": payload_hash, "x-amz-date": amz_date}
+    if method == "PUT":
+        headers["content-type"] = "application/json"
+    send = {name: value for name, value in headers.items() if name != "host"}
+    send["Authorization"] = _sigv4_authorization(method, uri, q, headers, payload_hash,
+                                                 r2["access_key"], r2["secret"], amz_date)
+    req = urllib.request.Request("https://" + host + uri + ("?" + q if q else ""),
+                                 data=payload if method == "PUT" else None, headers=send, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def _r2_list_names(xml_bytes, prefix):
+    import xml.etree.ElementTree as ET
+    names = []
+    for el in ET.fromstring(xml_bytes).iter():
+        if el.tag.rsplit("}", 1)[-1] == "Key" and el.text and el.text.startswith(prefix):
+            rest = el.text[len(prefix):]
+            if rest and "/" not in rest:  # Supabase の一覧と同じく、その下の直接のファイルだけ
+                names.append(rest)
+    return sorted(names)
+
+
+def relay_storage(r2, method, path, body=None, timeout=20.0):
+    """Supabase Storage の REST の形の呼び出しを R2 へ読み替える。(status, bytes)。
+
+    - POST /storage/v1/object/list/<bucket> {"prefix","limit"} → 一覧（[{"name": ...}] の JSON）
+    - POST|PUT /storage/v1/object/<bucket>/<key> → 置く（上書き）／ GET → 読む ／ DELETE → 消す（成功は 200 に揃える）
+    箱の名前は設定の bucket を使う（path の中の名前は見ない）。
+    """
+    if not isinstance(r2, dict):
+        raise CliFailure("gateway_not_configured")
+    list_prefix, obj_prefix = "/storage/v1/object/list/", "/storage/v1/object/"
+    if path.startswith(list_prefix):
+        req = body if isinstance(body, dict) else json.loads(body or b"{}")
+        prefix = str(req.get("prefix", "") or "")
+        if prefix and not prefix.endswith("/"):
+            prefix += "/"
+        limit = max(1, min(int(req.get("limit", 100) or 100), 1000))
+        code, raw = _r2_request(r2, "GET", "", query={"list-type": "2", "prefix": prefix, "max-keys": str(limit)},
+                                timeout=timeout)
+        if code != 200:
+            return code, raw
+        return 200, json.dumps([{"name": n} for n in _r2_list_names(raw, prefix)]).encode("utf-8")
+    if not path.startswith(obj_prefix):
+        raise ValueError("unsupported relay path")
+    rest = path[len(obj_prefix):]
+    key = rest.split("/", 1)[1] if "/" in rest else ""
+    if not key or ".." in key.split("/"):
+        raise ValueError("unsupported relay key")
+    if method in {"POST", "PUT"}:
+        data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        return _r2_request(r2, "PUT", key, data, timeout=timeout)
+    if method == "DELETE":
+        code, raw = _r2_request(r2, "DELETE", key, timeout=timeout)
+        return (200 if code == 204 else code), raw
+    if method == "GET":
+        return _r2_request(r2, "GET", key, timeout=timeout)
+    raise ValueError("unsupported relay method")
+
+
+def _gateway_conf():
+    return relay_conf()
 
 
 def _storage(method,path,body=None):
@@ -735,6 +871,12 @@ def _storage(method,path,body=None):
     if not conf:
         raise CliFailure("gateway_not_configured")
     url,key=conf
+    if url.startswith(R2_SCHEME):
+        code,raw=relay_storage(relay_r2_conf(),method,"/storage/v1/object/"+BUCKET+"/"+path,body)
+        try:
+            return code,(json.loads(raw) if code==200 and raw else {})
+        except ValueError:
+            return code,{}
     data=json.dumps(body,ensure_ascii=False).encode() if body is not None else None
     req=urllib.request.Request(url+"/storage/v1/object/"+BUCKET+"/"+path,data=data,method=method,
                                headers={"Authorization":"Bearer "+key,"apikey":key,"Content-Type":"application/json","x-upsert":"true"})
@@ -767,12 +909,32 @@ def _worker_heartbeat():
     return True,""
 
 
-def _gateway_generate(request):
+def _cancel_checkpoint(check):
+    if check:
+        check()
+
+
+def _cancel_wait(seconds, check):
+    if not check:
+        time.sleep(seconds)
+        return
+    until = time.monotonic() + seconds
+    while True:
+        check()
+        remaining = until - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.25, remaining))
+
+
+def _gateway_generate(request, cancel_check=None):
     attempts=[]
     for index in range(len(WORKER_CHECK_DELAYS)+1):
+        _cancel_checkpoint(cancel_check)
         if index:
-            time.sleep(WORKER_CHECK_DELAYS[index-1])
+            _cancel_wait(WORKER_CHECK_DELAYS[index-1], cancel_check)
         alive,detail=_worker_heartbeat()
+        _cancel_checkpoint(cancel_check)
         if alive:
             if attempts:
                 # 一瞬の途切れで止めずに済んだ記録（通知は出さない）。
@@ -785,7 +947,9 @@ def _gateway_generate(request):
     payload={**request,"kind":"research" if request["use_search"] else "query","created":time.time(),
              "policy_version":POLICY_VERSION,"max_tokens":request.get("max_tokens",4096)}
     try:
+        _cancel_checkpoint(cancel_check)
         code,_=_storage("POST",path,payload)
+        _cancel_checkpoint(cancel_check)
         if code not in {200,201}:
             raise CliFailure("queue_write_failed")
         # Worker retries both CLIs. Never time out before that retry budget has elapsed.
@@ -793,7 +957,7 @@ def _gateway_generate(request):
         last_health=time.monotonic()
         missed_health=0
         while time.monotonic()<deadline:
-            time.sleep(3)
+            _cancel_wait(3, cancel_check)
             if time.monotonic()-last_health > 30:
                 last_health=time.monotonic()
                 try:
@@ -801,6 +965,7 @@ def _gateway_generate(request):
                     healthy=hcode==200 and time.time()-float(hb.get("ts",0))<90
                 except (OSError,ValueError,CliFailure):
                     healthy=False
+                _cancel_checkpoint(cancel_check)
                 missed_health=0 if healthy else missed_health+1
                 if missed_health>=3:
                     _terminal(request,attempts,"worker_disconnected")
@@ -808,6 +973,7 @@ def _gateway_generate(request):
                 code,result=_storage("GET","res/"+request["id"]+".json")
             except OSError:
                 continue
+            _cancel_checkpoint(cancel_check)
             if code!=200:
                 continue
             if result.get("ok") and result.get("text"):
@@ -822,6 +988,14 @@ def _gateway_generate(request):
             _terminal(request,result.get("attempts",[]),result.get("reason","worker_failed"),
                       already_notified=bool(result.get("notification_queued")))
         _terminal(request,attempts,"worker_response_timeout")
+    except RequestCancelled:
+        # Remove this request only. A worker that already claimed it may finish;
+        # its late response cannot advance the cancelled diagram pipeline.
+        try:
+            _storage("DELETE", path)
+        except (OSError, ValueError, CliFailure):
+            pass
+        raise
     except SubscriptionUnavailable:
         raise
     except (OSError,CliFailure,ValueError):
@@ -985,9 +1159,10 @@ def _api_failure_code(exc):
     return "api_error"
 
 
-def run_api_request(request, conf=None):
+def run_api_request(request, conf=None, cancel_check=None):
     """切り替え済みツールの要求を、専用キーの従量APIで実行する。キーが無い提供元は使わない。"""
     conf = conf or _api_switch_config()
+    _cancel_checkpoint(cancel_check)
     primary = request.get("primary", "claude")
     other = "codex" if primary == "claude" else "claude"
     providers = [primary] + ([other] if request.get("allow_fallback", True) else [])
@@ -998,18 +1173,21 @@ def run_api_request(request, conf=None):
         _terminal(request, attempts, "api_key_missing")
     started_all = time.monotonic()
     for provider in providers:
+        _cancel_checkpoint(cancel_check)
         route = resolve_route(request, provider)
         started = time.monotonic()
         try:
             call = _api_claude if provider == "claude" else _api_openai
             text, result = call(request, route, _api_key(conf, provider))
         except Exception as exc:
+            _cancel_checkpoint(cancel_check)
             reason = _api_failure_code(exc)
             item = {"provider": provider, "attempt": 1, "reason": reason, "billing": "api_key",
                     "elapsed_s": round(time.monotonic()-started, 1), "error": type(exc).__name__, **route}
             attempts.append(item)
             _record(request, outcome="retry_failed", **item)
             continue
+        _cancel_checkpoint(cancel_check)
         if request.get("protocol_tools"):
             _parse_protocol(text, request["protocol_tools"])
         # outcome は "completed_api"（サブスク利用量の画面は "completed" だけをサブスク分として数える）
@@ -1021,12 +1199,14 @@ def run_api_request(request, conf=None):
                    "_requested_model": request.get("model"), "_model": result["model"], "_effort": route["effort"],
                    "_workload": route["workload"], "_routing_version": ROUTING_VERSION, "_attempts": attempts}
         return text, payload
+    _cancel_checkpoint(cancel_check)
     _terminal(request, attempts, "api_unavailable")
 
 
 def generate(system,query,*,model=None,primary=None,use_search=False,timeout=900,
              tool="workflow",label="",channel="",job_id="",attachments=None,effort=None,max_tokens=4096,protocol_tools=None,
-              workload="",fallback_model=None,allow_fallback=True,notify=True):
+              workload="",fallback_model=None,allow_fallback=True,notify=True,cancel_check=None):
+    _cancel_checkpoint(cancel_check)
     if not isinstance(allow_fallback, bool):
         raise ValueError("allow_fallback must be a boolean")
     if primary is not None and primary not in {"claude", "codex"}:
@@ -1047,12 +1227,12 @@ def generate(system,query,*,model=None,primary=None,use_search=False,timeout=900
     start_notification_pump()
     conf=_api_switch_config()
     if _api_enabled_for(request,conf):
-        return run_api_request(request,conf)
+        return run_api_request(request,conf,cancel_check=cancel_check)
     if cli_path("claude") or cli_path("codex"):
-        return run_local_request(request)
+        return run_local_request(request,cancel_check=cancel_check)
     if _gateway_conf():
-        return _gateway_generate(request)
-    return run_local_request(request)  # records both missing binaries and notifies
+        return _gateway_generate(request, cancel_check=cancel_check)
+    return run_local_request(request,cancel_check=cancel_check)  # records both missing binaries and notifies
 
 
 def notify_group_stopped(*, tool, label, job_id, reason, attempts):
