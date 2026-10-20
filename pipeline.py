@@ -915,8 +915,8 @@ class SentencePipeline:
                           f"ビート配分: 画像 {n_img} 枚 / 継続(hold) {n_hold} 文"
                           f"（重要度加重・上限 {self.max_diagrams}）")
                 for r in rows:
-                    if r.get("display") == "hold":
-                        self._update_row(r["no"], status="hold")
+                    if r.get("display") in ("hold", "none"):
+                        self._update_row(r["no"], status=r["display"])
                 self._force_high_coverage_images(rows, routes)
         except Exception as e:
             self._log("error", f"allocator をスキップ（{str(e)[:80]}）。v2 配分にフォールバック。")

@@ -11,6 +11,7 @@
 import json
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -72,7 +73,8 @@ def test_build_resume_args_rejects_completed_and_missing(tmp_path, monkeypatch):
 
 # ---------- pipeline resume（成果物の再利用と生成スキップ） ----------
 
-def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_non_image", [False, True])
+def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch, with_non_image):
     job_dir = tmp_path / "job"
     (job_dir / "images").mkdir(parents=True)
 
@@ -81,21 +83,29 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
         {"no": 2, "sentence": "二文目のテスト文章です。", "chapter_title": "第1章", "block_text": ""},
         {"no": 3, "sentence": "三文目のテスト文章です。", "chapter_title": "第1章", "block_text": ""},
     ]
+    if with_non_image:
+        import allocator
+        rows.append({"no": 4, "sentence": "素材なしの文です。", "chapter_title": "第1章", "block_text": ""})
+        monkeypatch.setattr(allocator, "allocate", lambda *a, **kw: {
+            n: {"display": "none" if n == 4 else "image", "beat_id": n, "est_start": "", "importance": 3}
+            for n in range(1, 5)
+        })
     (job_dir / "split_result.json").write_text(json.dumps({
         "analysis": {"title": "再開テスト"},
         "chapters": [{"title": "第1章", "blocks": []}],
         "rows": rows,
-        "total_sentences": 3,
+        "total_sentences": len(rows),
     }, ensure_ascii=False), encoding="utf-8")
     # JSON往復で文字列キーになった routes（正規化されること）
     (job_dir / "routes.json").write_text(json.dumps({
         "1": {"route": "illustration", "reason": "r"},
         "2": {"route": "illustration", "reason": "r"},
         "3": {"route": "illustration", "reason": "r"},
+        **({"4": {"route": "illustration", "reason": "r"}} if with_non_image else {}),
     }), encoding="utf-8")
     (job_dir / "prompts.json").write_text(json.dumps({"rows": [
         {**r, "prompt": "an illustration", "type": "illustration", "allowed_terms": []}
-        for r in rows
+        for r in rows if r["no"] != 4
     ]}, ensure_ascii=False), encoding="utf-8")
     # №2 は前回生成済み（1KB超）
     (job_dir / "images" / "2.png").write_bytes(b"\x89PNG" + b"0" * 2000)
@@ -123,6 +133,7 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
         provider="nanobanana", gemini_key="dummy",
         verify_diagrams=False, web_image_count=0, route_mode="auto",
         resume=True, openai_model="gpt-image-2.5-flare",
+        beat_mode=with_non_image, coverage_mode="scene",
     )
     manifest = pipe.run()
 
@@ -133,3 +144,6 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
     row2 = next(r for r in snap["rows"] if r["no"] == 2)
     assert row2["status"] == "ok" and row2["filename"] == "2.png"
     assert (job_dir / "images" / "2.png").read_bytes() == b"\x89PNG" + b"0" * 2000
+    if with_non_image:
+        row4 = next(r for r in snap["rows"] if r["no"] == 4)
+        assert row4["status"] == "none" and not row4["filename"]
