@@ -19,8 +19,14 @@ def repair_false_failures(snapshot, prompts):
         status = non_image_status(row, targets.get(row.get("no")))
         expected = (f"№{row.get('no')} のAI生成用プロンプトが見つかりません"
                     "（chart/map は数値・地名のある文のみ再生成可）")
+        # _mark_regen_failed also sets verify_issue=True. Clear that synthetic
+        # flag only when there is no independent image-review verdict to keep.
         if (status and row.get("status") == "failed"
-                and row.get("error") == expected and not row.get("verify_issue")):
+                and row.get("error") == expected
+                and not row.get("verify_reason") and not row.get("verify_status")
+                and not row.get("verify_issue_tags")):
             row.update(status=status, error="")
+            if "verify_issue" in row:
+                row["verify_issue"] = False
             repaired.append(row["no"])
     return repaired

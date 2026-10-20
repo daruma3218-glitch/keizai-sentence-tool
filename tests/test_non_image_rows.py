@@ -22,14 +22,16 @@ def row(no, display="hold", **extra):
 
 def test_repair_only_known_false_failures_and_preserve_everything_else(tmp_path):
     original = {"rows": [
-        row(1), row(2, "none"), row(3, "image"),
+        row(1, verify_issue=True), row(2, "none"), row(3, "image"),
         row(4, filename="4.png"), row(5, error="API failed"),
-        row(6, verify_issue=True), row(7), row(8, prompt="intentional image"),
+        row(6, verify_issue=True, verify_reason="independent review"), row(7), row(8, prompt="intentional image"),
     ], "custom_metadata": {"adopted": 4}}
     prompts = [{"no": 7, "prompt": "a requested image"}]
     expected = copy.deepcopy(original)
     for item in expected["rows"][:2]:
         item.update(status=item["display"], error="")
+        if "verify_issue" in item:
+            item["verify_issue"] = False
     (tmp_path / "rows_progress.json").write_text(json.dumps(original), encoding="utf-8")
     (tmp_path / "prompts.json").write_text(json.dumps({"rows": prompts}), encoding="utf-8")
     (tmp_path / "job.json").write_text('{"status":"completed"}', encoding="utf-8")
