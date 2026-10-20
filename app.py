@@ -2233,6 +2233,14 @@ def api_regenerate(job_id, no):
     if force_route and force_route not in forceable_routes:
         return jsonify({"error": f"この再生成で指定できないルートです: {force_route}"}), 400
 
+    # Allocation can intentionally reuse the preceding image or show no image.
+    # Bulk retry must not turn these rows into a missing-prompt failure. Explicit
+    # route changes/edits still enter the normal generation path below.
+    from row_generation import non_image_status
+    idle_status = non_image_status(snap_row, target)
+    if idle_status and not force_route and not diagram_edit:
+        return jsonify({"ok": True, "no": no, "skipped": True, "status": idle_status})
+
     # チャンネル設定・キーを解決（再生成も該当チャンネルの設定で）
     channel_id = params.get("channel_id", "default")
     channel = get_channel(channel_id)

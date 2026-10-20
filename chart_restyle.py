@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from utils import parse_json_object
+from image_memory import image_operation
 
 # 1回の生成で描き直す上限（1枚ずつ・約30〜40秒/枚）。超えた分はコードのグラフのまま。
 CHART_RESTYLE_MAX = 30
@@ -160,6 +161,7 @@ def _image_file(data: bytes, name: str):
     return bio
 
 
+@image_operation
 def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: str, quality: str,
                  style_lock_text: str = "", reference_path: str = "", sentence: str = "",
                  backdrop: int = 0, layout: int = 0) -> tuple:
@@ -197,11 +199,14 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
         if not b64:
             return False, "画像が返りませんでした"
         data = base64.b64decode(b64)
-        b64 = response = None  # 大きなデータを早めに手放す（本番は 512MB）
+        b64 = datum = response = None  # 大きなデータを早めに手放す（本番は 512MB）
         _save_as_16_9(data, out_path, fill="crop" if full_bleed(style_lock_text) else "pad")
         return True, ""
     except Exception as e:
         return False, str(e)[:160]
+    finally:
+        for image in images:
+            image.close()
 
 
 def verify_redraw(verify_client, rendered_path: Path, redrawn_path: Path) -> tuple:

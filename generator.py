@@ -14,6 +14,7 @@ import base64
 import os
 import re
 import time
+from contextlib import ExitStack, closing
 from io import BytesIO
 from pathlib import Path
 from typing import Callable, Optional
@@ -24,6 +25,7 @@ from google.genai import types
 
 # Pillow（クロップ用）
 from PIL import Image
+from image_memory import effective_concurrency, image_operation, image_slot
 from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
 from suasi_pose import select_pose, POSE_NAMES
@@ -160,42 +162,32 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
     - 横長すぎ（例 OpenAI 3:2）→ 上下に余白を足す
     - 縦長すぎ → 左右に余白を足す
     """
-    img = Image.open(BytesIO(image_bytes))
-    if img.mode not in ("RGB", "RGBA"):
-        img = img.convert("RGB")
-    if fill == "crop":
-        _crop_to_16_9(img.convert("RGB")).save(output_path, format="PNG")
-        return
-    w, h = img.size
-    current = w / h if h else 1.0
-
-    if abs(current - TARGET_RATIO) < 0.01:
-        # 既にほぼ 16:9 → そのまま
-        img.save(output_path, format="PNG")
-        return
-
-    # 背景色を検出（余白に使う）
-    bg = _detect_background_color(img)
-
-    if current > TARGET_RATIO:
-        # 横長すぎ → 幅基準でキャンバスを作り、上下に余白
-        canvas_w = w
-        canvas_h = int(round(w / TARGET_RATIO))
-    else:
-        # 縦長すぎ → 高さ基準でキャンバスを作り、左右に余白
-        canvas_h = h
-        canvas_w = int(round(h * TARGET_RATIO))
-
-    # 16:9 キャンバスを背景色で作成し、元画像を中央に配置（縮小なし＝全体保持）
-    canvas = Image.new("RGB", (canvas_w, canvas_h), bg)
-    offset_x = (canvas_w - w) // 2
-    offset_y = (canvas_h - h) // 2
-    if img.mode == "RGBA":
-        canvas.paste(img, (offset_x, offset_y), img)
-    else:
-        canvas.paste(img, (offset_x, offset_y))
-
-    canvas.save(output_path, format="PNG")
+    with ExitStack() as stack:
+        source = stack.enter_context(BytesIO(image_bytes))
+        img = stack.enter_context(closing(Image.open(source)))
+        if img.mode not in ("RGB", "RGBA"):
+            img = stack.enter_context(closing(img.convert("RGB")))
+        if fill == "crop":
+            rgb = img if img.mode == "RGB" else stack.enter_context(closing(img.convert("RGB")))
+            cropped = _crop_to_16_9(rgb)
+            if cropped is not rgb:
+                stack.enter_context(closing(cropped))
+            cropped.save(output_path, format="PNG")
+            return
+        w, h = img.size
+        current = w / h if h else 1.0
+        if abs(current - TARGET_RATIO) < 0.01:
+            img.save(output_path, format="PNG")
+            return
+        bg = _detect_background_color(img)
+        if current > TARGET_RATIO:
+            canvas_w, canvas_h = w, int(round(w / TARGET_RATIO))
+        else:
+            canvas_w, canvas_h = int(round(h * TARGET_RATIO)), h
+        canvas = stack.enter_context(closing(Image.new("RGB", (canvas_w, canvas_h), bg)))
+        offset = ((canvas_w - w) // 2, (canvas_h - h) // 2)
+        canvas.paste(img, offset, img if img.mode == "RGBA" else None)
+        canvas.save(output_path, format="PNG")
 
 
 # ===== v3 Step5: realphoto キャプション焼き込み（報道映像との誤認防止）=====
@@ -220,27 +212,31 @@ def _caption_font(size: int):
     return f
 
 
+@image_operation
 def add_image_caption(path, text: str = "イメージ") -> bool:
     """画像の右上に半透明の「イメージ」キャプションを焼き込む（realphoto 用）。"""
     try:
         from PIL import Image, ImageDraw
-        im = Image.open(path).convert("RGBA")
-        W, H = im.size
-        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        d = ImageDraw.Draw(overlay)
-        fsize = max(22, H // 30)
-        font = _caption_font(fsize)
-        bbox = d.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        pad = max(8, fsize // 3)
-        m = max(10, H // 60)
-        x1 = W - tw - pad * 2 - m
-        y1 = m
-        y2 = y1 + th + pad * 2
-        d.rounded_rectangle([x1, y1, W - m, y2], radius=pad, fill=(0, 0, 0, 130))
-        d.text((x1 + pad - bbox[0], y1 + pad - bbox[1]), text, font=font,
-               fill=(255, 255, 255, 230))
-        Image.alpha_composite(im, overlay).convert("RGB").save(path)
+        with ExitStack() as stack:
+            source = stack.enter_context(closing(Image.open(path)))
+            im = stack.enter_context(closing(source.convert("RGBA")))
+            W, H = im.size
+            overlay = stack.enter_context(closing(Image.new("RGBA", (W, H), (0, 0, 0, 0))))
+            d = ImageDraw.Draw(overlay)
+            fsize = max(22, H // 30)
+            font = _caption_font(fsize)
+            bbox = d.textbbox((0, 0), text, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            pad = max(8, fsize // 3)
+            m = max(10, H // 60)
+            x1 = W - tw - pad * 2 - m
+            y1 = m
+            y2 = y1 + th + pad * 2
+            d.rounded_rectangle([x1, y1, W - m, y2], radius=pad, fill=(0, 0, 0, 130))
+            d.text((x1 + pad - bbox[0], y1 + pad - bbox[1]), text, font=font,
+                   fill=(255, 255, 255, 230))
+            composited = stack.enter_context(closing(Image.alpha_composite(im, overlay)))
+            stack.enter_context(closing(composited.convert("RGB"))).save(path)
         return True
     except Exception as e:
         print(f"  [caption ERROR] {str(e)[:80]}", flush=True)
@@ -616,6 +612,7 @@ def _build_full_prompt(
 
 
 # ===== Gemini (nanobanana) =====
+@image_operation
 def _sync_generate_image_gemini(
     client: genai.Client,
     full_prompt: str,
@@ -687,6 +684,7 @@ def _sync_generate_image_gemini(
 
 
 # ===== OpenAI (gpt-image-2) =====
+@image_operation
 def _sync_generate_image_openai(
     client,  # openai.OpenAI
     full_prompt: str,
@@ -706,17 +704,12 @@ def _sync_generate_image_openai(
     for attempt in range(MAX_RETRIES):
         try:
             if reference_bytes:
-                import io
-                bio = io.BytesIO(reference_bytes)
-                bio.name = "reference.jpg" if reference_bytes.startswith(b"\xff\xd8\xff") else "reference.png"
-                response = client.images.edit(
-                    model=model_name,
-                    image=bio,
-                    prompt=full_prompt,
-                    n=1,
-                    size=size,
-                    quality=quality,
-                )
+                with BytesIO(reference_bytes) as bio:
+                    bio.name = "reference.jpg" if reference_bytes.startswith(b"\xff\xd8\xff") else "reference.png"
+                    response = client.images.edit(
+                        model=model_name, image=bio, prompt=full_prompt, n=1,
+                        size=size, quality=quality,
+                    )
             else:
                 response = client.images.generate(
                     model=model_name,
@@ -737,6 +730,7 @@ def _sync_generate_image_openai(
 
             if b64:
                 img_data = base64.b64decode(b64)
+                b64 = datum = response = None
                 _save_as_16_9(img_data, output_path, fill=fill)
                 return True, ""
             elif url:
@@ -861,7 +855,7 @@ class ParallelImageGenerator:
             # タイムアウト + リトライ0（リトライは自前で制御）
             self.openai_client = openai.OpenAI(api_key=openai_api_key, timeout=API_TIMEOUT_SEC, max_retries=0)
 
-        self.concurrency = max(1, min(concurrency, 32))
+        self.concurrency = effective_concurrency(concurrency)
         self.progress_callback = progress_callback or (lambda info: None)
         self._executor = None  # generate_all で専用 ThreadPoolExecutor を割り当てる
         # Lock は async 関数内で生成する（Python 3.9 対策）
@@ -1026,8 +1020,9 @@ class ParallelImageGenerator:
             presenter_recipe = None
             if success and suasi_presenter:
                 try:
-                    presenter_recipe = compose_presenter(output_path, self.suasi_artworks[pose["pose_id"]],
-                                                         pose["pose_id"], pose["reason"])
+                    with image_slot():
+                        presenter_recipe = compose_presenter(output_path, self.suasi_artworks[pose["pose_id"]],
+                                                             pose["pose_id"], pose["reason"])
                 except Exception as exc:
                     success, error = False, f"すあし社長の原画配置に失敗: {str(exc)[:150]}"
 
@@ -1121,8 +1116,9 @@ class ParallelImageGenerator:
                         self._canonical_events[ci] = asyncio.Event()
                         self._canonical_bytes[ci] = None
         # 専用スレッドプール（デフォルト executor のスレッド枯渇を防ぐ）。
-        # 固まったスレッドが居ても新しい画像生成が進められるよう余裕を持たせる
-        self._executor = ThreadPoolExecutor(max_workers=self.concurrency + 4)
+        # Timeout cannot kill an HTTP worker. Do not create spare workers that
+        # accumulate full-size responses beyond the process memory budget.
+        self._executor = ThreadPoolExecutor(max_workers=self.concurrency)
         # 全体の時間予算（安全網）: 超えたら未完了を打ち切り、必ず完了させる。
         # 1枚が固まってもジョブ全体が数十分止まらないよう、画像数に応じて短めにする。
         batches = (len(prompts) + self.concurrency - 1) // max(1, self.concurrency)
@@ -1136,7 +1132,9 @@ class ParallelImageGenerator:
             if pending:
                 print(f"  [generator] 時間予算({overall_budget}s)超過: 未完了 {len(pending)} 枚を打ち切り", flush=True)
         finally:
-            self._executor.shutdown(wait=False)
+            # Finish active bounded HTTP calls before returning/closing clients;
+            # otherwise the next batch can overlap timed-out image operations.
+            self._executor.shutdown(wait=True, cancel_futures=True)
             # 打ち切り等で canonical タスクがキャンセルされた場合でも、
             # 待機中の follower を必ず解放する（イベント未setのまま放置しない）
             for _ev in (self._canonical_events or {}).values():
@@ -1217,4 +1215,13 @@ def run_parallel_generation(
         realphoto_watermark=realphoto_watermark,
         style_lock_text=style_lock_text,
     )
-    return asyncio.run(generator.generate_all(prompts, output_dir))
+    try:
+        return asyncio.run(generator.generate_all(prompts, output_dir))
+    finally:
+        for client in (generator.openai_client, generator.gemini_client):
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass  # Cleanup must not turn already saved images into a failed job.

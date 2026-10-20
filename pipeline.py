@@ -1415,7 +1415,8 @@ class SentencePipeline:
         # メモリ安全: 大量枚数のジョブは並列を控えめにして OOM/API失敗を避ける。
         # （同時に処理する画像が減るとピークメモリが下がる。安定優先で少し遅くなる。）
         n_gen = len(generation_targets)
-        eff_concurrency = self.concurrency
+        from image_memory import effective_concurrency
+        eff_concurrency = effective_concurrency(self.concurrency)
         if n_gen > 120:
             eff_concurrency = min(eff_concurrency, 3)
         elif n_gen > 60:
@@ -1423,7 +1424,7 @@ class SentencePipeline:
         if eff_concurrency != self.concurrency:
             self._log("generator",
                       f"メモリ保護のため並列を {self.concurrency} → {eff_concurrency} に調整（{n_gen} 枚）",
-                      "大量生成時のOOM/API失敗を避けるため、安定優先で調整します")
+                      "サーバーのメモリ上限に合わせ、画像の大きさ・品質を保ったまま順番に生成します")
         self._progress(3,
                        f"画像を並列生成中（{provider_label} / 同時 {eff_concurrency} 枚 / {n_gen} 枚）...",
                        40)

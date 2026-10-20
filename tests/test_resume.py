@@ -132,3 +132,4 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch):
     snap = json.loads((job_dir / "rows_progress.json").read_text(encoding="utf-8"))
     row2 = next(r for r in snap["rows"] if r["no"] == 2)
     assert row2["status"] == "ok" and row2["filename"] == "2.png"
+    assert (job_dir / "images" / "2.png").read_bytes() == b"\x89PNG" + b"0" * 2000

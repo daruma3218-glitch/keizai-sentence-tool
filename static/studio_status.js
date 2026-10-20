@@ -34,6 +34,18 @@
     element.innerHTML = content(status, label);
   }
   function row(status, issue) { return ['failed','generating'].includes(status) ? status : issue ? 'attention' : status || 'pending'; }
+  function isImageCandidate(item) {
+    if (['hold','none'].includes(item.display) && !item.filename && !item.prompt) return false;
+    return ['realphoto','diagram','illustration','chart','map','web_photo'].includes(item.route || '');
+  }
+  function hasIssue(item, jobStatus) {
+    const status = item.status || 'pending', route = item.route || '';
+    if (status === 'failed' || (item.error || '').trim() || item.verify_issue || item.web_duplicate_skipped) return true;
+    if (!isImageCandidate(item)) return false;
+    if (status === 'ok' && !item.filename && route !== 'web_photo') return true;
+    if (jobStatus === 'completed' && !item.filename && route !== 'web_photo' && !['skipped','thinned','skipped_limit'].includes(status)) return true;
+    return jobStatus === 'completed' && route === 'web_photo' && !item.web_source_url;
+  }
   function chapter(stats) {
     if (stats.failed) return 'failed';
     if (stats.issue) return 'attention';
@@ -49,7 +61,7 @@
     });
     return counts;
   }
-  const api = {describe, content, html, apply, row, chapter, summary};
+  const api = {describe, content, html, apply, row, chapter, summary, isImageCandidate, hasIssue};
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.StudioStatus = api;
 })(typeof window === 'object' ? window : {});

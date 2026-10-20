@@ -401,21 +401,11 @@
     }
 
     function isImageCandidate(row) {
-      const route = row.route || '';
-      return ['realphoto', 'diagram', 'illustration', 'chart', 'map', 'web_photo'].includes(route);
+      return StudioStatus.isImageCandidate(row);
     }
 
     function rowHasIssue(row) {
-      const status = row.status || 'pending';
-      const route = row.route || '';
-      if (status === 'failed') return true;
-      if ((row.error || '').trim()) return true;
-      if (row.verify_issue) return true;
-      if (row.web_duplicate_skipped) return true;
-      if (status === 'ok' && isImageCandidate(row) && !row.filename && route !== 'web_photo') return true;
-      if (lastJobStatus === 'completed' && isImageCandidate(row) && !row.filename && route !== 'web_photo' && !['skipped', 'thinned', 'skipped_limit'].includes(status)) return true;
-      if (lastJobStatus === 'completed' && route === 'web_photo' && !row.web_source_url) return true;
-      return false;
+      return StudioStatus.hasIssue(row, lastJobStatus);
     }
 
     function rowDataAttrs(row) {
@@ -956,6 +946,13 @@
           restoreRegenCell(cell, previousCellHtml, no, currentRoute);
           markRowRegenFailed(tr, data.error || String(res.status));
           return { ok: false, error: data.error || String(res.status) };
+        }
+        if (data.skipped) {
+          if (cell) cell.innerHTML = StudioStatus.html(data.status || 'skipped');
+          tr.setAttribute('data-status', data.status || 'skipped');
+          tr.setAttribute('data-issue', '0');
+          tr.setAttribute('data-error', '');
+          return { ok: true, skipped: true };
         }
         if (!data.skipped && !data.filename) {
           const msg = '再生成は完了しましたが、画像ファイルが返りませんでした。';
