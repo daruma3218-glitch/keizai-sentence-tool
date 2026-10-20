@@ -480,16 +480,18 @@ class SentencePipeline:
     def _existing_image(self, no) -> str:
         """再開用: その文の生成済み画像がディスクにあればファイル名を返す。
 
-        前回の実行で保存された images/{no}.png 等（1KB超＝壊れていない）を
-        完成済みとみなし、再生成をスキップする根拠にする。
+        サイズだけで判断せず、画像の構造とピクセルを最後まで読み取る。
+        書き込み途中の画像は元バイトを退避し、残りの生成対象に戻す。
         """
         for ext in ("png", "jpg", "jpeg", "webp"):
             p = self.images_dir / f"{no}.{ext}"
-            try:
-                if p.exists() and p.stat().st_size > 1024:
+            if p.is_file():
+                from image_files import is_complete_image, archive_incomplete_image
+                if is_complete_image(p):
                     return p.name
-            except OSError:
-                continue
+                # A failed archive must stop recovery before the original is replaced.
+                archive_incomplete_image(p, self.output_dir)
+                self._log("resume", f"№{no} の不完全な画像を退避しました。再生成します")
         return ""
 
     def _force_high_coverage_images(self, rows: list, routes: dict) -> int:

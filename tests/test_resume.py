@@ -12,6 +12,7 @@ import json
 import sys
 from pathlib import Path
 import pytest
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -109,8 +110,10 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch, with_non_image
         {**r, "prompt": "an illustration", "type": "illustration", "allowed_terms": []}
         for r in rows if r["no"] != 4
     ]}, ensure_ascii=False), encoding="utf-8")
-    # №2 は前回生成済み（1KB超）
-    (job_dir / "images" / "2.png").write_bytes(b"\x89PNG" + b"0" * 2000)
+    # №2 は前回生成済み。サイズだけでなく実際に読める画像を再利用する。
+    with Image.new("RGB", (96, 54), "white") as image:
+        image.save(job_dir / "images" / "2.png")
+    image_bytes = (job_dir / "images" / "2.png").read_bytes()
 
     # 再開なら Claude 系は一切呼ばれない（呼ばれたら失敗）
     def boom(*a, **k):
@@ -145,7 +148,7 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch, with_non_image
     snap = json.loads((job_dir / "rows_progress.json").read_text(encoding="utf-8"))
     row2 = next(r for r in snap["rows"] if r["no"] == 2)
     assert row2["status"] == "ok" and row2["filename"] == "2.png"
-    assert (job_dir / "images" / "2.png").read_bytes() == b"\x89PNG" + b"0" * 2000
+    assert (job_dir / "images" / "2.png").read_bytes() == image_bytes
     assert (job_dir / "manuscript.txt").read_bytes() == manuscript_bytes
     if with_non_image:
         row4 = next(r for r in snap["rows"] if r["no"] == 4)

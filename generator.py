@@ -26,6 +26,7 @@ from google.genai import types
 # Pillow（クロップ用）
 from PIL import Image
 from image_memory import effective_concurrency, image_operation, image_slot
+from image_files import save_png_atomic
 from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
 from suasi_pose import select_pose, POSE_NAMES
@@ -172,12 +173,12 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
             cropped = _crop_to_16_9(rgb)
             if cropped is not rgb:
                 stack.enter_context(closing(cropped))
-            cropped.save(output_path, format="PNG")
+            save_png_atomic(cropped, output_path)
             return
         w, h = img.size
         current = w / h if h else 1.0
         if abs(current - TARGET_RATIO) < 0.01:
-            img.save(output_path, format="PNG")
+            save_png_atomic(img, output_path)
             return
         bg = _detect_background_color(img)
         if current > TARGET_RATIO:
@@ -187,7 +188,7 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
         canvas = stack.enter_context(closing(Image.new("RGB", (canvas_w, canvas_h), bg)))
         offset = ((canvas_w - w) // 2, (canvas_h - h) // 2)
         canvas.paste(img, offset, img if img.mode == "RGBA" else None)
-        canvas.save(output_path, format="PNG")
+        save_png_atomic(canvas, output_path)
 
 
 # ===== v3 Step5: realphoto キャプション焼き込み（報道映像との誤認防止）=====
@@ -236,7 +237,7 @@ def add_image_caption(path, text: str = "イメージ") -> bool:
             d.text((x1 + pad - bbox[0], y1 + pad - bbox[1]), text, font=font,
                    fill=(255, 255, 255, 230))
             composited = stack.enter_context(closing(Image.alpha_composite(im, overlay)))
-            stack.enter_context(closing(composited.convert("RGB"))).save(path)
+            save_png_atomic(stack.enter_context(closing(composited.convert("RGB"))), path)
         return True
     except Exception as e:
         print(f"  [caption ERROR] {str(e)[:80]}", flush=True)

@@ -1877,11 +1877,12 @@ def _find_existing_scene_image(job_dir, no, snap_row=None, target=None):
         image_dir / f"{no}.webp",
     ])
     for p in candidates:
-        try:
-            if p.exists() and p.stat().st_size > 50:
+        if p.is_file():
+            from image_files import is_complete_image, archive_incomplete_image
+            if is_complete_image(p):
                 return p
-        except Exception:
-            continue
+            # Do not regenerate over an incomplete file if preserving it fails.
+            archive_incomplete_image(p, job_dir)
     return None
 
 
