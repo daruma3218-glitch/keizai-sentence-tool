@@ -1601,7 +1601,11 @@ def api_status(job_id):
     state = _get_job_state(job_id)
     if not state:
         return jsonify({"status": "not_found"}), 404
-    return jsonify(state)
+    from image_memory import effective_concurrency
+    response = dict(state)
+    if state.get("concurrency"):
+        response["effective_concurrency"] = effective_concurrency(state["concurrency"])
+    return jsonify(response)
 
 
 @app.route("/api/rows/<job_id>")

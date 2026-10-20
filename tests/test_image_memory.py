@@ -34,6 +34,19 @@ def test_memory_budget_applies_to_small_jobs_and_all_generator_instances(monkeyp
     assert image_memory.effective_concurrency(12) == 1
 
 
+def test_progress_shows_effective_capacity_without_rewriting_saved_preference(monkeypatch):
+    import app as appmod
+    state = {"status": "running", "concurrency": 4}
+    monkeypatch.setattr(appmod, "_get_job_state", lambda _: state)
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+    monkeypatch.setattr(image_memory, "IMAGE_CAPACITY", 1)
+    response = appmod.app.test_client().get("/api/status/job")
+    assert response.status_code == 200
+    assert response.json["concurrency"] == 4
+    assert response.json["effective_concurrency"] == 1
+    assert state == {"status": "running", "concurrency": 4}
+
+
 @pytest.mark.parametrize("mode,size,fill,expected", [
     ("RGB", (96, 54), "pad", (96, 54)),
     ("RGBA", (96, 64), "crop", (96, 54)),

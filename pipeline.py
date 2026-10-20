@@ -770,8 +770,11 @@ class SentencePipeline:
         # Phase 0
         self._progress(0, "原稿を保存中...", 1)
         manuscript_path = self.output_dir / "manuscript.txt"
-        manuscript_path.write_text(self.manuscript_text, encoding="utf-8")
-        self._log("setup", f"原稿を保存しました（{len(self.manuscript_text)}文字）")
+        if self.resume and manuscript_path.exists():
+            self._log("setup", "保存済みの原稿を保持して再開します")
+        else:
+            manuscript_path.write_text(self.manuscript_text, encoding="utf-8")
+            self._log("setup", f"原稿を保存しました（{len(self.manuscript_text)}文字）")
 
         # ===== Phase 1: 分解 =====
         self._progress(1, "原稿を章/ブロック/センテンスに分解中...", 5)

@@ -715,7 +715,7 @@
         els.jobMessage.textContent = state.message || '...';
         els.overallBar.style.width = `${state.percent || 0}%`;
         els.overallPercent.textContent = `${state.percent || 0}%`;
-        if (state.concurrency) els.concurrencyVal.textContent = state.concurrency;
+        if (state.concurrency) els.concurrencyVal.textContent = state.effective_concurrency ?? state.concurrency;
         if (state.provider) {
           els.providerLabel.textContent = state.provider === 'gpt-image'
             ? `gpt-image-2 (${state.openai_quality || 'medium'})`

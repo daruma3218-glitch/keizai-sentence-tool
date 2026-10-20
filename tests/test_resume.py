@@ -77,6 +77,8 @@ def test_build_resume_args_rejects_completed_and_missing(tmp_path, monkeypatch):
 def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch, with_non_image):
     job_dir = tmp_path / "job"
     (job_dir / "images").mkdir(parents=True)
+    manuscript_bytes = ("て" * 100 + "\r\n" + "す" * 100 + "\r\n").encode("utf-8")
+    (job_dir / "manuscript.txt").write_bytes(manuscript_bytes)
 
     rows = [
         {"no": 1, "sentence": "一文目のテスト文章です。", "chapter_title": "第1章", "block_text": ""},
@@ -129,7 +131,7 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch, with_non_image
     monkeypatch.setattr(plmod, "run_parallel_generation", fake_generate)
 
     pipe = plmod.SentencePipeline(
-        manuscript_text="て" * 200, output_dir=job_dir,
+        manuscript_text=(job_dir / "manuscript.txt").read_text(encoding="utf-8"), output_dir=job_dir,
         provider="nanobanana", gemini_key="dummy",
         verify_diagrams=False, web_image_count=0, route_mode="auto",
         resume=True, openai_model="gpt-image-2.5-flare",
@@ -144,6 +146,7 @@ def test_pipeline_resume_skips_done_images(tmp_path, monkeypatch, with_non_image
     row2 = next(r for r in snap["rows"] if r["no"] == 2)
     assert row2["status"] == "ok" and row2["filename"] == "2.png"
     assert (job_dir / "images" / "2.png").read_bytes() == b"\x89PNG" + b"0" * 2000
+    assert (job_dir / "manuscript.txt").read_bytes() == manuscript_bytes
     if with_non_image:
         row4 = next(r for r in snap["rows"] if r["no"] == 4)
         assert row4["status"] == "none" and not row4["filename"]
