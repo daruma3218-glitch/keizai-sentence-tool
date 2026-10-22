@@ -88,3 +88,16 @@ body:has(dialog[open]){overflow:hidden}
 @media(max-width:650px){.review-navigation{gap:6px;padding:8px}.review-navigation .button{padding:8px;font-size:12px}.review-navigation .hint{font-size:11px}}
 /* Keep the shared hub link and existing menus accessible on narrow screens. */
 @media(max-width:650px){.studio-header{height:auto;min-height:70px;flex-wrap:wrap;padding:12px 18px}.studio-header .header-links{max-width:none;flex:1 1 100%;justify-content:flex-start;gap:8px 14px}}
+
+/* 採用して進む操作を主役にし、閲覧だけの移動と区別する。 */
+.review-browse-hint { margin: 8px 0 0; font-weight: 700; }
+.review-browse-hint span { font-weight: 400; }
+.review-browse-hint + .review-navigation { margin-top: 6px; }
+.review-footer { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; }
+.review-more { position: relative; }
+.review-more summary { min-height: 44px; display: flex; align-items: center; justify-content: center; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: 13px; list-style: none; }
+.review-more summary::after { content: "⌃"; margin-left: 8px; }
+.review-more-actions { position: absolute; right: 0; bottom: calc(100% + 8px); width: min(290px,76vw); padding: 8px; background: white; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 22px #20352b25; display: grid; gap: 8px; }
+.review-more-actions .button { width: 100%; white-space: normal; }
+.review-more summary:focus-visible { outline: 3px solid #2d7968; outline-offset: 3px; }
+.review-footer #review-adopt-next { font-size: 14px; min-height: 48px; }

@@ -171,7 +171,7 @@
     const rows = reviewScenes(), index = rows.findIndex(row => String(row.no) === reviewNo);
     $('review-prev-scene').disabled = busy || index <= 0;
     $('review-next-scene').disabled = busy || index < 0 || index >= rows.length - 1;
-    $('review-position').textContent = index < 0 ? '' : (index + 1) + ' / ' + rows.length + ' 場面（章・検索の範囲）';
+    $('review-position').textContent = index < 0 ? '' : (index + 1) + ' / ' + rows.length + ' 場面';
   }
   function moveReview(direction) {
     if (busy) return;
@@ -204,13 +204,15 @@
     $('review-chosen').textContent = focused?.id === chosen ? '✓ この候補を採用中' : '採用すると、この場面で使う画像として保存されます。';
     const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
     $('review-skip').hidden = !next;
-    $('review-adopt-next').textContent = next ? '採用して次の未採用へ →' : '採用して一覧へ戻る';
-    $('review-adopt').textContent = focused?.id === chosen ? '採用中' : 'この候補を採用';
+    $('review-more').hidden = !focused && !next;
+    $('review-adopt-next').textContent = next ? '採用して次へ →' : '採用して一覧へ戻る';
+    $('review-adopt').textContent = focused?.id === chosen ? '採用中の候補を保存' : '採用してこの場面にとどまる';
     updateReviewNavigation();
   }
   function openReview(no, candidate) {
     reviewNo = String(no); reviewCandidate = candidate || ''; reviewReference = '';
     $('review-status').textContent = '';
+    $('review-more').open = false;
     renderReview();
     if (!$('preview-dialog').open) $('preview-dialog').showModal();
     $('preview-dialog').scrollTop = 0;
@@ -235,6 +237,7 @@
     if (!await select(reviewNo, 'select', reviewCandidate)) return;
     if (!$('preview-dialog').open) return;
     $('review-status').textContent = '採用を保存しました。';
+    $('review-more').open = false;
     if (advance) {
       const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
       if (next) openReview(next.no);

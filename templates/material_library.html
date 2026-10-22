@@ -32,6 +32,7 @@
 <dialog id="preview-dialog" class="review-dialog" aria-labelledby="review-title">
   <div class="dialog-heading"><div><p id="review-location" class="hint"></p><h2 id="review-title">候補を比較・採用</h2></div><button class="icon-button" data-close="preview-dialog" aria-label="比較を閉じる">×</button></div>
   <p id="review-sentence" class="review-sentence"></p><p id="review-flag" class="hint flag-label" hidden></p>
+  <p class="hint review-browse-hint">見る場面を移動 <span>· 採用は変更しません</span></p>
   <nav class="review-navigation" aria-label="拡大したまま場面を移動"><button id="review-prev-scene" type="button" class="button compact">← 前の場面</button><span id="review-position" class="hint" role="status"></span><button id="review-next-scene" type="button" class="button compact">次の場面 →</button></nav>
   <div id="review-grid" class="review-grid">
     <div id="review-reference" class="review-pane"><label for="review-reference-id">比較する候補</label><select id="review-reference-id"></select><img id="review-reference-image" alt="比較する候補の拡大表示"></div>
@@ -39,7 +40,13 @@
   </div>
   <div id="review-no-candidate" class="empty" hidden><p>この場面には、まだ候補がありません。</p><button id="review-add" type="button" class="button">一覧で候補を追加する</button></div>
   <p id="review-status" class="hint" role="status" aria-live="polite"></p>
-  <div class="review-footer"><button id="review-skip" class="button" type="button">採用せず次の未採用へ</button><div class="actions"><button id="review-adopt" class="button" type="button">この候補を採用</button><button id="review-adopt-next" class="button dark" type="button">採用して次の未採用へ →</button></div></div>
+  <div class="review-footer">
+    <button id="review-adopt-next" class="button dark" type="button">採用して次へ →</button>
+    <details id="review-more" class="review-more"><summary>その他</summary><div class="review-more-actions">
+      <button id="review-adopt" class="button" type="button">採用してこの場面にとどまる</button>
+      <button id="review-skip" class="button" type="button">今回は選ばず、次の未採用へ</button>
+    </div></details>
+  </div>
 </dialog>
 <dialog id="flag-dialog" aria-labelledby="flag-title"><form id="flag-form"><div class="dialog-heading"><h2 id="flag-title">要修正のメモ</h2><button class="icon-button" type="button" data-close="flag-dialog" aria-label="閉じる">×</button></div><label for="flag-note">確認・修正したい内容</label><textarea id="flag-note" maxlength="500" rows="3" required placeholder="例：画面内の文字を確認する"></textarea><p class="hint">採用や手直しをしても、このメモは残ります。確認後に自分で解除してください。</p><div class="actions"><button class="button" type="button" id="clear-flag">要修正を解除</button><button class="button dark" type="submit">メモを保存</button></div></form></dialog>
 <dialog id="export-dialog" aria-labelledby="export-title"><div class="dialog-heading"><h2 id="export-title">途中の採用素材を書き出します</h2><button class="icon-button" data-close="export-dialog" aria-label="閉じる">×</button></div><p id="export-warning"></p><p class="hint">採用されている素材だけを書き出します。要修正の採用画像も含まれます。素材の準備完了・動画の最終承認にはなりません。</p><div class="actions"><button class="button" data-close="export-dialog" type="button">確認を続ける</button><button class="button dark" id="export-confirm" type="button">途中版として書き出す</button></div></dialog>
