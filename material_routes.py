@@ -105,6 +105,22 @@ def register(module):
                                prefill_title=request.args.get("title", "")[:160],
                                prefill_trello=card)
 
+    @bp.route("/api/material-projects/<project_id>/trello-source")
+    @module.login_required
+    def trello_source(project_id):
+        """ハブの案件から開いた時、カードにある原稿の本文を読む（画面の原稿欄に入れるだけ・生成はしない）。"""
+        import cloudflare_access
+        import trello_source as reader
+        project = store.get_project(module.OUTPUT_ROOT, project_id)
+        try:
+            data = reader.load(project["channel_id"], cloudflare_access.verified_email(request.headers),
+                               project.get("trello_url", ""), resource=request.args.get("resource", "")[:500])
+            response = jsonify(ok=True, **data)
+        except reader.SourceError as exc:
+            response = jsonify(ok=False, error=str(exc))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @bp.route("/api/material-generation-board")
     @module.login_required
     def generation_board():

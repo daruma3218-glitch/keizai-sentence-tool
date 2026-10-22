@@ -79,6 +79,16 @@
         {% if material_project %}
         <div class="mb-4 p-4 bg-emerald-50 rounded-xl border border-emerald-200">
           <strong>{{ material_project.title }}</strong><br><small>この案件のチャンネル設定を使います。{% if material_project.profile.style_name %} テイスト：{{ material_project.profile.style_name }}{% endif %}</small>
+          {% if material_project.trello_url %}
+          <!-- ハブの案件（Trello のカード）の原稿を原稿欄へ入れる（2026-10-22）。生成は「③ 素材をまとめて作る」を押した時だけ -->
+          <div id="trelloSource" data-project="{{ material_project.project_id }}" class="mt-3 text-sm text-emerald-900">
+            <p id="trelloSourceStatus">Trello のカードから原稿を探しています…</p>
+            <div id="trelloSourcePick" class="hidden mt-2 flex flex-wrap gap-2 items-center">
+              <select id="trelloSourceChoice" aria-label="入れる原稿" class="px-2 py-1 border border-emerald-300 rounded-lg bg-white max-w-full"></select>
+              <button type="button" id="trelloSourceUse" class="px-3 py-1 rounded-lg bg-emerald-700 text-white font-bold">この原稿を入れる</button>
+            </div>
+          </div>
+          {% endif %}
         </div>
         {% endif %}
         <form id="uploadForm" enctype="multipart/form-data" class="space-y-6">
@@ -430,6 +440,40 @@
     manuscriptText.addEventListener('input', () => {
       charCount.textContent = manuscriptText.value.length.toLocaleString();
     });
+
+    // ハブの案件から開いた時：カードの原稿を原稿欄へ入れる。入力済みの原稿は上書きしない。生成はまだ始めない。
+    (function () {
+      const box = document.getElementById('trelloSource');
+      if (!box) return;
+      const status = document.getElementById('trelloSourceStatus');
+      const pick = document.getElementById('trelloSourcePick');
+      const choice = document.getElementById('trelloSourceChoice');
+      const say = text => { status.textContent = text; };
+      async function load(resource) {
+        const url = `/api/material-projects/${encodeURIComponent(box.dataset.project)}/trello-source` + (resource ? `?resource=${encodeURIComponent(resource)}` : '');
+        let data = {};
+        try { data = await (await fetch(url, { credentials: 'same-origin' })).json(); } catch (e) { data = { ok: false, error: '原稿を読み込めませんでした。原稿は貼り付けでも入れられます。' }; }
+        if (!data.ok) { say(data.error || '原稿を読み込めませんでした。原稿は貼り付けでも入れられます。'); return; }
+        if (data.manuscript && data.text) {
+          if (manuscriptText.value.trim() && manuscriptText.value !== data.text && !resource) {
+            say(`Trello のカードに原稿「${data.title}」があります。原稿欄に入力済みのため入れていません。`);
+          } else {
+            manuscriptText.value = data.text;
+            charCount.textContent = manuscriptText.value.length.toLocaleString();
+            say(`Trello のカードから原稿「${data.title}」（${data.provider}）を入れました。確かめて「③ 素材をまとめて作る」を押すと始まります。`);
+          }
+        } else {
+          say('カードに原稿が複数あるか、本文が見つかりませんでした。入れる原稿を選んでください。');
+        }
+        const docs = data.choices || [];
+        if (docs.length > (data.manuscript ? 1 : 0)) {
+          choice.replaceChildren(...docs.map((c, i) => { const o = document.createElement('option'); o.value = c.url; o.textContent = `${c.label}（${i + 1}）`; return o; }));
+          pick.classList.remove('hidden');
+        }
+      }
+      document.getElementById('trelloSourceUse').addEventListener('click', () => { say('原稿を読み込んでいます…'); load(choice.value); });
+      load('');
+    })();
     concurrency.addEventListener('input', () => { concurrencyLabel.textContent = concurrency.value; });
 
     const maxDiagrams = document.getElementById('maxDiagrams');
