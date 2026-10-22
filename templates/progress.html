@@ -70,6 +70,7 @@
       <p id="progress-next-action" class="progress-next-action" role="status">生成の状態を確認しています。</p>
       <!-- 切断・ログイン切れを知らせる／止まった回をこの画面から再開する（2026-10-22 の見直し） -->
       <p id="connectionNotice" class="hidden mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm" role="alert"></p>
+      <div id="cancelBox" class="hidden mt-3"><button id="cancelBtn" type="button" class="px-4 py-2 rounded-lg border border-rose-300 text-rose-700 text-sm font-bold">生成を止める</button><span class="ml-2 text-xs text-gray-500">作り終えた素材は残ります。続きは後で再開できます。</span></div>
       <div id="resumeBox" class="hidden mt-3 flex flex-wrap items-center gap-2">
         <button id="resumeBtn" type="button" class="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-bold">残りの生成を再開</button>
         <span class="text-xs text-gray-500">保存済みの素材は残し、残りだけを作ります（追加の画像には利用料金がかかります）。</span>
@@ -744,6 +745,22 @@
       }
     });
 
+    document.getElementById('cancelBtn').addEventListener('click', async () => {
+      if (!confirm('この回の生成を止めますか？
+作りかけの1枚が終わりしだい止まります。作り終えた素材は残り、後で再開できます。')) return;
+      const btn = document.getElementById('cancelBtn');
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/jobs/${encodeURIComponent(JOB_ID)}/cancel`, {method: 'POST', credentials: 'same-origin'});
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '止められませんでした。ページを再読み込みしてください。');
+        btn.textContent = '止めています…';
+      } catch (e) {
+        const box = document.getElementById('connectionNotice');
+        box.textContent = e.message; box.classList.remove('hidden'); btn.disabled = false;
+      }
+    });
+
     async function pollStatus() {
       try {
         const res = await fetch(`/api/status/${JOB_ID}`);
@@ -751,6 +768,7 @@
         connectionProblem(0);
         const state = await res.json();
         document.getElementById('resumeBox').classList.toggle('hidden', !['error','failed','interrupted','cancelled'].includes(state.status));
+        document.getElementById('cancelBox').classList.toggle('hidden', !['running','queued'].includes(state.status));
         lastJobStatus = state.status || 'unknown';
         els.jobMessage.textContent = state.message || '...';
         els.overallBar.style.width = `${state.percent || 0}%`;

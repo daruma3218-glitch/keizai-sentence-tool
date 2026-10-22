@@ -934,7 +934,13 @@ class ParallelImageGenerator:
                     pass  # canonical が間に合わなければ参照なしで進む（壊さない）
                 entity_ref_bytes = (self._canonical_bytes or {}).get(canon_idx)
 
+        import job_control
+        if job_control.requested(output_dir.parent):
+            # 止めた回は、まだ始めていない画像を作らない（作り終えた画像はそのまま）
+            return {"index": idx, "filename": None, "success": False, "error": "中止しました", "cancelled": True}
         async with semaphore:
+            if job_control.requested(output_dir.parent):
+                return {"index": idx, "filename": None, "success": False, "error": "中止しました", "cancelled": True}
             self.progress_callback({
                 "index": idx,
                 "status": "generating",

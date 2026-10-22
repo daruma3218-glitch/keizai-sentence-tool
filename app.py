@@ -409,8 +409,18 @@ def _run_pipeline_thread(job_id: str, *args, **kwargs):
     with _QUEUE_LOCK:
         _QUEUE.append(job_id)
     last_message = ""
+    import job_control
     try:
         while True:
+            if job_control.requested(OUTPUT_DIR / job_id):
+                # 順番待ちのまま止めた：列から外して終える（何も作っていない）
+                with _QUEUE_LOCK:
+                    if job_id in _QUEUE:
+                        _QUEUE.remove(job_id)
+                job_control.clear(OUTPUT_DIR / job_id)
+                _set_job_state(job_id, status="cancelled", message="順番待ちのまま止めました。続きは「残りの生成を再開」から。", percent=0)
+                _add_log(job_id, "system", "利用者の操作で順番待ちを取り消しました")
+                return
             with _QUEUE_LOCK:
                 first = bool(_QUEUE) and _QUEUE[0] == job_id
             # 空いていればすぐ始める。待つときは先に「順番待ち」を画面に出してから待つ
@@ -434,6 +444,7 @@ def _run_pipeline_thread(job_id: str, *args, **kwargs):
     try:
         _run_pipeline_body(job_id, *args, **kwargs)
     finally:
+        job_control.clear(OUTPUT_DIR / job_id)  # 止める指示はこの回だけ（再開で残らないように）
         # 次に始まる回は、枠を渡す前に控える（渡した直後に順番待ちの列から消えるため）
         next_job = (generation_board()["waiting"] or [None])[0]
         with _QUEUE_LOCK:
@@ -524,6 +535,9 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
                  f"{job_id} （ch={channel_id} / {provider_label} / 並列 {concurrency} / style={style_preset} / route={route_mode} / Web画像 {web_image_count}）")
 
         def on_progress(phase, msg, pct):
+            import job_control
+            if job_control.requested(job_dir):
+                raise job_control.JobCancelled()  # 段階の区切りで止める（作り終えた分は残す）
             _set_job_state(job_id, status="running", phase=phase, message=msg, percent=pct)
 
         def on_log(category, message, detail=""):
@@ -610,7 +624,15 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
         )
         _add_log(job_id, "system",
                  f"全フェーズ完了（成功 {manifest['generated']} / 失敗 {manifest['failed']}）")
+        import job_control
+        if job_control.requested(job_dir):
+            # 最後の段階で止めた時も、止めたことを残す（作り終えた分は完成として使える）
+            _set_job_state(job_id, status="cancelled", message="途中で止めました。作り終えた素材は残っています。")
     except Exception as e:
+        import job_control
+        if isinstance(e, job_control.JobCancelled) or job_control.requested(job_dir):
+            _finish_cancelled_job(job_dir, job_id)
+            return
         import traceback
         traceback.print_exc()
         try:
@@ -1813,6 +1835,22 @@ def compare_jobs():
                            recent=recent, selected=ids, max_jobs=_COMPARE_MAX_JOBS)
 
 
+@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+@login_required
+def api_cancel_job(job_id):
+    """生成中・順番待ちの回を止める（作り終えた素材は残す・2026-10-22 の見直し）。"""
+    import job_control
+    job_dir = _safe_job_dir(job_id)
+    if not job_dir or not job_dir.exists():
+        return jsonify({"ok": False, "error": "ジョブが見つかりません"}), 404
+    if not _job_busy(job_id):
+        return jsonify({"ok": False, "error": "この回は生成中・順番待ちではありません。画面を再読み込みしてください。"}), 409
+    job_control.request(job_dir)
+    _add_log(job_id, "system", "止める指示を受け付けました（作りかけの1枚が終わりしだい止まります）")
+    _set_job_state(job_id, message="止めています… 作りかけの画像が終わりしだい止まります。")
+    return jsonify({"ok": True, "job_id": job_id})
+
+
 @app.route("/api/jobs/<job_id>", methods=["DELETE", "POST"])
 @login_required
 def api_delete_job(job_id):
@@ -1833,6 +1871,25 @@ def api_delete_job(job_id):
         _jobs.pop(job_id, None)
         _job_logs.pop(job_id, None)
     return jsonify({"ok": True, "job_id": job_id})
+
+
+def _finish_cancelled_job(job_dir, job_id: str) -> None:
+    """止めた回の後始末：作りかけの行を「中止」にし、状態を cancelled に（再開できる）。"""
+    try:
+        rows_path = job_dir / "rows_progress.json"
+        snap = load_json(rows_path, {"rows": []})
+        dirty = False
+        for r in snap.get("rows", []):
+            if r.get("status") in ("generating", "pending") and r.get("display") == "image":
+                r["status"] = "failed"
+                r["error"] = "中止しました"
+                dirty = True
+        if dirty:
+            rows_path.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    _set_job_state(job_id, status="cancelled", message="途中で止めました。作り終えた素材は残っています。続きは「残りの生成を再開」から。")
+    _add_log(job_id, "system", "利用者の操作で生成を止めました")
 
 
 def _job_busy(job_id: str) -> bool:
