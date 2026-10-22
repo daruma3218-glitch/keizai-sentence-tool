@@ -486,6 +486,19 @@ def _notify_job_done(job_id: str, next_job: Optional[dict] = None) -> bool:
     with urllib.request.urlopen(req, timeout=15) as res:
         return 200 <= res.status < 300
 
+def _set_job_card(job_id: str) -> None:
+    """案件（Trello カード）を、このジョブの AI 呼び出しの記録に付ける。
+
+    PC のワーカーの記録 routing.jsonl に残り、制作の進行ハブが案件に結び付ける（2026-10-22）。
+    記録のための付け足しなので、読めなくてもジョブは止めない。"""
+    try:
+        import subscription_runtime
+        context = material_store.read(OUTPUT_DIR / job_id / "material_context.json") or {}
+        subscription_runtime.set_card(context.get("trello_url") if isinstance(context, dict) else "")
+    except Exception as exc:
+        print(f"[card] 案件のカードを付けられませんでした（処理は続けます）: {type(exc).__name__}", flush=True)
+
+
 def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str,
                          concurrency: int, provider: str, openai_quality: str,
                          skip_decorative: bool, style_preset: str,
@@ -503,6 +516,7 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
         # サブスク使用量台帳用のチャンネルコンテキスト (2026-08-11 チャンネル別管理)
         from utils import set_subsk_channel
         set_subsk_channel(channel_id)
+        _set_job_card(job_id)
         _set_job_state(job_id, status="running", phase=0,
                        message="再開しています..." if resume else "開始しています...", percent=0)
         _add_log(job_id, "system",

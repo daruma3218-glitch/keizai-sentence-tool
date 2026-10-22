@@ -187,6 +187,8 @@ def _replay(module, op_id, captured):
 
 def _run(module, record, captured):
     op_id = record["id"]
+    if record.get("job_id") and hasattr(module, "_set_job_card"):
+        module._set_job_card(record["job_id"])  # 作り直しも案件の動きとして記録に残す
     try:
         with _SLOT:
             while len(_STARTED) >= limit():
