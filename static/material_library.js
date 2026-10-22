@@ -29,6 +29,7 @@
   function setBusy(value) {
     busy = value;
     document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
+    updateReviewNavigation();
   }
   function draw() {
     if (!data) return;
@@ -162,6 +163,24 @@
     } else select(no, action, id);
   });
 
+  function reviewScenes() {
+    // 状態の絞り込みは採用直後に変わるため、閲覧中は章・検索の範囲を順にたどる。
+    return data ? data.rows.filter(row => MaterialView.matches(row, data.library, {...currentView(), filter:'all'})) : [];
+  }
+  function updateReviewNavigation() {
+    const rows = reviewScenes(), index = rows.findIndex(row => String(row.no) === reviewNo);
+    $('review-prev-scene').disabled = busy || index <= 0;
+    $('review-next-scene').disabled = busy || index < 0 || index >= rows.length - 1;
+    $('review-position').textContent = index < 0 ? '' : (index + 1) + ' / ' + rows.length + ' 場面（章・検索の範囲）';
+  }
+  function moveReview(direction) {
+    if (busy) return;
+    const rows = reviewScenes(), index = rows.findIndex(row => String(row.no) === reviewNo);
+    const next = index >= 0 && rows[index + direction];
+    if (next) openReview(next.no);
+  }
+  $('review-prev-scene').addEventListener('click', () => moveReview(-1));
+  $('review-next-scene').addEventListener('click', () => moveReview(1));
   function renderReview() {
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
@@ -187,6 +206,7 @@
     $('review-skip').hidden = !next;
     $('review-adopt-next').textContent = next ? '採用して次の未採用へ →' : '採用して一覧へ戻る';
     $('review-adopt').textContent = focused?.id === chosen ? '採用中' : 'この候補を採用';
+    updateReviewNavigation();
   }
   function openReview(no, candidate) {
     reviewNo = String(no); reviewCandidate = candidate || ''; reviewReference = '';

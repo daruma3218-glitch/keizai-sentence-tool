@@ -32,6 +32,7 @@
 <dialog id="preview-dialog" class="review-dialog" aria-labelledby="review-title">
   <div class="dialog-heading"><div><p id="review-location" class="hint"></p><h2 id="review-title">候補を比較・採用</h2></div><button class="icon-button" data-close="preview-dialog" aria-label="比較を閉じる">×</button></div>
   <p id="review-sentence" class="review-sentence"></p><p id="review-flag" class="hint flag-label" hidden></p>
+  <nav class="review-navigation" aria-label="拡大したまま場面を移動"><button id="review-prev-scene" type="button" class="button compact">← 前の場面</button><span id="review-position" class="hint" role="status"></span><button id="review-next-scene" type="button" class="button compact">次の場面 →</button></nav>
   <div id="review-grid" class="review-grid">
     <div id="review-reference" class="review-pane"><label for="review-reference-id">比較する候補</label><select id="review-reference-id"></select><img id="review-reference-image" alt="比較する候補の拡大表示"></div>
     <div class="review-pane review-choice"><label for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><img id="preview-image" alt="採用する候補の拡大表示"><p id="review-chosen" class="hint"></p></div>
