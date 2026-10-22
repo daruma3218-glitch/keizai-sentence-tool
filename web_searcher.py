@@ -24,6 +24,7 @@ from typing import Callable, Optional
 import anthropic
 
 from utils import cached_system_param, cached_user_content, log_prompt_cache_usage, parse_json_array
+from safe_images import open_image
 
 
 CLAUDE_MODEL = "claude-sonnet-5"
@@ -429,7 +430,7 @@ def download_thumbnail(thumb_url: str, output_path) -> bool:
         # PIL で実画像か検証 + サイズチェック（極小ロゴ/アイコンを除外）
         try:
             from PIL import Image
-            img = Image.open(BytesIO(data))
+            img = open_image(BytesIO(data))
             img.load()
             w, h = img.size
             if w < 80 or h < 80:

@@ -33,6 +33,9 @@ from flask import (
 )
 
 from utils import load_env, load_json, SNAPSHOT_IO_LOCK
+from safe_paths import job_directory, contained_path
+from safe_images import open_image
+from PIL import __version__ as PILLOW_VERSION
 import cloudflare_access
 import material_store
 from channel_styles import is_suasi_style
@@ -161,14 +164,7 @@ FEEDBACK_LOCK = threading.Lock()
 
 def _safe_job_dir(job_id: str):
     """OUTPUT_DIR 直下のジョブディレクトリだけを返す。"""
-    if not job_id or "/" in job_id or "\\" in job_id or job_id in (".", ".."):
-        return None
-    job_dir = (OUTPUT_DIR / job_id).resolve()
-    try:
-        job_dir.relative_to(OUTPUT_DIR.resolve())
-    except ValueError:
-        return None
-    return job_dir
+    return job_directory(OUTPUT_DIR, job_id)
 
 
 def _safe_download_name(text: str, fallback: str = "download") -> str:
@@ -181,6 +177,13 @@ def accept_cloudflare_access():
     """旧入口を閉じ、素材の画面・APIより前にCloudflareの証明を毎回検証する。"""
     return cloudflare_access.enforce_studio_access(
         "https://sozai.apprendre.jp", health_paths=("/version",))
+
+
+@app.before_request
+def validate_job_path():
+    job_id = (request.view_args or {}).get("job_id")
+    if job_id is not None and _safe_job_dir(job_id) is None:
+        return jsonify({"error": "ジョブが見つかりません"}), 404
 
 
 def login_required(f):
@@ -260,6 +263,8 @@ def version():
         "material_studio": {"version": material_store.VERSION, "entry": "/materials",
                             "immutable_candidates": True, "handoff_schema": 1},
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
+        "pillow_version": PILLOW_VERSION,
+        "file_boundary_version": 1,
         "service_name": os.environ.get("RENDER_SERVICE_NAME", ""),
         "template_has_style_preset_input": 'name="style_preset"' in upload_html,
         "template_has_diagram_style_text": "図解スタイル" in upload_html,
@@ -1761,7 +1766,10 @@ def serve_thumb(job_id, filename):
     job_dir = _safe_job_dir(job_id)
     if not job_dir or not job_dir.exists():
         return "結果が見つかりません", 404
-    images_dir = (job_dir / "images").resolve()
+    images_dir = contained_path(job_dir, "images")
+    if images_dir is None:
+        return "画像が見つかりません", 404
+    images_dir = images_dir.resolve()
     src = (images_dir / filename).resolve()
     try:
         src.relative_to(images_dir)
@@ -1769,13 +1777,17 @@ def serve_thumb(job_id, filename):
         return "不正なパスです", 400
     if not src.is_file() or src.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
         return "画像が見つかりません", 404
-    thumbs = job_dir / "thumbs"
+    thumbs = contained_path(job_dir, "thumbs")
+    if thumbs is None:
+        return "画像が見つかりません", 404
     thumbs.mkdir(parents=True, exist_ok=True)
-    dst = thumbs / f"{src.stem}_{src.suffix.lstrip('.').lower()}_w{_THUMB_WIDTH}.jpg"
+    dst = contained_path(thumbs, f"{src.stem}_{src.suffix.lstrip('.').lower()}_w{_THUMB_WIDTH}.jpg")
+    if dst is None:
+        return "画像が見つかりません", 404
     try:
         if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
             from PIL import Image
-            with Image.open(src) as im:
+            with open_image(src) as im:
                 im = im.convert("RGB")
                 im.thumbnail((_THUMB_WIDTH, _THUMB_WIDTH))
                 tmp = dst.with_suffix(".tmp")
@@ -2316,7 +2328,8 @@ def _chart_alternate_files(result_dir, rows) -> list:
         current = r.get("chart_variant") or "plain"
         for v in r.get("chart_variants") or []:
             p = variant_path(result_dir, r["no"], v)
-            if v != current and v in VARIANT_LABELS and p.exists():
+            if (v != current and v in VARIANT_LABELS and p.is_file()
+                    and contained_path(result_dir, p.relative_to(result_dir).as_posix()) is not None):
                 out.append((p, f"グラフの別版/{r['no']}_{VARIANT_LABELS[v]}.png"))
     return out
 
@@ -2695,8 +2708,9 @@ def api_feedback(job_id, no):
 @app.route("/results/<job_id>/<path:filename>")
 @login_required
 def serve_results(job_id, filename):
-    result_dir = OUTPUT_DIR / job_id
-    if not result_dir.exists():
+    result_dir = _safe_job_dir(job_id)
+    path = contained_path(result_dir, filename) if result_dir else None
+    if path is None or not path.is_file():
         return "結果が見つかりません", 404
     return send_from_directory(str(result_dir), filename)
 
@@ -2705,8 +2719,9 @@ def serve_results(job_id, filename):
 @login_required
 def download_csv(job_id):
     """CSV を直接ダウンロード（Excel/Sheets 用 UTF-8 BOM 付き）"""
-    csv_path = OUTPUT_DIR / job_id / "result.csv"
-    if not csv_path.exists():
+    result_dir = _safe_job_dir(job_id)
+    csv_path = contained_path(result_dir, "result.csv") if result_dir else None
+    if csv_path is None or not csv_path.is_file():
         return "CSV が見つかりません", 404
     manifest = load_json(OUTPUT_DIR / job_id / "manifest.json", {})
     title = manifest.get("title", job_id)
@@ -2809,8 +2824,8 @@ def download_block_zip(job_id, chapter_index, block_index):
                 fname = r.get(key) or ""
                 if not fname:
                     continue
-                img = images_dir / Path(str(fname)).name
-                if img.exists() and img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                img = contained_path(result_dir, "images/" + Path(str(fname)).name)
+                if img is not None and img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
                     arc = f"images/{img.name}"
                     if arc not in image_names:
                         zf.write(img, arc)
@@ -2846,8 +2861,8 @@ def download_block_zip(job_id, chapter_index, block_index):
 @login_required
 def download_zip(job_id):
     """画像一式 + CSV + manifest を ZIP でダウンロード"""
-    result_dir = OUTPUT_DIR / job_id
-    if not result_dir.exists():
+    result_dir = _safe_job_dir(job_id)
+    if result_dir is None or not result_dir.is_dir():
         return "結果が見つかりません", 404
 
     manifest = load_json(result_dir / "manifest.json", {})
@@ -2863,10 +2878,11 @@ def download_zip(job_id):
     tmp.close()
     # 画像は既に圧縮済み(PNG/JPG)なので ZIP_STORED で CPU/メモリを節約
     with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
-        images_dir = result_dir / "images"
-        if images_dir.exists():
+        images_dir = contained_path(result_dir, "images")
+        if images_dir is not None and images_dir.is_dir():
             for img in sorted(images_dir.iterdir()):
-                if img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                if (contained_path(result_dir, "images/" + img.name) is not None
+                        and img.is_file() and img.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")):
                     zf.write(img, f"images/{img.name}")
         # グラフの使っていない方の版（データのみ／先生が紹介）も別フォルダに入れる
         for path, arc in _chart_alternate_files(result_dir, _rows_for_download(result_dir)):
@@ -2878,8 +2894,8 @@ def download_zip(job_id):
                            ("credits.txt", "credits.txt"),
                            ("manifest.json", "manifest.json"),
                            ("manuscript.txt", "manuscript.txt")]:
-            p = result_dir / extra
-            if p.exists():
+            p = contained_path(result_dir, extra)
+            if p is not None and p.is_file():
                 zf.write(p, arc)
 
     return _send_temp_zip(tmp_path, f"{safe_title}_{job_id}.zip")

@@ -7,15 +7,16 @@ import uuid
 
 from PIL import Image
 from image_memory import image_operation
+from safe_images import open_image
 
 
 @image_operation
 def is_complete_image(path):
     try:
-        with closing(Image.open(path)) as image:
+        with closing(open_image(path)) as image:
             image.verify()
         # JPEG verification alone does not decode the pixel stream.
-        with closing(Image.open(path)) as image:
+        with closing(open_image(path)) as image:
             image.load()
         return True
     except (OSError, ValueError, SyntaxError):

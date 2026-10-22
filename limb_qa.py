@@ -22,6 +22,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
+from safe_images import open_image
 
 JUDGES = (("claude-opus-5-5", "medium"), ("gpt-6-sol", "medium"))
 JUDGE_TIMEOUT = 180
@@ -95,7 +96,7 @@ def combine(verdicts: list) -> dict:
 
 def _attachment(path, max_side: int = 1024) -> dict:
     from PIL import Image
-    with Image.open(path) as im:
+    with open_image(path) as im:
         im = im.convert("RGB")
         im.thumbnail((max_side, max_side))
         buf = io.BytesIO()

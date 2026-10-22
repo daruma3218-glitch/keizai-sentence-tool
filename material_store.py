@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
+from safe_images import open_image
 
 VERSION = "2026-10-11.6"
 LOCK = threading.RLock()
@@ -166,7 +167,7 @@ def snapshot(job_dir, library, no, path, label, metadata=None):
     if path.suffix.lower() not in EXTENSIONS or not path.is_file():
         raise ValueError("画像が見つかりません")
     try:
-        with Image.open(path) as image:
+        with open_image(path) as image:
             presenter_raw = image.info.get("studio_suasi_presenter")
             image.verify()
     except (OSError, SyntaxError):

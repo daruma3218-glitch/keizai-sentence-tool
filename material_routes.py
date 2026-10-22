@@ -14,6 +14,7 @@ from PIL import Image, ImageOps
 import material_store as store
 import material_history
 from channel_styles import resolve_style, style_choices
+from safe_images import open_image
 
 IMAGE_SLOTS = threading.BoundedSemaphore(2)
 ACTIVE = set()
@@ -307,12 +308,12 @@ def register(module):
                     raise ValueError("PNG・JPEG・WebPを選んでください")
                 target = output / ("uploaded" + ext)
                 upload.save(target)
-                with Image.open(target) as im:
+                with open_image(target) as im:
                     im.verify()
                 produced.append((target, "取り込んだ候補", {"origin": "upload"}))
             elif kind == "flip":
                 target = output / "flipped.png"
-                with Image.open(store.safe_path(d, source["filename"])) as im:
+                with open_image(store.safe_path(d, source["filename"])) as im:
                     with ImageOps.mirror(im) as mirrored:
                         mirrored.save(target)
                 produced.append((target, "左右反転", {"parent_id": source["id"]}))

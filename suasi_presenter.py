@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageOps, PngImagePlugin
+from safe_images import open_image
 
 
 ART_PATH = Path(__file__).resolve().parent / "references/suasi-good-original.png"
@@ -53,7 +54,7 @@ def load_artwork(pose_id="good"):
         data = path.read_bytes()
         if hashlib.sha256(data).hexdigest() != expected_sha:
             raise ValueError("original artwork hash mismatch")
-        with Image.open(BytesIO(data)) as image:
+        with open_image(BytesIO(data)) as image:
             image.load()
             if (image.mode != "RGBA" or not image.getchannel("A").getbbox()
                     or image.getchannel("A").getextrema()[0] != 0):
@@ -69,7 +70,7 @@ def load_artworks():
 
 
 def read_recipe(data):
-    with Image.open(BytesIO(data)) as image:
+    with open_image(BytesIO(data)) as image:
         raw = image.info.get(RECIPE_KEY)
         if not raw:
             return None
@@ -108,7 +109,7 @@ def diagram_edit_source(data):
     if recipe is None:
         # V1 images have an AI-drawn mascot; BOARD_INSTRUCTION removes it.
         return data
-    with Image.open(BytesIO(data)) as image:
+    with open_image(BytesIO(data)) as image:
         output = BytesIO()
         image.crop(recipe["diagram_box"]).convert("RGB").save(output, format="PNG")
         return output.getvalue()
@@ -144,7 +145,7 @@ def compose_presenter(path, artwork, pose_id="good", pose_reason=""):
     if hashlib.sha256(artwork).hexdigest() != expected:
         raise ValueError("配置するポーズの原画が台帳と一致しません")
     path = Path(path)
-    with Image.open(path) as image:
+    with open_image(path) as image:
         board = image.convert("RGBA")
     width, height = board.size
     if width < 64 or height < 36:
@@ -157,7 +158,7 @@ def compose_presenter(path, artwork, pose_id="good", pose_reason=""):
     board_x, board_y = left + (area_w-board.width)//2, (height-board.height)//2
     canvas = Image.new("RGBA", (width, height), BACKGROUND)
     canvas.alpha_composite(board, (board_x, board_y))
-    with Image.open(BytesIO(artwork)) as original:
+    with open_image(BytesIO(artwork)) as original:
         # Ignore imperceptible alpha dust for sizing; never redraw sprite pixels.
         character = original.crop(original.getchannel("A").point(lambda v: 255 if v > 16 else 0).getbbox())
     scale = min(width * CHARACTER_WIDTH / character.width, height * CHARACTER_HEIGHT / character.height)

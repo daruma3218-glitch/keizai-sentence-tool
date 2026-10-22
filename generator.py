@@ -30,6 +30,7 @@ from image_files import save_png_atomic
 from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
 from suasi_pose import select_pose, POSE_NAMES
+from safe_images import open_image
 
 
 # ===== モデル設定 =====
@@ -165,7 +166,7 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
     """
     with ExitStack() as stack:
         source = stack.enter_context(BytesIO(image_bytes))
-        img = stack.enter_context(closing(Image.open(source)))
+        img = stack.enter_context(closing(open_image(source)))
         if img.mode not in ("RGB", "RGBA"):
             img = stack.enter_context(closing(img.convert("RGB")))
         if fill == "crop":
@@ -219,7 +220,7 @@ def add_image_caption(path, text: str = "イメージ") -> bool:
     try:
         from PIL import Image, ImageDraw
         with ExitStack() as stack:
-            source = stack.enter_context(closing(Image.open(path)))
+            source = stack.enter_context(closing(open_image(path)))
             im = stack.enter_context(closing(source.convert("RGBA")))
             W, H = im.size
             overlay = stack.enter_context(closing(Image.new("RGBA", (W, H), (0, 0, 0, 0))))

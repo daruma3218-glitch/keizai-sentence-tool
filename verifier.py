@@ -21,6 +21,7 @@ from typing import Optional
 import anthropic
 
 from utils import parse_json_object
+from safe_images import open_image
 
 
 # v3 Step5: chart/map が renderer 化されたため、Vision 検品は diagram のみに縮小。
@@ -230,7 +231,7 @@ def _encode_for_review(img_bytes: bytes, suffix: str = ".png", max_side: int = 1
     try:
         import io
         from PIL import Image
-        with Image.open(io.BytesIO(img_bytes)) as im:
+        with open_image(io.BytesIO(img_bytes)) as im:
             im = im.convert("RGB")
             im.thumbnail((max_side, max_side))  # 長辺を max_side へ（アスペクト維持）
             buf = io.BytesIO()

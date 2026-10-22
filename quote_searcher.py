@@ -21,6 +21,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
+from safe_images import open_image
 
 QUOTE_LICENSE = "引用"
 MIN_W, MIN_H = 480, 270
@@ -58,7 +59,7 @@ def _fetch(url: str, timeout: int = 15) -> bytes:
 def _big_enough(data: bytes) -> bool:
     try:
         from PIL import Image
-        with Image.open(io.BytesIO(data)) as im:
+        with open_image(io.BytesIO(data)) as im:
             w, h = im.size
         return w >= MIN_W and h >= MIN_H
     except Exception:
