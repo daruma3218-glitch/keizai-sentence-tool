@@ -635,7 +635,7 @@
         const title = btn.dataset.jobTitle || jobId;
         const status = btn.dataset.jobStatus || '';
         const runningNote = status === 'running'
-          ? '\n\n※ 実行中表示ですが、壊れて止まった履歴として強制削除します。'
+          ? '\n\n※ 生成中・順番待ちの回は削除できません（断られます）。「実行中」と出たまま止まっている回だけ削除します。'
           : '';
         if (!confirm(`このジョブを削除しますか？\n\n${title}\n${jobId}${runningNote}\n\n画像・CSV・ログも削除されます。`)) return;
         btn.disabled = true;

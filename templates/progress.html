@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>制作の進捗 - 素材スタジオ</title>
+  <meta name="material-csrf" content="{{ material_csrf }}">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -65,8 +66,14 @@
         <div id="statusBadge" class="status-badge" data-tone="neutral" role="status"><span class="status-icon" aria-hidden="true">…</span><span>読み込み中</span></div>
       </div>
 
-      <ol class="studio-steps progress-steps" aria-label="素材制作の工程"><li id="step-generation" aria-current="step"><b>1</b> 素材を生成</li><li id="step-selection"><b>2</b> 確認・採用</li><li><b>3</b> 書き出し</li></ol>
+      <ol class="studio-steps progress-steps" aria-label="素材制作の工程"><li id="step-generation" aria-current="step"><b>1</b> 素材を生成</li><li id="step-selection"><b>2</b> 確認・採用</li><li>{% if material_supported %}<a href="/materials/jobs/{{ job_id }}"><b>3</b> 書き出し</a>{% else %}<b>3</b> 書き出し{% endif %}</li></ol>
       <p id="progress-next-action" class="progress-next-action" role="status">生成の状態を確認しています。</p>
+      <!-- 切断・ログイン切れを知らせる／止まった回をこの画面から再開する（2026-10-22 の見直し） -->
+      <p id="connectionNotice" class="hidden mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm" role="alert"></p>
+      <div id="resumeBox" class="hidden mt-3 flex flex-wrap items-center gap-2">
+        <button id="resumeBtn" type="button" class="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-bold">残りの生成を再開</button>
+        <span class="text-xs text-gray-500">保存済みの素材は残し、残りだけを作ります（追加の画像には利用料金がかかります）。</span>
+      </div>
       <div class="mb-4">
         <div class="flex items-center justify-between mb-2">
           <div class="flex gap-3 text-xs text-gray-500">
@@ -154,7 +161,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <span id="activeFilterLabel" class="text-xs text-gray-400"></span>
-              <button id="regenIssuesBtn" onclick="regenerateVisibleIssues()" class="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-medium hover:bg-rose-100">表示中の失敗だけ再生成</button>
+              <button id="regenIssuesBtn" onclick="regenerateVisibleIssues()" class="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-medium hover:bg-rose-100">表示中の失敗・要確認を作り直す</button>
             </div>
           </div>
           <div class="overflow-x-auto max-h-[80vh] scroll-y border-t border-gray-100">
@@ -701,16 +708,49 @@
       if (!initialFilterChosen && rows.length && lastJobStatus === 'completed') setRowFilter(failed + attention ? 'issues' : 'all');
       document.getElementById('progress-next-action').textContent = lastJobStatus === 'completed'
         ? (failed + attention ? '次は、確認が必要な ' + (failed + attention) + ' 場面を見直し、使う候補を採用します。' : '生成が終わりました。次は、候補を比較して動画に使う素材を採用します。')
-        : ['error','failed','interrupted','cancelled'].includes(lastJobStatus) ? '生成は途中です。保存された素材と状況を確認してください。' : '素材を生成しています。完成した画像から確認できます。';
+        : ['error','failed','interrupted','cancelled'].includes(lastJobStatus) ? '生成は途中で止まりました。下の「残りの生成を再開」で続きを作れます。' : '素材を生成しています。完成した画像から確認できます。';
       document.getElementById('jobOverview').dataset.tone = lastJobStatus === 'completed' && failed + attention ? 'attention' : StudioStatus.describe(lastJobStatus).tone;
       updateChapterCards(rows);
     }
 
+    let connectionFailures = 0;
+    function connectionProblem(status) {
+      const box = document.getElementById('connectionNotice');
+      if (status === 0) { connectionFailures = 0; box.classList.add('hidden'); return; }
+      connectionFailures += 1;
+      let text = '';
+      if (status === 401) text = 'ログインが切れました。ページを再読み込みして、ログインし直してください。';
+      else if (status === 404) text = 'この制作の記録が見つかりません（削除された可能性があります）。素材スタジオの制作履歴から開き直してください。';
+      else if (connectionFailures >= 3) text = 'サーバーとの接続が切れています。自動でつなぎ直しを続けています。直らない時はページを再読み込みしてください。';
+      if (text) { box.textContent = text; box.classList.remove('hidden'); }
+    }
+
+    document.getElementById('resumeBtn').addEventListener('click', async () => {
+      if (!confirm('残りの生成を再開しますか？
+保存済みの素材は残し、残りだけを作ります。追加の画像には利用料金がかかります。')) return;
+      const btn = document.getElementById('resumeBtn');
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/material-jobs/${encodeURIComponent(JOB_ID)}/resume`, {
+          method: 'POST', credentials: 'same-origin',
+          headers: {'X-Material-CSRF': document.querySelector('meta[name="material-csrf"]').content}});
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '再開できませんでした。ページを再読み込みしてください。');
+        location.href = data.redirect || location.href;
+      } catch (e) {
+        const box = document.getElementById('connectionNotice');
+        box.textContent = e.message; box.classList.remove('hidden');
+        btn.disabled = false;
+      }
+    });
+
     async function pollStatus() {
       try {
         const res = await fetch(`/api/status/${JOB_ID}`);
-        if (!res.ok) return;
+        if (!res.ok) { connectionProblem(res.status); return; }
+        connectionProblem(0);
         const state = await res.json();
+        document.getElementById('resumeBox').classList.toggle('hidden', !['error','failed','interrupted','cancelled'].includes(state.status));
         lastJobStatus = state.status || 'unknown';
         els.jobMessage.textContent = state.message || '...';
         els.overallBar.style.width = `${state.percent || 0}%`;
@@ -750,7 +790,7 @@
           } catch (e) {}
         }
         if (['error','failed','interrupted','cancelled'].includes(state.status)) stopped = true;
-      } catch (e) { console.error('status error', e); }
+      } catch (e) { connectionProblem(-1); console.error('status error', e); }
     }
 
     async function pollRows() {
@@ -986,7 +1026,7 @@
         return;
       }
       const label = chapterFilter !== null ? `章 ${chapterFilter} の` : '表示中の';
-      if (!confirm(`${label}失敗・要確認 ${targets.length} 件を順番に再生成します。`)) return;
+      if (!confirm(`${label}失敗・要確認 ${targets.length} 件を順番に作り直します。今の画像は採用画面の候補に残ります。`)) return;
       if (els.regenIssuesBtn) {
         els.regenIssuesBtn.disabled = true;
         els.regenIssuesBtn.textContent = `再生成中 0/${targets.length}`;
@@ -1002,7 +1042,7 @@
       }
       if (els.regenIssuesBtn) {
         els.regenIssuesBtn.disabled = false;
-        els.regenIssuesBtn.textContent = '表示中の失敗だけ再生成';
+        els.regenIssuesBtn.textContent = '表示中の失敗・要確認を作り直す';
       }
       await pollRows();
       alert(`再生成完了: 成功 ${ok} 件 / 失敗 ${ng} 件`);

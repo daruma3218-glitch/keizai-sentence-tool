@@ -674,7 +674,8 @@ def index():
                 "channel": ch_id,
                 "date": d.name[:8] if len(d.name) >= 8 else "",
                 # 未完了（manifest 無し）かつ原稿が残っていれば途中から再開できる
-                "resumable": (not manifest) and (d / "manuscript.txt").exists(),
+                "resumable": (not manifest) and (d / "manuscript.txt").exists()
+                             and job_state.get("status") in {"error", "failed", "interrupted", "cancelled"},
             })
     # 各チャンネルのキー設定状況（UI 表示用）
     channels = load_channels()
@@ -1583,6 +1584,7 @@ def api_web_pick(job_id, no):
     if not image_url:
         return jsonify({"error": "このページから画像を取得できませんでした"}), 422
     fname = f"{no}.jpg"
+    _preserve_before_regen(job_dir, no)
     if not download_thumbnail(image_url, job_dir / "images" / fname):
         return jsonify({"error": "画像のダウンロードに失敗しました"}), 502
     _update_regen_snapshot(job_dir, no, True, filename=fname, extra={
@@ -1604,7 +1606,9 @@ def progress_page(job_id):
     state = load_json(d / "job.json", {}) if d else {}
     manifest = load_json(d / "manifest.json", {}) if d else {}
     channel_id = (state or {}).get("channel_id") or (manifest or {}).get("channel_id")
-    return render_template("progress.html", job_id=job_id,
+    if not session.get("material_csrf"):
+        session["material_csrf"] = secrets.token_urlsafe(32)
+    return render_template("progress.html", job_id=job_id, material_csrf=session["material_csrf"],
                            material_supported=channel_id in material_store.ALIASES,
                            material_channel=material_store.ALIASES.get(channel_id, ""))
 
@@ -1816,6 +1820,9 @@ def api_delete_job(job_id):
     job_dir = _safe_job_dir(job_id)
     if not job_dir or not job_dir.exists() or not job_dir.is_dir():
         return jsonify({"ok": False, "error": "ジョブが見つかりません"}), 404
+    if _job_busy(job_id):
+        # 生成中・順番待ちの回を消すと、作っている人の回がその場で壊れる（2026-10-22 の見直し）
+        return jsonify({"ok": False, "error": "この回は生成中か順番待ちのため削除できません。終わってから削除してください。"}), 409
 
     try:
         shutil.rmtree(job_dir)
@@ -1826,6 +1833,40 @@ def api_delete_job(job_id):
         _jobs.pop(job_id, None)
         _job_logs.pop(job_id, None)
     return jsonify({"ok": True, "job_id": job_id})
+
+
+def _job_busy(job_id: str) -> bool:
+    """このプロセスで生成中・順番待ちの回か。
+
+    ファイルの記録だけで「実行中」のまま残った壊れた回（前のプロセスの名残）は消せるよう、
+    いま動いているこのプロセスの列と状態だけを見る。"""
+    with _QUEUE_LOCK:
+        if job_id in _QUEUE or _RUNNING.get("job_id") == job_id:
+            return True
+    with _jobs_lock:
+        status = (_jobs.get(job_id) or {}).get("status")
+    return bool(status) and status not in {"completed", "error", "failed", "cancelled", "interrupted"}
+
+
+def _preserve_before_regen(job_dir, no) -> None:
+    """作り直しで上書きする前に、今の画像を採用画面の候補として残す（元に戻せるように・2026-10-22）。"""
+    try:
+        row = next((r for r in material_store.source_rows(job_dir) if str(r.get("no")) == str(no)), None)
+        filename = (row or {}).get("filename") or (row or {}).get("web_local_file")
+        if not filename:
+            return
+        path = material_store.safe_path(Path(job_dir) / "images", filename)
+        if not path.is_file():
+            return
+        with material_store.LOCK:
+            library = material_store.load_library(job_dir)
+            before = len(library["candidates"].get(str(no), []))
+            material_store.snapshot(job_dir, library, str(no), path, "作り直す前の素材",
+                                    {k: row.get(k, "") for k in ("web_source_url", "license", "attribution", "route")})
+            if len(library["candidates"].get(str(no), [])) > before:
+                material_store.commit_library(job_dir, library, "sync", {"added": 1})
+    except Exception as exc:
+        print(f"  [regen] 作り直す前の画像を残せませんでした（作り直しは続けます）: {type(exc).__name__}", flush=True)
 
 
 def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=None, route_reason=None, status=None, extra=None):
@@ -2236,6 +2277,7 @@ def api_regenerate(job_id, no):
     job_dir = OUTPUT_DIR / job_id
     if not job_dir.exists():
         return jsonify({"error": "ジョブのデータがサーバー上にありません（再デプロイ等で消えた可能性）。お手数ですが再生成してください。"}), 404
+    _preserve_before_regen(job_dir, no)
 
     # manifest があればそれを、無ければ job.json を params に使う（生成中でも動くように）
     manifest = load_json(job_dir / "manifest.json", {})
