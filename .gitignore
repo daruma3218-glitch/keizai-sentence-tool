@@ -1,4 +1,13 @@
+# Secrets: keep credentials and local signing keys out of Git.
 .env
+.env.*
+!.env.example
+!.env.sample
+.streamlit/secrets.toml
+credentials.json
+token.json
+*.pem
+*.key
 __pycache__/
 *.pyc
 output/*/
