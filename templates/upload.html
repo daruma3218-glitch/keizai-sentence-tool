@@ -152,14 +152,14 @@
                       placeholder="ここに完成原稿を貼り付け（章の区切りは空行2〜3行）。原稿パイプラインの final.json をそのまま貼り付けてもOK"
                       class="mt-3 w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm resize-y"></textarea>
             <div class="text-xs text-gray-400 mt-1 text-right">
-              <span id="charCount">0</span> 文字（目安: 1000 文字 ≒ 20〜40 センテンス ≒ 20〜40 枚生成）
+              <span id="charCount">0</span> 文字（目安: 1,000文字あたり20〜40場面。実際の画像数は場面の判定と枚数上限で変わります）
             </div>
           </div>
 
-          <!-- 詳しい設定: チャンネルの既定値が入っているので、ふだんは開かなくてよい -->
+          <!-- 枚数上限は原稿に応じて変更。他はチャンネルの既定値で始められる。 -->
           <details id="advancedSettings" class="group bg-white rounded-xl border border-gray-200">
             <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between text-sm font-medium text-gray-700">
-              <span>⚙️ 詳しい設定 <span class="text-xs font-normal text-gray-400">（ふだんは変更不要。チャンネルの既定値が入っています）</span></span>
+              <span>⚙️ 詳しい設定 <span class="text-xs font-normal text-gray-400">（画像を増やすときは枚数を調整。他はまずチャンネルの既定値で）</span></span>
               <span class="text-gray-400 text-xs group-open:rotate-180 transition">▼</span>
             </summary>
             <div class="px-4 pb-4 pt-1 space-y-6 border-t border-gray-100">
@@ -288,11 +288,12 @@
 
             <div class="bg-white rounded-xl border border-gray-200 p-4">
               <label class="block text-sm font-medium text-gray-700 mb-1">
-                図解枚数
+                図解枚数（生成対象の上限）
                 <span class="ml-1 text-blue-600 font-bold" id="maxDiagramsLabel">150</span>
                 <span class="text-xs text-gray-400">枚</span>
               </label>
-              <p class="text-[10px] text-gray-400 mb-2">全文を均等に間引いて配置（例: 250文 → 50枚なら 5文ごとに 1 枚）</p>
+              <p class="text-xs text-gray-500 mb-2">完成枚数の保証ではありません。場面の区切り・重要度・前の素材の継続などで配置が変わり、失敗した場面も生成対象に含まれます。</p>
+              <p class="text-xs text-gray-500 mb-2">画像を多めにしたい場合は、1,000文字あたり約40枚を上限設定の目安にできます（8,500文字なら約340枚 → 設定上限の300枚）。不足する場面は生成後に個別追加できます。</p>
               <input type="range" name="max_diagrams" id="maxDiagrams" min="1" max="300" step="1" value="150" class="w-full">
               <div class="flex justify-between text-xs text-gray-400 mt-1">
                 <span>1</span><span>150</span><span>300</span>
