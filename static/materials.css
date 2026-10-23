@@ -104,6 +104,6 @@ body:has(dialog[open]){overflow:hidden}
 
 .next-kicker { display:block; color:#0e7490; font-size:12px; font-weight:800; margin-bottom:6px; }
 .selection-toolbar .summary-bar { background:#ecfeff; border:1px solid #a5dce6; border-radius:14px; padding:18px; }
-.selection-toolbar #review-next, .selection-toolbar #download, #review-adopt-next, #project-dialog button[type=submit] { min-height:52px; padding:12px 20px; font-size:15px; }
+.selection-toolbar #review-next, .selection-toolbar #download, #review-adopt-next, #new-project-dialog button[type=submit] { min-height:52px; padding:12px 20px; font-size:15px; }
 .selection-toolbar #next-action { max-width:580px; line-height:1.7; margin-bottom:0; }
 @media(max-width:600px) { .selection-toolbar .summary-bar .actions { width:100%; } .selection-toolbar #review-next, .selection-toolbar #download { flex:1 1 100%; justify-content:center; } }
