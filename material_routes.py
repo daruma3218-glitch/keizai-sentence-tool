@@ -7,12 +7,14 @@ import tempfile
 import threading
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from flask import Blueprint, jsonify, redirect, render_template, request, send_file, session
 from PIL import Image, ImageOps
 
 import material_store as store
 import material_history
+import material_review
 from channel_styles import resolve_style, style_choices
 from safe_images import open_image
 
@@ -182,6 +184,7 @@ def register(module):
         from channel_styles import is_suasi_style
         saved = dict((context or {}).get("profile") or {}, **((context or {}).get("generation_settings") or {}))
         return render_template("material_library.html", job_id=job_id, channel=ch, csrf=token(),
+                               google_sheets_client_id=material_review.google_client_id(),
                                suasi_presenter_enabled=is_suasi_style(saved.get("worldview_desc", "")),
                                style_name=((context or {}).get("profile") or {}).get("style_name", ""),
                                title=(context or {}).get("title") or manifest.get("title") or job_id)
@@ -389,6 +392,34 @@ def register(module):
         return build_download(job_id, record=True, expected_revision=body.get("revision"),
                               expected_hash=body.get("selection_hash"))
 
+    @bp.route("/api/material-jobs/<job_id>/review.csv")
+    @module.login_required
+    def review_csv(job_id):
+        _, content = material_review.review_csv(job(job_id))
+        response = send_file(io.BytesIO(content), mimetype="text/csv; charset=utf-8",
+                             as_attachment=True, download_name=f"review_{job_id}.csv")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @bp.route("/api/material-jobs/<job_id>/review.xlsx", methods=["POST"])
+    @module.login_required
+    def review_workbook(job_id):
+        # Only the small previews are retained. Original files/selection are read-only.
+        stream = tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024, mode="w+b")
+        try:
+            title, count = material_review.write_workbook(job(job_id), stream)
+            stream.seek(0)
+            response = send_file(stream, mimetype=material_review.XLSX_MIME,
+                                 as_attachment=True, download_name=f"review_{job_id}.xlsx")
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Review-Title"] = quote(title, safe="")
+            response.headers["X-Review-Rows"] = str(count)
+            response.call_on_close(stream.close)
+            return response
+        except Exception:
+            stream.close()
+            raise
+
     def build_download(job_id, record=False, expected_revision=None, expected_hash=None):
         d = job(job_id)
         with store.LOCK:
@@ -401,12 +432,13 @@ def register(module):
                 archive.writestr("material-handoff.json", json.dumps(data, ensure_ascii=False, indent=2))
                 stream = io.StringIO()
                 writer = csv.writer(stream)
-                writer.writerow(["章", "番号", "原稿", "表示", "採用画像", "出典", "クレジット", "版"])
+                writer.writerow(["章", "番号", "原稿", "表示", "採用画像", "出典", "クレジット", "版", "要修正メモ", "コメント"])
+                review_notes = {str(r["values"][0]): r["values"][11] for r in material_review.review_rows(d)[1]}
                 for row in data["rows"]:
                     asset = row["asset"] or {}
                     filename = asset.get("filename", "")
-                    writer.writerow([row["chapter_index"], row["no"], row["sentence"], row["display"],
-                                     filename, asset.get("web_source_url", ""), asset.get("attribution", ""), asset.get("sha256", "")])
+                    writer.writerow([material_review.csv_text(v) for v in [row["chapter_index"], row["no"], row["sentence"], row["display"],
+                                     filename, asset.get("web_source_url", ""), asset.get("attribution", ""), asset.get("sha256", ""), review_notes.get(str(row["no"]), ""), ""]])
                 archive.writestr("採用素材.csv", "\ufeff" + stream.getvalue())
                 for filename in {r["asset"]["filename"] for r in data["rows"] if r["asset"]}:
                     archive.write(store.safe_path(d, filename), filename)

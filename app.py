@@ -1629,6 +1629,7 @@ def api_web_pick(job_id, no):
 @app.route("/progress/<job_id>")
 @login_required
 def progress_page(job_id):
+    from material_review import google_client_id
     d = _safe_job_dir(job_id)
     state = load_json(d / "job.json", {}) if d else {}
     manifest = load_json(d / "manifest.json", {}) if d else {}
@@ -1636,6 +1637,7 @@ def progress_page(job_id):
     if not session.get("material_csrf"):
         session["material_csrf"] = secrets.token_urlsafe(32)
     return render_template("progress.html", job_id=job_id, material_csrf=session["material_csrf"],
+                           google_sheets_client_id=google_client_id(),
                            material_supported=channel_id in material_store.ALIASES,
                            material_channel=material_store.ALIASES.get(channel_id, ""))
 
@@ -2726,8 +2728,9 @@ def download_csv(job_id):
     manifest = load_json(OUTPUT_DIR / job_id / "manifest.json", {})
     title = manifest.get("title", job_id)
     safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip()[:50] or job_id
+    from material_review import extend_legacy_csv
     return send_file(
-        csv_path,
+        io.BytesIO(extend_legacy_csv(result_dir, csv_path.read_text(encoding="utf-8-sig"))),
         mimetype="text/csv; charset=utf-8",
         as_attachment=True,
         download_name=f"{safe_title}_{job_id}.csv",
@@ -2896,7 +2899,11 @@ def download_zip(job_id):
                            ("manuscript.txt", "manuscript.txt")]:
             p = contained_path(result_dir, extra)
             if p is not None and p.is_file():
-                zf.write(p, arc)
+                if extra == "result.csv":
+                    from material_review import extend_legacy_csv
+                    zf.writestr(arc, extend_legacy_csv(result_dir, p.read_text(encoding="utf-8-sig")))
+                else:
+                    zf.write(p, arc)
 
     return _send_temp_zip(tmp_path, f"{safe_title}_{job_id}.zip")
 

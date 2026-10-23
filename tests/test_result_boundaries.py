@@ -1,5 +1,6 @@
 """Authenticated requests stay within the selected job, including symlinks."""
 import io
+import csv
 import json
 import zipfile
 
@@ -56,7 +57,11 @@ def test_csv_download_preserved_and_parent_reference_refused(saved):
     client, _, job, _ = saved
     (job / 'result.csv').write_bytes(b'number,title\r\n1,normal\r\n')
     response = client.get('/download/csv/old-job_01')
-    assert response.status_code == 200 and response.data == (job / 'result.csv').read_bytes()
+    assert response.status_code == 200
+    rows = list(csv.reader(io.StringIO(response.data.decode('utf-8-sig'))))
+    assert rows[0][:2] == ['number', 'title'] and rows[1][:2] == ['1', 'normal']
+    assert rows[0][-1] == 'コメント'
+    assert (job / 'result.csv').read_bytes() == b'number,title\r\n1,normal\r\n'
     assert client.get('/download/csv/%2e%2e').status_code == 404
 
 

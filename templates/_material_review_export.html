@@ -1,0 +1,10 @@
+<section class="review-export" aria-label="コメント用の一覧を書き出す" data-review-export data-job-id="{{ job_id }}" data-google-client-id="{{ google_sheets_client_id }}">
+  <strong>画像を見ながら、コメントをまとめる</strong>
+  <p>全場面を画像・原稿・コメント欄つきで出力します。スキップや未採用の行も残ります。</p>
+  <div class="actions">
+    <button type="button" class="button dark" data-sheet-create {% if not google_sheets_client_id %}disabled{% endif %}>Googleスプレッドシートに出す ↗</button>
+    <a class="button" href="/api/material-jobs/{{ job_id }}/review.csv">コメント欄つきCSV ↓</a>
+    <a class="button" data-sheet-open target="_blank" rel="noopener" hidden>作成したシートを開く ↗</a>
+  </div>
+  <p class="hint" data-sheet-status role="status">{% if google_sheets_client_id %}選んだGoogleアカウントのマイドライブに新規作成します。既存シートのコメントは上書きしません。{% else %}Googleへの直接出力は連携設定の準備中です。コメント欄つきCSVは利用できます。{% endif %}</p>
+</section>

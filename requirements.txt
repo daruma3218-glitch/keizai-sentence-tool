@@ -14,3 +14,4 @@ matplotlib==3.10.9
 # v3 Step2: map を Natural Earth GeoJSON + matplotlib で正確描画（国境のデタラメを排除）
 shapely==2.0.7
 PyJWT[crypto]==2.12.1
+openpyxl==3.1.5

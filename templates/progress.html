@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>制作の進捗 - 素材スタジオ</title>
   <meta name="material-csrf" content="{{ material_csrf }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='material_sheet_export.css') }}">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -113,6 +114,7 @@
         <div id="chapterCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3"></div>
       </details>
 
+      {% include '_material_review_export.html' %}
       <details id="actions" class="hidden legacy-downloads mt-5"><summary>生成結果の一覧・従来形式でダウンロード</summary><p class="text-xs text-gray-500 my-3">採用した素材を編集へ渡すときは「候補を比較・採用する」から書き出してください。</p><div class="flex flex-wrap gap-3">
         <a id="galleryBtn" href="" target="_blank" class="inline-flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-purple-500 text-purple-700 font-medium rounded-xl hover:bg-purple-50 transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
@@ -378,6 +380,10 @@
       }
       if (status === 'failed') {
         return '<div class="status-preview" data-tone="error" title="' + escapeHtml(row.error || '生成失敗') + '">× 生成失敗</div>' + regenBtn(row.no, row.route || '');
+      }
+      if (lastJobStatus !== 'running' && lastJobStatus !== 'queued' &&
+          (['skipped', 'thinned', 'skipped_limit', 'hold', 'none'].includes(status) || row.route === 'skip' || ['hold', 'none'].includes(row.display))) {
+        return label + '<br><button onclick="generateSkippedScene(' + Number(row.no) + ', event)" class="regen-btn mt-1 text-[10px] text-cyan-700 hover:underline">＋ 画像を生成</button>';
       }
       return label;
     }
@@ -727,8 +733,7 @@
     }
 
     document.getElementById('resumeBtn').addEventListener('click', async () => {
-      if (!confirm('残りの生成を再開しますか？
-保存済みの素材は残し、残りだけを作ります。追加の画像には利用料金がかかります。')) return;
+      if (!confirm('残りの生成を再開しますか？\n保存済みの素材は残し、残りだけを作ります。追加の画像には利用料金がかかります。')) return;
       const btn = document.getElementById('resumeBtn');
       btn.disabled = true;
       try {
@@ -746,8 +751,7 @@
     });
 
     document.getElementById('cancelBtn').addEventListener('click', async () => {
-      if (!confirm('この回の生成を止めますか？
-作りかけの1枚が終わりしだい止まります。作り終えた素材は残り、後で再開できます。')) return;
+      if (!confirm('この回の生成を止めますか？\n作りかけの1枚が終わりしだい止まります。作り終えた素材は残り、後で再開できます。')) return;
       const btn = document.getElementById('cancelBtn');
       btn.disabled = true;
       try {
@@ -867,6 +871,15 @@
 
     async function regenerateSceneAs(no, route, ev) {
       return regenerateSceneWithRoute(no, route, ev);
+    }
+
+    async function generateSkippedScene(no, ev) {
+      if (ev) ev.stopPropagation();
+      const instruction = prompt(`№${no} の画像を新しく生成します。画像生成の利用料金がかかります。\nどんな画像にするか入力してください（空欄なら原稿に沿った図解）:`, '');
+      if (instruction === null) return;
+      const row = lastRows.find(item => Number(item.no) === Number(no));
+      const route = row && ['diagram', 'illustration', 'realphoto', 'chart', 'web_photo'].includes(row.route) ? row.route : 'diagram';
+      return regenerateSceneWithRoute(no, route, ev, {skipPrompt:true, extraInstruction:instruction});
     }
 
     // 作り直しは「受け付け → 問い合わせ」で待つ（新しい入口は応答を約100秒しか待たないため・studio_operation.js）。
@@ -1250,5 +1263,6 @@
     setRowFilter('all', true);
     tick();
   </script>
+  <script src="{{ url_for('static', filename='material_sheet_export.js') }}"></script>
 </body>
 </html>
