@@ -176,7 +176,7 @@ def _safe_download_name(text: str, fallback: str = "download") -> str:
 def accept_cloudflare_access():
     """旧入口を閉じ、素材の画面・APIより前にCloudflareの証明を毎回検証する。"""
     return cloudflare_access.enforce_studio_access(
-        "https://sozai.apprendre.jp", health_paths=("/version",))
+        "https://sozai.apprendre.jp", health_paths=("/version", "/google-privacy"))
 
 
 @app.before_request
@@ -236,6 +236,12 @@ def key_attribution():
         response = jsonify(data)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.route("/google-privacy")
+def google_privacy():
+    """Public, static disclosure only; no account, job, image or session data."""
+    return render_template("google_privacy.html")
 
 
 @app.route("/version")

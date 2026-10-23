@@ -84,6 +84,17 @@ def test_non_secret_read_only_version_stays_available(client):
     assert client.post("/version", base_url=ORIGIN).status_code == 401
 
 
+def test_google_privacy_is_static_public_get_only_without_granting_access(client):
+    response = client.get("/google-privacy", base_url=ORIGIN)
+    assert response.status_code == 200
+    assert "Google連携のプライバシーポリシー" in response.get_data(as_text=True)
+    assert "drive.file" in response.get_data(as_text=True)
+    assert not response.headers.get("Set-Cookie")
+    assert client.post("/google-privacy", base_url=ORIGIN).status_code == 401
+    assert client.get("/google-privacy/anything", base_url=CANONICAL).status_code == 401
+    assert client.get("/api/key-attribution", base_url=ORIGIN).status_code == 401
+
+
 def test_production_missing_audience_fails_closed_even_without_password(client, monkeypatch):
     monkeypatch.setenv("RENDER_SERVICE_ID", "srv-offline-test")
     monkeypatch.delenv("CF_ACCESS_AUD", raising=False)

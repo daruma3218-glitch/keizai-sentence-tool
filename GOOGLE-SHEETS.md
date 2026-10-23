@@ -23,6 +23,10 @@
 
 ブラウザーがGoogleから短時間のアクセストークンを受け取り、Driveへ直接送る。トークンを素材スタジオのサーバー、URL、localStorageへ保存しない。Googleへのアップロードはresumable uploadで、XLSXをネイティブGoogle Sheets形式へ変換する。作成後に形式と編集URLを読み戻して確認する。シートの共有は作成者がGoogle側で選ぶ。
 
+プライバシーの案内は `/google-privacy`。制作データを含まない静的ページだけをGET/HEADで公開し、OAuthの案内URLには `https://keizai-sentence-tool-kouta.onrender.com/google-privacy` を使う。素材画面・API・画像の認証は維持する。Googleの承認済みドメインは案内用のこのホストと `apprendre.jp`、JavaScript生成元は引き続き `https://sozai.apprendre.jp` だけ。
+
+Renderでは公開クライアントIDを **Save only** で保存してから通常のmain更新に合わせて反映できる。保存だけで再起動せず、既存の見張り・Pre-deployで生成終了を待って反映する。
+
 ## CSVとスキップ行
 
 - 「コメント欄つきCSV」は画像URL・状態・要修正メモ・コメントを含む全場面の一覧。CSVには画像自体を埋め込めない。
