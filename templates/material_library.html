@@ -7,13 +7,14 @@
 </section>
 <ol class="studio-steps" aria-label="素材制作の工程"><li id="library-step-generation"><b>1</b> 素材を生成</li><li id="library-step-selection" aria-current="step"><b>2</b> 確認・採用</li><li id="library-step-export"><b>3</b> 書き出し</li></ol>
 <div class="selection-toolbar">
-  <div class="summary-bar"><div><span class="next-kicker">次はここ</span><strong id="adoption-count">読込中…</strong><span id="job-status" class="subtle"></span><p id="next-action" class="hint" role="status"></p></div><div class="actions"><button class="button dark compact" id="review-next">次の未採用を確認 →</button><a class="button compact" id="download" href="/materials/jobs/{{ job_id }}/download">採用素材を書き出す ↓</a></div></div>
+  <div class="summary-bar"><div class="library-task-heading"><img src="/static/brand/sozai-choose-v1.png" width="56" height="56" alt=""><div><span class="next-kicker">画像を見比べて選ぶ</span><strong id="adoption-count">読込中…</strong><span id="job-status" class="subtle"></span><p id="next-action" class="hint" role="status"></p></div></div><div class="actions"><button class="button dark compact" id="review-next">次の未採用を確認 →</button><a class="button compact" id="download" href="/materials/jobs/{{ job_id }}/download">採用素材を書き出す ↓</a></div></div>
+  <progress id="adoption-progress" class="adoption-progress" value="0" max="1" aria-label="素材を採用した場面の割合"></progress>
   <div class="library-controls"><nav class="filters selection-filters" aria-label="素材の絞り込み"><button data-filter="all" data-tone="neutral" class="active" aria-pressed="true">すべて</button><button data-filter="pending" data-tone="queued" aria-pressed="false">未採用</button><button data-filter="selected" data-tone="done" aria-pressed="false">採用済み</button><button data-filter="flagged" data-tone="attention" aria-pressed="false">要修正</button></nav><select id="chapter-filter" aria-label="章"><option value="">すべての章</option></select><input id="search" type="search" placeholder="原稿から検索" aria-label="原稿から検索"></div>
   <div class="library-location"><span id="visible-count" class="hint" role="status"></span><button id="clear-view" class="text-button" type="button">絞り込みを解除</button><button id="restore-view" class="text-button" type="button" hidden>前回の位置へ</button><button class="text-button" id="undo">直前の採用操作を戻す</button></div>
 </div>
 <div class="selection-summary" id="selection-summary" aria-live="polite" hidden></div>
 <p id="export-state" class="hint export-status" role="status"></p>
-{% include '_material_review_export.html' %}
+<details class="review-export-details"><summary>コメント用の一覧を書き出す <span>Googleシート・CSV</span></summary>{% include '_material_review_export.html' %}</details>
 <details class="selection-help"><summary>保存・書き出しについて</summary><p class="hint">採用・要修正は保存されます。章と表示位置は、このブラウザで続きから開けます。ダウンロードは絞り込みに関係なく全体が対象です。書き出しの比較は、この画面で作成したZIPが対象です。従来画面からのダウンロードは照合の対象外です。</p></details>
 <p id="operation-state" class="operation-status" data-tone="working" hidden></p>
 <section id="rows" aria-label="原稿と候補"><p class="empty">素材を読み込んでいます。</p></section>

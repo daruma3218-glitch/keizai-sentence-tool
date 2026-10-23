@@ -37,6 +37,8 @@
     const required = rows.filter(row => display(row) === 'image');
     const adopted = required.filter(row => lib.selections[String(row.no)]).length;
     $('adoption-count').textContent = adopted + ' / ' + required.length + ' 場面の素材を採用';
+    const adoptionProgress = $('adoption-progress');
+    if (adoptionProgress) { adoptionProgress.max = Math.max(required.length, 1); adoptionProgress.value = adopted; }
     StudioStatus.apply($('job-status'), data.status);
     const remaining = MaterialView.remaining(rows, lib).length;
     const pending = required.length - adopted;
@@ -53,7 +55,7 @@
     $('review-next').classList.toggle('dark', pending > 0);
     $('review-next').textContent = pending ? '次の未採用を確認 →' : remaining ? '確認が必要な場面へ →' : '採用した素材を見直す';
     $('review-next').classList.toggle('dark', choosing);
-    $('next-action').textContent = pending ? '候補を拡大して選ぶ →「採用して次へ」で順に進めます。残り ' + pending + ' 場面。' : remaining ? '要修正や表示方法を確認してください。採用済みでも確認が残っている場面があります。' : data.status === 'completed' ? '選び終わりました。「採用素材を書き出す」で編集担当へ渡すZIPを保存します。' : '完成した素材から確認できます。生成の完了までお待ちください。';
+    $('next-action').textContent = pending ? '画像を押して比較 → 採用して次へ。あと ' + pending + ' 場面。' : remaining ? '要修正や表示方法を確認してください。採用済みでも確認が残っている場面があります。' : data.status === 'completed' ? '選び終わりました。「採用素材を書き出す」で編集担当へ渡すZIPを保存します。' : '完成した素材から確認できます。生成の完了までお待ちください。';
     document.querySelectorAll('[data-filter]').forEach(button => {
       const labels = {all:'すべて',pending:'未採用',selected:'採用済み',flagged:'要修正'};
       const count = {all:rows.length,pending,selected:adopted,flagged:flags}[button.dataset.filter];
@@ -91,7 +93,7 @@
             '<div class="candidate-body"><div class="candidate-caption"><strong>' + esc(c.label) + '</strong><span class="hint">' + esc(c.created_at?.slice(0,10)) + '</span></div>' +
             (poseNames[c.presenter?.pose_id] ? '<p class="hint">すあし社長：' + esc(poseNames[c.presenter.pose_id]) + '</p>' : '') +
             '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
-            '<div class="candidate-tools"><button data-action="edit">指示して手直し</button><button data-action="flip">左右反転</button></div>' +
+            '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><button data-action="flip">左右反転</button></details></div>' +
             (c.web_source_url ? '<a class="hint" href="' + esc(/^https?:\/\//.test(c.web_source_url) ? c.web_source_url : '#') + '" target="_blank" rel="noopener">出典を確認 ↗</a>' : '') +
             '</div></div>';
         }).join('') + '<div class="add-candidate"><span>＋</span><strong>' + (candidates.length ? '別の案も比べる' : 'この場面の素材を追加') + '</strong>' +
