@@ -51,7 +51,9 @@
     });
     $('download').classList.toggle('dark', !choosing && data.status === 'completed');
     $('review-next').classList.toggle('dark', pending > 0);
-    $('review-next').textContent = pending ? '次の未採用を確認 →' : '採用した素材を見直す';
+    $('review-next').textContent = pending ? '次の未採用を確認 →' : remaining ? '確認が必要な場面へ →' : '採用した素材を見直す';
+    $('review-next').classList.toggle('dark', choosing);
+    $('next-action').textContent = pending ? '候補を拡大して選ぶ →「採用して次へ」で順に進めます。残り ' + pending + ' 場面。' : remaining ? '要修正や表示方法を確認してください。採用済みでも確認が残っている場面があります。' : data.status === 'completed' ? '選び終わりました。「採用素材を書き出す」で編集担当へ渡すZIPを保存します。' : '完成した素材から確認できます。生成の完了までお待ちください。';
     document.querySelectorAll('[data-filter]').forEach(button => {
       const labels = {all:'すべて',pending:'未採用',selected:'採用済み',flagged:'要修正'};
       const count = {all:rows.length,pending,selected:adopted,flagged:flags}[button.dataset.filter];
@@ -69,7 +71,7 @@
     $('chapter-filter').value = chapters.has(selectedChapter) ? selectedChapter : '';
     document.querySelectorAll('[data-filter]').forEach(button => { const active = button.dataset.filter === filter; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
     const visible = rows.filter(row => MaterialView.matches(row, lib, currentView()));
-    if (!MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
+    if (pending && !MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
     $('visible-count').textContent = visible.length + ' / ' + rows.length + ' 場面を表示';
     $('rows').innerHTML = visible.map(row => {
       const no = String(row.no), candidates = lib.candidates[no] || [], selected = lib.selections[no], mode = display(row);
@@ -220,7 +222,7 @@
   }
   function reviewNext() {
     if (!data || busy) return;
-    const first = MaterialView.nextPending(data.rows, data.library, '', currentView()) || data.rows.find(row => MaterialView.matches(row, data.library, {...currentView(), filter:'all'}));
+    const first = MaterialView.nextPending(data.rows, data.library, '', currentView()) || MaterialView.remaining(data.rows, data.library).find(row => MaterialView.matches(row, data.library, {...currentView(), filter:'all'})) || data.rows.find(row => MaterialView.matches(row, data.library, {...currentView(), filter:'all'}));
     if (first) openReview(first.no); else Studio.notice('この条件に合う場面はありません。絞り込みを解除してください。');
   }
   $('review-next').addEventListener('click', reviewNext);
