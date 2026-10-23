@@ -165,3 +165,6 @@ body:has(dialog[open]){overflow:hidden}
 .review-export-details > .review-export { margin:0; border:0; border-top:1px solid #d7e3dc; border-radius:0 0 12px 12px; }
 .review-export-details > summary:focus-visible { outline:3px solid #087f73; outline-offset:3px; }
 @media(max-width:600px) { .review-export-details > summary span { display:block; margin:4px 0 0 15px; } }
+
+.review-use-reference { width:100%; min-height:44px; margin-top:12px; border-color:#087f73; color:#087f73; background:#fff; }
+.review-use-reference:hover { background:#eaf7f3; }

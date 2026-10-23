@@ -28,7 +28,7 @@
   const display = row => MaterialView.mode(row, data.library);
   function setBusy(value) {
     busy = value;
-    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
+    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
     updateReviewNavigation();
   }
   function draw() {
@@ -229,6 +229,13 @@
   }
   $('review-next').addEventListener('click', reviewNext);
   $('review-candidate-id').addEventListener('change', event => { reviewCandidate = event.target.value; renderReview(); });
+  $('review-use-reference').addEventListener('click', () => {
+    if (busy || !reviewReference) return;
+    [reviewCandidate, reviewReference] = [reviewReference, reviewCandidate];
+    renderReview();
+    $('review-status').textContent = '採用する候補を切り替えました。下のボタンで確定します。';
+    $('review-adopt-next').focus({preventScroll:true});
+  });
   $('review-reference-id').addEventListener('change', event => { reviewReference = event.target.value; renderReview(); });
   $('review-skip').addEventListener('click', () => {
     if (busy) return;
