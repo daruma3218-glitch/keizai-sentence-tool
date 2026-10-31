@@ -26,6 +26,23 @@ const posts = () => calls.filter(call => call.init.method === 'POST').length;
 
 beforeEach(() => { operation.settings.maxWaitMs = 60000; operation.settings.maxFailures = 20; operation.settings.verifyFailures = 3; });
 
+test('restored progress only polls the saved operation and never repeats generation', async () => {
+  const id = 'a'.repeat(32);
+  serve(json(200, {status:'running', waiting:true}), json(200, {status:'done', result:{status:200, body:{ok:true}}}));
+  assert.equal((await operation.resume(id)).ok, true);
+  assert.equal(posts(), 0);
+  assert.ok(calls.every(call => call.url === '/api/operations/' + id));
+});
+
+test('caller operation id survives reload and is not forwarded as a fetch option', async () => {
+  const id = 'b'.repeat(32);
+  serve(json(202, {}), json(200, {status:'done', result:{status:200, body:{ok:true}}}));
+  await operation.fetch('/api/material-jobs/a/variant', {method:'POST', operationId:id});
+  assert.equal(calls[0].init.headers['X-Studio-Operation'], id);
+  assert.equal('operationId' in calls[0].init, false);
+  assert.equal(posts(), 1);
+});
+
 test('accepted work is polled until done and looks like the old response', async () => {
   const waits = [];
   serve(json(202, {ok: true, operation: {id: 'x'}}), json(200, {status: 'running', waiting: true, elapsed: 1}),

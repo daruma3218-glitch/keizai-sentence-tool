@@ -396,6 +396,76 @@ def test_generation_failure_preserves_and_never_auto_retries(studio, monkeypatch
     assert not material_routes.ACTIVE
 
 
+def test_different_scenes_generate_while_selection_and_undo_remain_usable(studio, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    _, headers, root = studio
+    d, _, original = make_job(root)
+    initial = store.load_library(d)
+    monkeypatch.setenv("KEIZAI_OPENAI_API_KEY", "offline-key")
+    entered = {"parallel-one": threading.Event(), "parallel-two": threading.Event()}
+    release = threading.Event()
+    calls = []
+
+    def generate(**kwargs):
+        name = kwargs["output_dir"].name
+        calls.append(name)
+        entered[name].set()
+        assert release.wait(10), "test did not release the generation"
+        Image.new("RGB", (32, 18), "green").save(kwargs["output_dir"] / "new.png")
+        return [{"success": True, "filename": "new.png"}]
+
+    monkeypatch.setattr("generator.run_parallel_generation", generate)
+
+    def submit(no, request_id):
+        client = appmod.app.test_client()
+        with client.session_transaction() as session:
+            session.update(authenticated=True, material_csrf="offline-token")
+        return client.post("/api/material-jobs/sample/variant", headers=headers, data={
+            "request_id": request_id, "no": str(no), "kind": "generate", "revision": initial["revision"]})
+
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(submit, 1, "parallel-one")
+        try:
+            assert entered["parallel-one"].wait(5)
+            assert submit(1, "duplicate-scene").status_code == 409
+            second = pool.submit(submit, 2, "parallel-two")
+            assert entered["parallel-two"].wait(5), "another scene must start without waiting for the first"
+            selection = store.selection_change(d, {"selection_revision": initial["selection_revision"],
+                "no": 1, "action": "select", "candidate_id": original["id"]})
+            assert selection["selections"]["1"] == original["id"]
+        finally:
+            release.set()
+        assert first.result().status_code == second.result().status_code == 200
+    lib = store.load_library(d)
+    assert sorted(calls) == ["parallel-one", "parallel-two"]
+    assert len(lib["candidates"]["1"]) == 2 and len(lib["candidates"]["2"]) == 1
+    assert lib["selections"]["1"] == original["id"]
+    assert lib["selection_revision"] == selection["selection_revision"]
+    with pytest.raises(ValueError, match="別の操作"):
+        store.selection_change(d, {"selection_revision": initial["selection_revision"], "no": 1, "action": "clear"})
+    undone = store.selection_change(d, {"selection_revision": selection["selection_revision"], "no": 1, "action": "undo"})
+    assert not undone["selections"] and len(undone["candidates"]["1"]) == 2
+    assert not material_routes.ACTIVE
+
+
+def test_old_library_and_undo_migrate_without_rewriting_on_read(studio):
+    _, _, root = studio
+    d, _, original = make_job(root)
+    lib = choose(d, original)
+    lib.pop("selection_revision")
+    store.save(d / "material_library.json", lib)
+    previous = store.read(d / "material_previous.json")
+    previous.pop("after_selection_revision")
+    store.save(d / "material_previous.json", previous)
+    before = (d / "material_library.json").read_bytes()
+    loaded = store.load_library(d)
+    assert loaded["selection_revision"] == lib["revision"]
+    assert (d / "material_library.json").read_bytes() == before
+    store.selection_change(d, {"selection_revision": loaded["selection_revision"], "no": 1, "action": "undo"})
+    assert not store.load_library(d)["selections"]
+
+
 def test_start_binds_project_and_freezes_effective_settings(studio, monkeypatch):
     client, _, root = studio
     project = store.create_project(root, "economy", "引き継ぐ案件", {"provider": "gpt-image", "style_lock": True})

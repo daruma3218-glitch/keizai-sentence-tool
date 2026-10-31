@@ -149,9 +149,13 @@ def source_rows(job_dir):
 
 
 def load_library(job_dir):
-    return read(Path(job_dir) / "material_library.json",
+    library = read(Path(job_dir) / "material_library.json",
                 {"schema_version": 1, "revision": 0, "candidates": {}, "selections": {},
                  "display": {}, "flags": {}, "history": [], "requests": {}})
+    # Migrate on the next write. Candidate work must not invalidate a selection
+    # the user is making while generation runs in the background.
+    library.setdefault("selection_revision", library["revision"])
+    return library
 
 
 def commit_library(job_dir, library, action, detail=None):
@@ -226,7 +230,8 @@ def candidate(library, no, candidate_id):
 def selection_change(job_dir, body):
     with LOCK:
         lib = load_library(job_dir)
-        if int(body.get("revision", -1)) != lib["revision"]:
+        revision_key = "selection_revision" if "selection_revision" in body else "revision"
+        if int(body.get(revision_key, -1)) != lib[revision_key]:
             raise ValueError("別の操作で更新されています。読み込み直してください")
         no = str(body.get("no"))
         if not any(str(r.get("no")) == no for r in source_rows(job_dir)):
@@ -249,7 +254,7 @@ def selection_change(job_dir, body):
             lib["selections"].pop(no, None)
         elif action == "undo":
             previous = read(Path(job_dir) / "material_previous.json")
-            if not previous or previous["after_revision"] != lib["revision"]:
+            if not previous or previous.get("after_selection_revision", previous["after_revision"]) != lib["selection_revision"]:
                 raise ValueError("戻せる採用操作がありません")
             for key in ("selections", "display", "flags"):
                 lib[key] = previous[key]
@@ -257,7 +262,9 @@ def selection_change(job_dir, body):
             raise ValueError("操作が不正です")
         old = load_library(job_dir)
         save(Path(job_dir) / "material_previous.json",
-             {k: old[k] for k in ("selections", "display", "flags")} | {"after_revision": lib["revision"] + 1})
+             {k: old[k] for k in ("selections", "display", "flags")} |
+             {"after_revision": lib["revision"] + 1, "after_selection_revision": lib["selection_revision"] + 1})
+        lib["selection_revision"] += 1
         commit_library(job_dir, lib, action, {"no": no})
         return lib
 

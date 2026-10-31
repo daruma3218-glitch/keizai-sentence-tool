@@ -9,7 +9,11 @@ window.Studio = {
       ? await StudioOperation.fetch(url, {...init, headers})
       : await fetch(url, {...init, headers, credentials:'same-origin'});
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || (response.status === 503 ? 'サーバーを更新しています。少し待って読み込み直してください。' : '読み込みに失敗しました。再読み込みしてください。'));
+    if (!response.ok) {
+      const error = new Error(data.error || (response.status === 503 ? 'サーバーを更新しています。少し待って読み込み直してください。' : '読み込みに失敗しました。再読み込みしてください。'));
+      error.status = response.status;
+      throw error;
+    }
     return data;
   },
   notice(message, error = false) {

@@ -286,21 +286,25 @@ def register(module):
                 if old["status"] == "completed":
                     return jsonify(payload(d))
                 raise ValueError("この操作は受付済みです。結果を読み込み直してください。自動で再生成しません")
-            if job_id in ACTIVE:
-                raise ValueError("この案件の素材を処理中です")
-            if int(body.get("revision", -1)) != lib["revision"]:
+            scene_key = (job_id, no)
+            if scene_key in ACTIVE:
+                raise ValueError("この場面の候補を作成中です。別の場面は操作できます")
+            # Candidates are immutable additions. Other scenes/selection may change
+            # while an accepted operation waits for its generation slot.
+            if not 0 <= int(body.get("revision", -1)) <= lib["revision"]:
                 raise ValueError("別の操作で更新されています。読み込み直してください")
             source = None
             if kind in {"edit", "flip"}:
                 source = store.candidate(lib, no, body.get("candidate_id"))
             lib["requests"][request_id] = {"status": "running", "kind": kind, "no": no,
+                                          "operation_id": request.environ.get("studio.operation", ""),
                                           "requested_images": count if kind in {"generate", "edit"} else 0,
                                           "started_at": store.now(), "cost_amount": None}
             store.commit_library(d, lib, "operation_started", {"request_id": request_id})
-            ACTIVE.add(job_id)
+            ACTIVE.add(scene_key)
         output = d / "material_operations" / request_id
-        output.mkdir(parents=True, exist_ok=True)
         try:
+            output.mkdir(parents=True, exist_ok=True)
             produced = []
             if kind == "upload":
                 upload = request.files.get("image")
@@ -371,7 +375,7 @@ def register(module):
             raise ValueError("候補の作成に失敗しました。元画像・採用状態を保持しました。再読込で結果を確認してください")
         finally:
             with store.LOCK:
-                ACTIVE.discard(job_id)
+                ACTIVE.discard(scene_key)
         return jsonify(payload(d))
 
     @bp.route("/api/material-jobs/<job_id>/handoff")

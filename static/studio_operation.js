@@ -87,8 +87,8 @@
   }
 
   async function operationFetch(url, options = {}) {
-    const id = newId();
-    const {onWait, ...init} = options;
+    const {onWait, operationId, ...init} = options;
+    const id = operationId || newId();
     const headers = {...(init.headers || {}), 'X-Studio-Async': '1', 'X-Studio-Operation': id};
     const pollOptions = {signal: init.signal, onWait};
     let response;
@@ -109,6 +109,7 @@
     return poll(id, pollOptions);
   }
 
-  root.StudioOperation = {fetch: operationFetch, settings};
+  // Resume only polls an existing operation; it never repeats a paid POST.
+  root.StudioOperation = {fetch: operationFetch, resume: (id, options = {}) => poll(id, options), settings};
   if (typeof module !== 'undefined' && module.exports) module.exports = root.StudioOperation;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -267,7 +267,8 @@ def version():
     return jsonify({
         "service": "keizai-sentence-tool",
         "material_studio": {"version": material_store.VERSION, "entry": "/materials",
-                            "immutable_candidates": True, "handoff_schema": 1},
+                            "immutable_candidates": True, "handoff_schema": 1,
+                            "background_candidates": True, "selection_revision": True},
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
         "pillow_version": PILLOW_VERSION,
         "file_boundary_version": 1,

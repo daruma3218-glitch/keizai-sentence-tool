@@ -5,6 +5,110 @@
   const base = '/api/material-jobs/' + encodeURIComponent(window.materialJobId);
   let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
   const storageKey = 'material.selection.v1.' + window.materialJobId;
+  const pendingKey = 'material.pending.v1.' + window.materialJobId;
+  const pending = new Map(), watching = new Set();
+  try {
+    const saved = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+    for (const op of saved) {
+      if (/^[a-zA-Z0-9_-]{16,64}$/.test(op.request_id) && /^\d+$/.test(String(op.no))) {
+        pending.set(op.request_id, {...op, state:'checking'});
+      }
+    }
+  } catch (_) { /* Progress also lives on the server. */ }
+  function savePending() {
+    try { localStorage.setItem(pendingKey, JSON.stringify([...pending.values()].filter(op => op.state !== 'failed'))); }
+    catch (_) { /* Optional storage; generation continues on the server. */ }
+  }
+  function sceneOperation(no) {
+    const local = [...pending.values()].filter(op => String(op.no) === String(no));
+    return local.find(op => op.state !== 'failed') ||
+      Object.entries(data?.library.requests || {}).map(([request_id, op]) => ({...op, request_id, state:'running'}))
+        .find(op => String(op.no) === String(no) && op.status === 'running') || local[local.length - 1];
+  }
+  function updateOperations() {
+    const active = new Set();
+    for (const op of Object.values(data?.library.requests || {})) if (op.status === 'running') active.add(String(op.no));
+    for (const op of pending.values()) if (op.state !== 'failed') active.add(String(op.no));
+    const labels = {submitting:'候補の作成を受け付けています…', waiting:'候補の作成は順番待ちです',
+      running:'候補を作成中です', checking:'候補の処理結果を確認しています…', uncertain:'通信を確認してください。処理結果は「素材を読み込む」で確認できます'};
+    document.querySelectorAll('.scene').forEach(scene => {
+      const op = sceneOperation(scene.dataset.no), working = !!op && op.state !== 'failed';
+      const status = scene.querySelector('.scene-operation');
+      if (status) {
+        status.hidden = !op;
+        status.dataset.tone = op?.state === 'failed' || op?.state === 'uncertain' ? 'attention' : 'working';
+        status.textContent = op ? (op.state === 'failed' ? op.error : labels[op.state] || labels.running) : '';
+      }
+      scene.querySelectorAll('[data-action="generate"], [data-action="edit"], [data-action="flip"], [data-action="upload"]').forEach(button => {
+        button.disabled = busy || working;
+        if (button.dataset.action === 'generate') button.textContent = working ? (op.state === 'waiting' ? '順番待ち…' : '候補を作成中…') : '候補を生成';
+      });
+    });
+    $('operation-state').hidden = !active.size;
+    $('operation-state').dataset.tone = 'working';
+    $('operation-state').textContent = active.size + ' 場面の候補を作成・確認中です。ほかの場面の確認・採用・候補追加を続けられます。';
+  }
+  function applyPayload(next, background = false) {
+    if (data && next.library.revision < data.library.revision) return;
+    if (background && data && next.library.revision === data.library.revision) { updateOperations(); return; }
+    const anchor = background && [...document.querySelectorAll('.scene')].find(el => el.getBoundingClientRect().bottom > 0);
+    const position = anchor ? {no:anchor.dataset.no, offset:anchor.getBoundingClientRect().top, y:window.scrollY} : null;
+    const focused = background && document.activeElement;
+    const focusScene = focused?.closest?.('.scene')?.dataset.no;
+    const focusCandidate = focused?.closest?.('.candidate')?.dataset.candidate;
+    const focusAction = focused?.dataset?.action;
+    data = next; draw();
+    if (focusScene && focusAction) {
+      const scene = [...document.querySelectorAll('.scene')].find(el => el.dataset.no === focusScene);
+      const scope = focusCandidate ? [...(scene?.querySelectorAll('.candidate') || [])].find(el => el.dataset.candidate === focusCandidate) : scene;
+      scope?.querySelector('[data-action="' + focusAction + '"]')?.focus({preventScroll:true});
+    }
+    if (position) restorePosition(position);
+  }
+  async function runPending(op, body) {
+    if (watching.has(op.request_id)) return;
+    watching.add(op.request_id);
+    const onWait = state => {
+      op.state = state.failures ? 'checking' : state.waiting ? 'waiting' : 'running';
+      updateOperations();
+    };
+    try {
+      if (body) {
+        await Studio.api(base + '/variant', {method:'POST', body, poll:true, operationId:op.request_id, onWait});
+      } else {
+        const response = await StudioOperation.resume(op.operation_id || op.request_id, {onWait});
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) { const error = new Error(result.error || '処理結果を確認できませんでした。素材を読み込んで確認してください'); error.status = response.status; throw error; }
+      }
+      pending.delete(op.request_id);
+      Studio.notice('場面 ' + op.no + ' に候補を追加しました。比べてから採用できます。');
+    } catch (error) {
+      op.state = !error.status || error.status >= 500 || error.status === 401 ? 'uncertain' : 'failed';
+      op.error = error.message;
+      Studio.notice('場面 ' + op.no + '：' + error.message, true);
+    } finally {
+      watching.delete(op.request_id); savePending(); updateOperations();
+      // The stored operation response may predate a later adoption. Read the
+      // current library and never replace newer UI state with an older revision.
+      try {
+        const latest = await Studio.api(base, {cache:'no-store'});
+        const saved = latest.library.requests[op.request_id];
+        if (saved?.status === 'completed') pending.delete(op.request_id);
+        else if (saved?.status === 'failed' && pending.has(op.request_id)) {
+          op.state = 'failed'; op.error ||= '候補を作成できませんでした。元画像と採用状態は保持しています。';
+        }
+        savePending(); applyPayload(latest, true);
+      }
+      catch (_) { Studio.notice('候補の表示を更新できませんでした。「素材を読み込む」で確認してください。', true); }
+    }
+  }
+  function resumePending() {
+    for (const [request_id, op] of Object.entries(data?.library.requests || {})) {
+      if (op.status === 'running' && op.operation_id && !pending.has(request_id)) pending.set(request_id, {...op, request_id, state:'checking'});
+    }
+    for (const op of pending.values()) if (op.state !== 'failed') runPending(op);
+    updateOperations();
+  }
   let lastVisit = null, reviewNo = '', reviewCandidate = '', reviewReference = '';
   try { lastVisit = MaterialView.saved(JSON.parse(localStorage.getItem(storageKey))); } catch (_) { /* Storage is optional. */ }
   if (lastVisit) { filter = lastVisit.filter; $('search').value = lastVisit.query; $('restore-view').hidden = false; }
@@ -30,6 +134,7 @@
     busy = value;
     document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
     updateReviewNavigation();
+    updateOperations();
   }
   function draw() {
     if (!data) return;
@@ -86,7 +191,7 @@
         '<button data-action="none" class="' + (mode === 'none' ? 'chosen' : '') + '">素材なし</button>' +
         '<button class="compare-scene" data-action="compare">大きく比較・採用</button><button data-action="flag">' + (lib.flags[no] ? '修正メモを変更' : '要修正にする') + '</button></div>' +
         (lib.flags[no] ? '<p class="hint flag-label">' + esc(lib.flags[no]) + '</p>' : '') +
-        '</div><div class="candidate-strip">' + candidates.map(c => {
+        '<p class="scene-operation status-text" role="status" aria-live="polite" hidden></p></div><div class="candidate-strip">' + candidates.map(c => {
           const chosen = c.id === selected;
           return '<div class="candidate ' + (chosen ? 'selected' : '') + '" data-candidate="' + esc(c.id) + '">' +
             '<button class="image-button" data-action="preview" aria-label="候補を拡大"><img loading="lazy" src="' + src(c) + '" alt="' + esc(c.label) + '"></button>' +
@@ -100,10 +205,6 @@
         '<button class="button" data-action="generate">候補を生成</button><button class="text-button" data-action="upload">画像を取り込む</button></div></div></article>';
     }).join('') || '<div class="empty"><p>' + (rows.length ? '該当する場面がありません。絞り込みを解除して確認できます。' : '原稿を解析中、またはまだ素材がありません。「詳しい進捗・手直し」から確認できます。') + '</p></div>';
     const operations = Object.values(lib.requests);
-    const unsettled = operations.filter(op => op.status === 'running');
-    $('operation-state').hidden = !unsettled.length;
-    $('operation-state').dataset.tone = 'working';
-    $('operation-state').textContent = '候補を作成中、または処理結果を確認中です。通信が切れた場合も、まず「素材を読み込む」で結果を確認してください。';
     const requested = operations.reduce((n, op) => n + (op.requested_images || 0), 0);
     $('cost-note').textContent = 'この画面からの追加生成：' + requested + ' 案を依頼。金額は未集計です。利用先の請求と照合して振り返ります。';
     if ($('preview-dialog').open) renderReview();
@@ -116,7 +217,7 @@
     $('operation-state').hidden = false;
     $('operation-state').dataset.tone = 'working';
     $('operation-state').textContent = '生成済みの画像を候補に取り込んでいます。画像の再生成はしません。';
-    try { data = await Studio.api(base + '/sync', {method:'POST'}); draw(); }
+    try { applyPayload(await Studio.api(base + '/sync', {method:'POST'})); resumePending(); }
     catch (error) { Studio.notice(error.message, true); $('operation-state').dataset.tone = 'attention'; $('operation-state').textContent = error.message; }
     finally { setBusy(false); }
   }
@@ -124,13 +225,16 @@
     if (busy) return;
     setBusy(true);
     try {
-      data = await Studio.api(base + '/selection', {method:'POST', body:JSON.stringify({revision:data.library.revision, no, action, candidate_id:candidate, note})});
-      draw(); Studio.notice(action === 'undo' ? '採用操作を戻しました。' : '保存しました。');
+      applyPayload(await Studio.api(base + '/selection', {method:'POST', body:JSON.stringify({revision:data.library.revision,
+        selection_revision:data.library.selection_revision, no, action, candidate_id:candidate, note})}));
+      Studio.notice(action === 'undo' ? '採用操作を戻しました。' : '保存しました。');
       return true;
     } catch (error) { Studio.notice(error.message, true); if ($('preview-dialog').open) $('review-status').textContent = error.message; return false; }
     finally { setBusy(false); }
   }
   function variant(no, kind, candidate) {
+    const current = sceneOperation(no);
+    if (current && current.state !== 'failed') return;
     const row = data.rows.find(row => String(row.no) === no);
     operation = {no, kind, candidate_id:candidate?.id || '', request_id:crypto.randomUUID().replaceAll('-',''), revision:data.library.revision};
     const labels = {generate:'別の候補を作る', edit:'この候補を手直し', flip:'左右を反転した候補を追加', upload:'画像を候補に取り込む'};
@@ -269,16 +373,29 @@
   });
   $('variant-form').addEventListener('submit', async event => {
     event.preventDefault(); if (busy || !operation) return;
+    const submitted = {...operation};
+    const current = sceneOperation(submitted.no);
+    if (current && current.state !== 'failed') return;
     const body = new FormData();
-    Object.entries(operation).forEach(([key, value]) => body.append(key, value));
+    Object.entries({...submitted, revision:data.library.revision}).forEach(([key, value]) => body.append(key, value));
     body.append('instruction', $('instruction').value); body.append('count', $('variant-count').value);
     if ($('suasi-pose') && !$('pose-field').hidden) body.append('suasi_pose', $('suasi-pose').value);
     if ($('image-file').files[0]) body.append('image', $('image-file').files[0]);
-    $('variant-dialog').close(); setBusy(true);
+    $('variant-dialog').close(); operation = null;
+    const slow = submitted.kind === 'generate' || submitted.kind === 'edit';
+    if (slow) {
+      // Only this scene's generation controls wait. Adoption and other scenes
+      // remain available, and the server keeps its existing resource limits.
+      for (const [id, op] of pending) if (String(op.no) === String(submitted.no) && op.state === 'failed') pending.delete(id);
+      const op = {request_id:submitted.request_id, no:submitted.no, kind:submitted.kind, state:'submitting'};
+      pending.set(op.request_id, op); savePending(); updateOperations();
+      runPending(op, body);
+      return;
+    }
+    setBusy(true);
     $('operation-state').hidden = false; $('operation-state').textContent = '候補を作成しています。このままお待ちください。';
     // 生成・手直しは時間がかかるので「受け付け → 問い合わせ」で待つ（左右反転・取り込みはすぐ終わるので今までどおり）
-    const slow = operation.kind === 'generate' || operation.kind === 'edit';
-    try { data = await Studio.api(base + '/variant', {method:'POST', body, poll:slow}); draw(); Studio.notice('候補を追加しました。比べてから採用できます。'); }
+    try { applyPayload(await Studio.api(base + '/variant', {method:'POST', body})); Studio.notice('候補を追加しました。比べてから採用できます。'); }
     catch (error) { Studio.notice(error.message, true); }
     finally { setBusy(false); await refresh(); }
   });
@@ -316,7 +433,7 @@
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'materials_' + window.materialJobId + '.zip';
       document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-      data = await Studio.api(base); draw(); Studio.notice('採用素材を書き出しました。');
+      applyPayload(await Studio.api(base)); Studio.notice('採用素材を書き出しました。');
     } catch (error) { Studio.notice(error.message, true); }
     finally { setBusy(false); }
   }
