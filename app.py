@@ -248,6 +248,7 @@ def google_privacy():
 def version():
     """Render が実際にどの版を読んでいるか確認するための軽量診断。"""
     import subscription_runtime
+    from image_memory import generation_status
     from router import CLAUDE_MODEL as routing_model, EXTRACT_MODEL
     from prompter import CLAUDE_MODEL as design_model
     from verifier import CLAUDE_MODEL as review_model
@@ -269,6 +270,8 @@ def version():
         "material_studio": {"version": material_store.VERSION, "entry": "/materials",
                             "immutable_candidates": True, "handoff_schema": 1,
                             "background_candidates": True, "selection_revision": True},
+        "image_generation": {**generation_status(), "operation_slots": studio_operations.limit(),
+                             "accepted_operations_limit": studio_operations.queue_limit()},
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
         "pillow_version": PILLOW_VERSION,
         "file_boundary_version": 1,
@@ -1658,7 +1661,7 @@ def api_status(job_id):
     from image_memory import effective_concurrency
     response = dict(state)
     if state.get("concurrency"):
-        response["effective_concurrency"] = effective_concurrency(state["concurrency"])
+        response["effective_concurrency"] = effective_concurrency(state["concurrency"], state.get("provider", "gpt-image"))
     return jsonify(response)
 
 

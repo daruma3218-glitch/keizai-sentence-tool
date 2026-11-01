@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from utils import parse_json_object
-from image_memory import image_operation
 
 # 1回の生成で描き直す上限（1枚ずつ・約30〜40秒/枚）。超えた分はコードのグラフのまま。
 CHART_RESTYLE_MAX = 30
@@ -161,12 +160,12 @@ def _image_file(data: bytes, name: str):
     return bio
 
 
-@image_operation
 def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: str, quality: str,
                  style_lock_text: str = "", reference_path: str = "", sentence: str = "",
                  backdrop: int = 0, layout: int = 0) -> tuple:
     """描いたグラフを番組の絵柄に描き直して out_path に保存。(成功, エラー)。"""
     from generator import _save_as_16_9, apply_backdrop, apply_board, full_bleed, openai_size_for
+    from image_transport import consume_openai_image
     import base64
 
     images = [_image_file(Path(rendered_path).read_bytes(), "chart.png")]
@@ -189,11 +188,7 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
         # 背景の色は段落ごと（スクリーンのある場面なので、場面の背景色として渡す）
         prompt += "\n\n" + apply_board(apply_backdrop(style_lock_text.strip(), "illustration", backdrop),
                                         "illustration")
-    try:
-        response = openai_client.images.edit(
-            model=model, image=images, prompt=prompt, n=1,
-            size=openai_size_for(model, style_lock_text), quality=quality,
-        )
+    def save_response(response):
         datum = response.data[0] if response and response.data else None
         b64 = getattr(datum, "b64_json", None) if datum is not None else None
         if not b64:
@@ -202,6 +197,11 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
         b64 = datum = response = None  # 大きなデータを早めに手放す（本番は 512MB）
         _save_as_16_9(data, out_path, fill="crop" if full_bleed(style_lock_text) else "pad")
         return True, ""
+
+    try:
+        return consume_openai_image(openai_client.images, "edit", save_response,
+                                    model=model, image=images, prompt=prompt, n=1,
+                                    size=openai_size_for(model, style_lock_text), quality=quality)
     except Exception as e:
         return False, str(e)[:160]
     finally:

@@ -26,6 +26,7 @@ from google.genai import types
 # Pillow（クロップ用）
 from PIL import Image
 from image_memory import effective_concurrency, image_operation, image_slot
+from image_transport import consume_openai_image, consume_gemini_image, before_gemini_image_body
 from image_files import save_png_atomic
 from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
@@ -614,7 +615,6 @@ def _build_full_prompt(
 
 
 # ===== Gemini (nanobanana) =====
-@image_operation
 def _sync_generate_image_gemini(
     client: genai.Client,
     full_prompt: str,
@@ -622,53 +622,45 @@ def _sync_generate_image_gemini(
     model_name: str = DEFAULT_GEMINI_MODEL,
     reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像
     reference_mime: str = "image/png",
+    defer_body: bool = False,
 ) -> tuple:
     """1 枚の画像を同期生成（Gemini）。
 
     reference_bytes を渡すと参照画像 + テキストのマルチモーダル入力で生成し、
     参照画像のキャラ・絵柄を新シーンに反映する（キャラ固定）。
     """
+    def save_response(response):
+        parts_iter = []
+        if hasattr(response, "parts") and response.parts:
+            parts_iter = response.parts
+        elif hasattr(response, "candidates") and response.candidates:
+            cand = response.candidates[0]
+            if cand.content and cand.content.parts:
+                parts_iter = cand.content.parts
+        for part in parts_iter:
+            inline = getattr(part, "inline_data", None)
+            if inline and inline.mime_type and inline.mime_type.startswith("image/"):
+                img_data = inline.data
+                if isinstance(img_data, str):
+                    img_data = base64.b64decode(img_data)
+                _save_as_16_9(img_data, output_path)
+                return True, ""
+        for part in parts_iter:
+            txt = getattr(part, "text", None)
+            if txt:
+                return False, f"text only: {txt[:120]}"
+        return False, "no image in response"
+
     last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
-            if reference_bytes:
-                contents = [
-                    types.Part.from_bytes(data=reference_bytes, mime_type=reference_mime),
-                    full_prompt,
-                ]
-            else:
-                contents = full_prompt
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                ),
-            )
-
-            parts_iter = []
-            if hasattr(response, "parts") and response.parts:
-                parts_iter = response.parts
-            elif hasattr(response, "candidates") and response.candidates:
-                cand = response.candidates[0]
-                if cand.content and cand.content.parts:
-                    parts_iter = cand.content.parts
-
-            for part in parts_iter:
-                inline = getattr(part, "inline_data", None)
-                if inline and inline.mime_type and inline.mime_type.startswith("image/"):
-                    img_data = inline.data
-                    if isinstance(img_data, str):
-                        img_data = base64.b64decode(img_data)
-                    _save_as_16_9(img_data, output_path)
-                    return True, ""
-
-            last_error = "no image in response"
-            for part in parts_iter:
-                txt = getattr(part, "text", None)
-                if txt:
-                    last_error = f"text only: {txt[:120]}"
-                    break
+            contents = ([types.Part.from_bytes(data=reference_bytes, mime_type=reference_mime), full_prompt]
+                        if reference_bytes else full_prompt)
+            success, last_error = consume_gemini_image(client, save_response, defer_body=defer_body,
+                model=model_name, contents=contents,
+                config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]))
+            if success:
+                return True, ""
 
         except Exception as e:
             err = str(e)
@@ -686,7 +678,6 @@ def _sync_generate_image_gemini(
 
 
 # ===== OpenAI (gpt-image-2) =====
-@image_operation
 def _sync_generate_image_openai(
     client,  # openai.OpenAI
     full_prompt: str,
@@ -702,18 +693,36 @@ def _sync_generate_image_openai(
     reference_bytes を渡すと images.edit を使い、参照画像のキャラ・絵柄を
     反映した新シーンを生成する（キャラ固定）。無ければ通常の images.generate。
     """
+    def save_response(response):
+        if not response or not response.data:
+            return False, "no data in response"
+        datum = response.data[0]
+        b64 = getattr(datum, "b64_json", None)
+        url = getattr(datum, "url", None)
+        if b64:
+            img_data = base64.b64decode(b64)
+            b64 = datum = response = None
+            _save_as_16_9(img_data, output_path, fill=fill)
+            return True, ""
+        if url:
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=60) as result:
+                _save_as_16_9(result.read(), output_path, fill=fill)
+            return True, ""
+        return False, "neither b64_json nor url in response"
+
     last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
             if reference_bytes:
                 with BytesIO(reference_bytes) as bio:
                     bio.name = "reference.jpg" if reference_bytes.startswith(b"\xff\xd8\xff") else "reference.png"
-                    response = client.images.edit(
+                    success, last_error = consume_openai_image(client.images, "edit", save_response,
                         model=model_name, image=bio, prompt=full_prompt, n=1,
                         size=size, quality=quality,
                     )
             else:
-                response = client.images.generate(
+                success, last_error = consume_openai_image(client.images, "generate", save_response,
                     model=model_name,
                     prompt=full_prompt,
                     n=1,
@@ -721,28 +730,8 @@ def _sync_generate_image_openai(
                     quality=quality,
                 )
 
-            if not response or not response.data:
-                last_error = "no data in response"
-                continue
-
-            datum = response.data[0]
-            # 新 API: b64_json で base64 が返る
-            b64 = getattr(datum, "b64_json", None)
-            url = getattr(datum, "url", None)
-
-            if b64:
-                img_data = base64.b64decode(b64)
-                b64 = datum = response = None
-                _save_as_16_9(img_data, output_path, fill=fill)
+            if success:
                 return True, ""
-            elif url:
-                # URL なら fetch
-                import urllib.request
-                with urllib.request.urlopen(url, timeout=60) as r:
-                    _save_as_16_9(r.read(), output_path, fill=fill)
-                return True, ""
-            else:
-                last_error = "neither b64_json nor url in response"
 
         except Exception as e:
             err = str(e)
@@ -834,6 +823,7 @@ class ParallelImageGenerator:
 
         # クライアント初期化（必要な分だけ）
         self.gemini_client = None
+        self.gemini_deferred_body = False
         self.openai_client = None
         self.gemini_model = resolve_gemini_image_model(gemini_model)
         self.openai_model = openai_model or DEFAULT_OPENAI_MODEL
@@ -845,8 +835,10 @@ class ParallelImageGenerator:
             try:
                 self.gemini_client = genai.Client(
                     api_key=gemini_api_key,
-                    http_options=types.HttpOptions(timeout=API_TIMEOUT_SEC * 1000),
+                    http_options=types.HttpOptions(timeout=API_TIMEOUT_SEC * 1000,
+                        client_args={"event_hooks": {"response": [before_gemini_image_body]}}),
                 )
+                self.gemini_deferred_body = True
             except Exception:
                 # 古い SDK で http_options 非対応の場合は従来通り
                 self.gemini_client = genai.Client(api_key=gemini_api_key)
@@ -857,7 +849,8 @@ class ParallelImageGenerator:
             # タイムアウト + リトライ0（リトライは自前で制御）
             self.openai_client = openai.OpenAI(api_key=openai_api_key, timeout=API_TIMEOUT_SEC, max_retries=0)
 
-        self.concurrency = effective_concurrency(concurrency)
+        self.concurrency = effective_concurrency(concurrency,
+            "legacy" if provider == PROVIDER_NANOBANANA and not self.gemini_deferred_body else provider)
         self.progress_callback = progress_callback or (lambda info: None)
         self._executor = None  # generate_all で専用 ThreadPoolExecutor を割り当てる
         # Lock は async 関数内で生成する（Python 3.9 対策）
@@ -889,6 +882,7 @@ class ParallelImageGenerator:
             return _sync_generate_image_gemini(
                 self.gemini_client, full_prompt, output_path, self.gemini_model,
                 reference_bytes=ref, reference_mime=ref_mime,
+                defer_body=self.gemini_deferred_body,
             )
         else:  # gpt-image
             return _sync_generate_image_openai(

@@ -10,8 +10,8 @@
 画面は GET /api/operations/<番号> を数秒ごとに問い合わせ、終わったら今までと同じように結果を扱う。
 - 印を付けない古い画面・試験は、今までどおり待って返す（4つの入口の中身は変えていない）。
 - 同じ番号をもう一度送っても二度は動かない（受け付けの返事だけが届かなかった時のため）。
-- 同時に動かすのは limit() 件まで（既定3・場面の直しは1件で最大3枚を並べて作るため）。超えた分は順番待ちにし、
-  受け付けるのは queue_limit() 件まで（既定12）。それを超えたら「混み合っています」（429）。
+- 同時に動かすのは limit() 件まで（既定4）。画像APIと画像展開の枠は別途プロセス全体で共有する。
+  超えた分は順番待ちにし、受け付けるのは queue_limit() 件まで（既定24）。それを超えたら「混み合っています」（429）。
 - 動いている間・順番待ちの間は、反映（deploy_guard）を待たせる（running_count）。
 - 再起動で止まった「実行中」（持ち主のプロセスが無い・始めてから MAX_AGE_SECONDS を超えた）は「中断」として返し、
   自動では作り直さない（作り直しの行・素材の別案の受付は失敗に戻す）。
@@ -67,12 +67,12 @@ def _env_int(name, default):
 
 def limit():
     """同時に動かす数。一括生成（1枠）とは別。以前は要求のスレッド（8本）が暗黙の上限だった。"""
-    return _env_int("STUDIO_OPERATIONS_MAX", 3)
+    return _env_int("STUDIO_OPERATIONS_MAX", 4)
 
 
 def queue_limit():
     """受け付ける数（動いているもの＋順番待ち）。"""
-    return max(limit(), _env_int("STUDIO_OPERATIONS_QUEUE", 12))
+    return max(limit(), _env_int("STUDIO_OPERATIONS_QUEUE", 24))
 
 
 def running_count():

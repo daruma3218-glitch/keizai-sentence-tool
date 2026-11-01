@@ -17,8 +17,9 @@ import material_history
 import material_review
 from channel_styles import resolve_style, style_choices
 from safe_images import open_image
+from image_memory import REQUEST_CAPACITY
 
-IMAGE_SLOTS = threading.BoundedSemaphore(2)
+IMAGE_SLOTS = threading.BoundedSemaphore(REQUEST_CAPACITY)
 ACTIVE = set()
 
 

@@ -27,11 +27,14 @@ def test_memory_budget_applies_to_small_jobs_and_all_generator_instances(monkeyp
     assert image_memory.capacity_for(512 * image_memory.MIB) == 1
     assert image_memory.capacity_for(1024 * image_memory.MIB) == 2
     monkeypatch.setattr(image_memory, "IMAGE_CAPACITY", 1)
+    monkeypatch.setattr(image_memory, "REQUEST_CAPACITY", 4)
     import openai
     monkeypatch.setattr(openai, "OpenAI", lambda **kw: object())
     instance = generator.ParallelImageGenerator("gpt-image", openai_api_key="offline", concurrency=4)
-    assert instance.concurrency == 1
-    assert image_memory.effective_concurrency(12) == 1
+    assert instance.concurrency == 4
+    assert image_memory.effective_concurrency(12) == 4
+    assert image_memory.effective_concurrency(12, "nanobanana") == 4
+    assert image_memory.effective_concurrency(12, "legacy") == 1
 
 
 def test_progress_shows_effective_capacity_without_rewriting_saved_preference(monkeypatch):
@@ -40,10 +43,11 @@ def test_progress_shows_effective_capacity_without_rewriting_saved_preference(mo
     monkeypatch.setattr(appmod, "_get_job_state", lambda _: state)
     monkeypatch.setattr(appmod, "APP_PASSWORD", "")
     monkeypatch.setattr(image_memory, "IMAGE_CAPACITY", 1)
+    monkeypatch.setattr(image_memory, "REQUEST_CAPACITY", 4)
     response = appmod.app.test_client().get("/api/status/job")
     assert response.status_code == 200
     assert response.json["concurrency"] == 4
-    assert response.json["effective_concurrency"] == 1
+    assert response.json["effective_concurrency"] == 4
     assert state == {"status": "running", "concurrency": 4}
 
 
