@@ -133,7 +133,7 @@
   const display = row => MaterialView.mode(row, data.library);
   const comments = MaterialComments.mount({
     base, sceneCandidates:no => data?.library.candidates[no] || [], assetUrl:src,
-    switchImage:id => { reviewCandidate = id; renderReview(); $('comment-heading').focus(); },
+    switchImage:id => { reviewCandidate = id; renderReview(); $('comment-history-bar').focus(); },
     onChange() {
       $('comment-summary').textContent = comments.summary;
       if (!data) return;
@@ -319,6 +319,11 @@
   $('review-next-scene').addEventListener('click', () => moveReview(1));
   $('comment-prev-scene').addEventListener('click', () => moveReview(-1));
   $('comment-next-scene').addEventListener('click', () => moveReview(1));
+  function showCommentScript(show) {
+    $('comment-script-toggle').setAttribute('aria-expanded', String(show));
+    $('comment-script').hidden = !show;
+  }
+  $('comment-script-toggle').addEventListener('click', () => showCommentScript($('comment-script').hidden));
   function renderReview() {
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
@@ -326,10 +331,17 @@
     if (!candidates.some(c => c.id === reviewCandidate)) reviewCandidate = candidates.find(c => c.id === chosen)?.id || candidates[0]?.id || '';
     if (!candidates.some(c => c.id === reviewReference) || reviewReference === reviewCandidate) reviewReference = candidates.find(c => c.id !== reviewCandidate)?.id || '';
     $('review-location').textContent = '場面 ' + String(row.no).padStart(3,'0') + ' · ' + (row.chapter_title || '章 ' + (row.chapter_index ?? 1));
+    const reading = $('preview-dialog').dataset.mode === 'comments';
+    $('review-sentence').hidden = reading;
     $('review-sentence').textContent = row.sentence;
+    $('comment-script').textContent = reading ? row.sentence : '';
+    $('comment-script-toggle').hidden = !reading || !row.sentence;
+    if ($('comment-script-toggle').hidden) showCommentScript(false);
+    $('review-candidate-label').classList.toggle('sr-only', reading);
+    $('review-candidate-id').hidden = reading && candidates.length < 2;
     $('review-flag').hidden = !data.library.flags[reviewNo];
     $('review-flag').textContent = '要修正：' + (data.library.flags[reviewNo] || '') + '（採用後もメモは残ります）';
-    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + ' · ' + esc(c.label) + (c.id === chosen ? ' · 採用中' : '') + '</option>').join('');
+    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + (reading && c.label === '最初の候補' ? '' : ' · ' + esc(c.label)) + (c.id === chosen ? ' · 採用中' : '') + '</option>').join('');
     $('review-candidate-id').innerHTML = $('review-reference-id').innerHTML = options;
     $('review-candidate-id').value = reviewCandidate; $('review-reference-id').value = reviewReference;
     const focused = candidates.find(c => c.id === reviewCandidate), reference = candidates.find(c => c.id === reviewReference);
@@ -359,6 +371,7 @@
         data.library.candidates[String(row.no)]?.length && MaterialView.matches(row, data.library, currentView()));
     }
     dialog.dataset.mode = mode;
+    if (opening) showCommentScript(false);
     $('review-title').textContent = mode === 'comments' ? '画像のコメント' : '候補を比較・採用';
     $('review-candidate-label').textContent = mode === 'comments' ? '確認する画像' : '採用する候補';
     reviewNo = String(no); reviewCandidate = candidate || ''; reviewReference = '';

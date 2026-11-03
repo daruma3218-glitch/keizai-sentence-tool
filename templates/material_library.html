@@ -28,7 +28,7 @@
   <form id="variant-form">
     <div class="dialog-heading"><h2 id="variant-title">候補を追加</h2><button type="button" class="icon-button" data-close="variant-dialog" aria-label="閉じる">×</button></div>
     <p id="variant-scene" class="subtle"></p><img id="variant-preview" class="variant-preview" alt="手直しする候補" hidden>
-    <section id="variant-comments" class="comment-panel" hidden><h3>この場面の未対応コメント</h3><div id="variant-comment-list"></div><p class="hint">手直しができたら、元のコメントに「候補3で直しました」のように返信し、「対応済みにする」を押してください。</p><p id="variant-comment-status" role="status"></p></section>
+    <section id="variant-comments" class="comment-panel" hidden><h3>未対応コメント</h3><div id="variant-comment-list"></div><p id="variant-comment-status" role="status"></p></section>
     <label id="instruction-label" for="instruction">どんな案にするか</label><textarea id="instruction" rows="3" maxlength="2000" placeholder="例：主役を大きく、余白を減らして"></textarea>
     <label id="file-label" for="image-file" hidden>画像を選ぶ</label><input id="image-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
     <div id="count-field"><label for="variant-count">生成する候補数</label><select id="variant-count"><option value="1">1案</option><option value="2">2案を比較する</option></select></div>
@@ -45,19 +45,23 @@
   <nav class="review-navigation" aria-label="拡大したまま場面を移動"><button id="review-prev-scene" type="button" class="button compact">← 前の場面</button><span id="review-position" class="hint" role="status"></span><button id="review-next-scene" type="button" class="button compact">次の場面 →</button></nav>
   <div id="review-grid" class="review-grid">
     <div id="review-reference" class="review-pane"><label for="review-reference-id">比較する候補</label><select id="review-reference-id"></select><img id="review-reference-image" alt="比較する候補の拡大表示"><button id="review-use-reference" type="button" class="button review-use-reference">この候補を選ぶ →</button></div>
-    <div class="review-pane review-choice"><label id="review-candidate-label" for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><img id="preview-image" alt="表示中の候補画像"><p id="review-chosen" class="hint"></p></div>
+    <div class="review-pane review-choice"><div class="review-image-tools"><label id="review-candidate-label" for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><button type="button" id="comment-script-toggle" class="text-button" aria-expanded="false" aria-controls="comment-script" hidden>原稿<span aria-hidden="true">⌄</span></button></div><img id="preview-image" alt="表示中の候補画像"><p id="comment-script" hidden></p><p id="review-chosen" class="hint"></p></div>
       <section id="image-comments" class="comment-panel" aria-labelledby="comment-heading">
-        <div class="comment-panel-heading"><h3 id="comment-heading" tabindex="-1">この画像のコメント <span id="comment-count" class="comment-count" hidden></span></h3><button type="button" id="comment-jump" class="button compact" hidden>入力欄へ ↓</button></div>
-        <label class="comment-toggle"><input id="comment-show-resolved" type="checkbox">対応済みも表示</label>
+        <h3 id="comment-heading" class="sr-only">この画像のコメント</h3>
+        <div class="comment-composer">
+          <div id="comment-context" hidden><div><strong id="comment-context-title"></strong><p id="comment-quote"></p></div><button type="button" id="comment-cancel" class="text-button" aria-label="キャンセル" title="キャンセル">×</button></div>
+          <label class="sr-only" for="comment-body" id="comment-label">コメントを書く</label>
+          <div class="comment-input-row">
+            <textarea id="comment-body" rows="1" maxlength="1000" placeholder="コメントを書く…" aria-describedby="comment-context-title"></textarea>
+            <button type="button" id="comment-submit" class="button" aria-label="コメントを送信" disabled><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-7 7 7-7 7 7"/></svg><span id="comment-submit-label">送信</span></button>
+          </div>
+          <div id="comment-name-field" hidden><label for="comment-name">表示名<small id="comment-first-name">（初回のみ）</small></label><input id="comment-name" maxlength="40" autocomplete="nickname"><button id="comment-name-save" type="button" class="button compact" hidden>保存</button></div>
+          <button id="comment-rename" class="text-button" type="button" aria-label="表示名を変更" title="表示名を変更" hidden><span id="comment-author"></span><span aria-hidden="true"> ✎</span></button>
+          <p id="comment-status" class="hint" role="status"></p>
+        </div>
+        <div id="comment-history-bar" tabindex="-1" hidden><span id="comment-count"></span><label class="comment-toggle" hidden><input id="comment-show-resolved" type="checkbox">対応済みも表示</label></div>
         <div id="comment-list"></div>
         <div id="comment-others"></div>
-        <div class="comment-composer">
-          <div class="composer-heading"><label for="comment-body" id="comment-label">コメントを書く</label><button id="comment-rename" class="text-button" type="button" aria-label="表示名を変更" hidden><span id="comment-author"></span><span aria-hidden="true"> ✎</span></button></div>
-          <p id="comment-context" hidden></p>
-          <div id="comment-name-field" hidden><label for="comment-name">表示名 <small>初回のみ</small></label><div class="comment-name-row"><input id="comment-name" maxlength="40" autocomplete="off" placeholder="コメントに表示するお名前"><button id="comment-name-save" type="button" class="button compact" hidden>表示名を保存</button></div></div>
-          <textarea id="comment-body" rows="2" maxlength="1000" placeholder="この画像で気づいたこと"></textarea>
-          <div class="actions composer-actions"><p id="comment-status" class="hint" role="status"></p><button type="button" id="comment-cancel" class="text-button" hidden>やめる</button><button type="button" id="comment-submit" class="button dark">コメントする</button></div>
-        </div>
       </section>
   </div>
   <div id="review-no-candidate" class="empty" hidden><p>この場面には、まだ候補がありません。</p><button id="review-add" type="button" class="button">一覧で候補を追加する</button></div>
