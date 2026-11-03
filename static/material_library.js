@@ -109,7 +109,8 @@
     for (const op of pending.values()) if (op.state !== 'failed') runPending(op);
     updateOperations();
   }
-  let lastVisit = null, reviewNo = '', reviewCandidate = '', reviewReference = '';
+  let lastVisit = null, reviewNo = '', reviewCandidate = '', reviewReference = '', reviewTrigger = null, firstCommentRow = null;
+  let commentScenes = [];
   try { lastVisit = MaterialView.saved(JSON.parse(localStorage.getItem(storageKey))); } catch (_) { /* Storage is optional. */ }
   if (lastVisit) { filter = lastVisit.filter; $('search').value = lastVisit.query; $('restore-view').hidden = false; }
   const currentView = () => ({filter, chapter:$('chapter-filter').value, query:$('search').value.trim(), openScenes:comments.openScenes});
@@ -149,6 +150,7 @@
   });
   function setBusy(value) {
     busy = value;
+    $('comment-review-start').disabled = value || !firstCommentRow;
     document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
     updateReviewNavigation();
     updateOperations();
@@ -195,6 +197,7 @@
     $('chapter-filter').value = chapters.has(selectedChapter) ? selectedChapter : '';
     document.querySelectorAll('[data-filter]').forEach(button => { const active = button.dataset.filter === filter; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
     const visible = rows.filter(row => MaterialView.matches(row, lib, currentView()));
+    firstCommentRow = visible.find(row => lib.candidates[String(row.no)]?.length);
     if (pending && !MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
     $('visible-count').textContent = visible.length + ' / ' + rows.length + ' 場面を表示';
     $('rows').innerHTML = visible.map(row => {
@@ -281,8 +284,7 @@
     const id = button.closest('.candidate')?.dataset.candidate;
     const candidate = (data.library.candidates[no] || []).find(c => c.id === id);
     if (action === 'preview' || action === 'compare' || action === 'comments') {
-      openReview(no, candidate?.id);
-      if (action === 'comments') $('comment-heading').focus();
+      openReview(no, candidate?.id, action === 'comments' ? 'comments' : 'compare');
     } else if (['generate','edit','flip','upload'].includes(action)) variant(no, action, candidate);
     else if (action === 'flag') {
       flagNo = no;
@@ -293,14 +295,19 @@
   });
 
   function reviewScenes() {
+    if ($('preview-dialog').dataset.mode === 'comments') return commentScenes;
     // 状態の絞り込みは採用直後に変わるため、閲覧中は章・検索の範囲を順にたどる。
     return data ? data.rows.filter(row => MaterialView.matches(row, data.library, {...currentView(), filter:'all'})) : [];
   }
+  $('comment-review-start').addEventListener('click', () => {
+    if (!firstCommentRow || busy) return;
+    openReview(firstCommentRow.no, '', 'comments');
+  });
   function updateReviewNavigation() {
     const rows = reviewScenes(), index = rows.findIndex(row => String(row.no) === reviewNo);
     $('comment-prev-scene').disabled = $('review-prev-scene').disabled = busy || index <= 0;
     $('comment-next-scene').disabled = $('review-next-scene').disabled = busy || index < 0 || index >= rows.length - 1;
-    $('review-position').textContent = index < 0 ? '' : (index + 1) + ' / ' + rows.length + ' 場面';
+    $('comment-position').textContent = $('review-position').textContent = index < 0 ? '' : (index + 1) + ' / ' + rows.length + ' 場面';
   }
   function moveReview(direction) {
     if (busy) return;
@@ -322,17 +329,19 @@
     $('review-sentence').textContent = row.sentence;
     $('review-flag').hidden = !data.library.flags[reviewNo];
     $('review-flag').textContent = '要修正：' + (data.library.flags[reviewNo] || '') + '（採用後もメモは残ります）';
-    const options = candidates.map(c => '<option value="' + esc(c.id) + '">' + esc(c.label) + (c.id === chosen ? ' · 採用中' : '') + '</option>').join('');
+    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + ' · ' + esc(c.label) + (c.id === chosen ? ' · 採用中' : '') + '</option>').join('');
     $('review-candidate-id').innerHTML = $('review-reference-id').innerHTML = options;
     $('review-candidate-id').value = reviewCandidate; $('review-reference-id').value = reviewReference;
     const focused = candidates.find(c => c.id === reviewCandidate), reference = candidates.find(c => c.id === reviewReference);
     if (focused) $('preview-image').src = src(focused); else $('preview-image').removeAttribute('src');
-    if (reference) $('review-reference-image').src = src(reference); else $('review-reference-image').removeAttribute('src');
-    $('review-reference').hidden = !reference;
+    const showReference = !!reference && $('preview-dialog').dataset.mode !== 'comments';
+    if (showReference) $('review-reference-image').src = src(reference); else $('review-reference-image').removeAttribute('src');
+    $('review-reference').hidden = !showReference;
     $('review-grid').classList.toggle('single', !reference);
     $('review-grid').hidden = !focused; $('review-no-candidate').hidden = !!focused;
     $('review-adopt').hidden = $('review-adopt-next').hidden = !focused;
-    $('review-chosen').textContent = focused?.id === chosen ? '✓ この候補を採用中' : '採用すると、この場面で使う画像として保存されます。';
+    $('review-chosen').textContent = focused?.id === chosen ? '✓ 採用中の画像' :
+      $('preview-dialog').dataset.mode === 'comments' ? '未採用の候補' : '採用すると、この場面で使う画像として保存されます。';
     comments.selectImage(reviewNo, reviewCandidate);
     const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
     $('review-skip').hidden = !next;
@@ -341,14 +350,29 @@
     $('review-adopt').textContent = focused?.id === chosen ? '採用中の候補を保存' : '採用してこの場面にとどまる';
     updateReviewNavigation();
   }
-  function openReview(no, candidate) {
+  function openReview(no, candidate, mode = $('preview-dialog').open ? $('preview-dialog').dataset.mode : 'compare') {
+    const dialog = $('preview-dialog'), opening = !dialog.open;
+    if (opening) {
+      reviewTrigger = document.activeElement;
+      // Keep the route stable even when the reviewer resolves the last open thread on the current scene.
+      if (mode === 'comments') commentScenes = data.rows.filter(row =>
+        data.library.candidates[String(row.no)]?.length && MaterialView.matches(row, data.library, currentView()));
+    }
+    dialog.dataset.mode = mode;
+    $('review-title').textContent = mode === 'comments' ? '画像のコメント' : '候補を比較・採用';
+    $('review-candidate-label').textContent = mode === 'comments' ? '確認する画像' : '採用する候補';
     reviewNo = String(no); reviewCandidate = candidate || ''; reviewReference = '';
+    if (mode === 'comments' && !reviewCandidate) {
+      const candidates = data.library.candidates[reviewNo] || [];
+      const unresolved = filter === 'comments' && candidates.find(c => comments.hasOpen(c.id));
+      reviewCandidate = unresolved?.id || data.library.selections[reviewNo] || candidates.at(-1)?.id || '';
+    }
     $('review-status').textContent = '';
     $('review-more').open = false;
     renderReview();
-    if (!$('preview-dialog').open) $('preview-dialog').showModal();
-    $('preview-dialog').scrollTop = 0;
-    $('review-candidate-id').focus({preventScroll:true});
+    if (opening) dialog.showModal();
+    dialog.scrollTop = $('review-body').scrollTop = 0;
+    if (mode === 'compare' || opening) $(mode === 'comments' ? 'review-title' : 'review-candidate-id').focus({preventScroll:true});
   }
   function reviewNext() {
     if (!data || busy) return;
@@ -393,7 +417,8 @@
   });
   $('preview-dialog').addEventListener('close', () => {
     const scene = [...document.querySelectorAll('.scene')].find(el => el.dataset.no === reviewNo);
-    (scene || $('review-next')).focus({preventScroll:true});
+    const trigger = $('preview-dialog').dataset.mode === 'comments' && reviewTrigger?.isConnected && reviewTrigger;
+    (trigger || scene || $('review-next')).focus({preventScroll:true});
   });
   $('variant-form').addEventListener('submit', async event => {
     event.preventDefault(); if (busy || !operation) return;

@@ -26,6 +26,7 @@ def seed(root, job):
     rows = [{"no":i, "chapter_index":1, "chapter_title":"価格のしくみ", "sentence":sentence,
              "display":"image", "status":"ok", "filename":f"{i}.png"}
             for i, sentence in enumerate(["仕入れた商品が店頭に届きます。", "価格の変化を図で比べます。"], 1)]
+    rows.append({"no":3, "chapter_index":1, "sentence":"前の画像を続けます。", "display":"hold", "status":"hold"})
     store.save(d / "material_context.json", {"source_channel_id":"keizai", "title":"合成データ｜画像の確認", "profile":{}})
     store.save(d / "job.json", {"status":"completed", "channel_id":"keizai"})
     store.save(d / "rows_progress.json", {"rows":rows})
@@ -90,6 +91,13 @@ def exercise(browser, origin, width, output):
     ctx_a, a = open_page("review"+str(width))
     ctx_b, b = open_page("artist"+str(width))
     try:
+        expect(a.locator("#review-title")).to_have_text("画像のコメント")
+        expect(a.locator("#review-adopt-next")).not_to_be_visible()
+        expect(a.locator("#review-reference")).not_to_be_visible()
+        expect(a.locator("#comment-position")).to_have_text("1 / 2 場面")
+        expect(a.locator("#comment-prev-scene")).to_be_disabled()
+        assert a.locator("#review-reference-image").get_attribute("src") is None
+        a.screenshot(path=output / f"empty-{width}.png")
         a.locator("#comment-name").fill("確認係")
         a.locator("#comment-body").fill("図の左に単位を追加してください。")
         a.locator("#comment-body").press("Enter")
@@ -102,7 +110,8 @@ def exercise(browser, origin, width, output):
         a.locator("#comment-body").fill("合成の場面2を確認しました。")
         a.locator("#comment-submit").click()
         expect(a.locator(".comment-thread")).to_have_count(1)
-        a.locator("#review-prev-scene").click()
+        expect(a.locator("#comment-next-scene")).to_be_disabled()
+        a.locator("#comment-prev-scene").click()
         expect(a.locator(".comment-thread")).to_have_count(1)
         # Read the same candidate in the other user's tab; leave tab A to its normal 30-second timer.
         b.reload()
@@ -120,10 +129,21 @@ def exercise(browser, origin, width, output):
         a.locator("#comment-body").fill("")
         a.locator("#comment-heading").scroll_into_view_if_needed()
         a.screenshot(path=output / f"comments-{width}.png")
-        a.locator("#preview-image").evaluate("el => el.scrollIntoView({block:'start'})")
+        a.locator("#review-body").evaluate("el => el.scrollTop = 0")
         a.screenshot(path=output / f"scene-{width}.png")
         assert a.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert a.locator("#preview-dialog").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+        image_box = a.locator("#preview-image").bounding_box()
+        discussion_box = a.locator("#image-comments").bounding_box()
+        if width == 390:
+            assert discussion_box["y"] >= image_box["y"] + image_box["height"]
+        else:
+            assert discussion_box["x"] >= image_box["x"] + image_box["width"]
+        footer = a.locator(".comment-navigation").bounding_box()
+        a.locator("#review-body").evaluate("el => el.scrollTop = el.scrollHeight")
+        assert a.locator(".comment-navigation").bounding_box() == footer
+        assert all(a.locator(s).bounding_box()["height"] >= 44 for s in ("#comment-prev-scene","#comment-next-scene","#comment-submit"))
+        a.locator(".comment-menu summary").first.click()
         a.get_by_role("button", name="直す", exact=True).click()
         a.locator("#comment-body").fill("図の左に円の単位を追加してください。")
         a.locator("#comment-submit").click()
@@ -137,16 +157,28 @@ def exercise(browser, origin, width, output):
         a.locator("#review-candidate-id").select_option(index=1)
         a.get_by_role("button", name="前の候補へのコメント（候補1）").click()
         expect(a.locator(".comment-thread")).to_contain_text("円の単位")
-        a.locator("#review-next-scene").click()
+        a.locator("#comment-next-scene").click()
+        a.locator(".comment-menu summary").first.click()
         a.once("dialog", lambda dialog: dialog.accept())
         a.get_by_role("button", name="取り消す", exact=True).click()
         expect(a.locator(".comment-thread")).to_contain_text("取り消されたコメント")
         a.locator('[data-close="preview-dialog"]').click()
         a.locator('[data-filter="comments"]').click()
         expect(a.locator(".scene")).to_have_count(1)
+        a.locator("#comment-review-start").click()
+        expect(a.locator("#comment-position")).to_have_text("1 / 1 場面")
+        expect(a.locator("#comment-next-scene")).to_be_disabled()
+        a.locator('[data-close="preview-dialog"]').click()
+        a.locator('[data-action="compare"]').first.click()
+        expect(a.locator("#review-adopt-next")).to_be_visible()
+        expect(a.locator("#review-reference")).to_be_visible()
+        expect(a.locator(".comment-navigation")).not_to_be_visible()
+        expect(a.locator("#review-position")).to_have_text("1 / 3 場面")
+        a.locator('[data-close="preview-dialog"]').click()
         a.locator('[data-action="edit"]').first.click()
         a.get_by_role("button", name="指示に入れる").first.click()
         expect(a.locator("#instruction")).to_have_value("図の左に円の単位を追加してください。")
+        expect(a.locator("#variant-comment-status")).to_have_text("指示欄の末尾に追加しました。")
         a.screenshot(path=output / f"instruction-{width}.png")
         a.locator('#variant-dialog button[data-close]').first.click()
         a.locator("#download").click()
@@ -170,11 +202,30 @@ def exercise(browser, origin, width, output):
         assert workbook.active["D2"].value == csv_rows[1][3]
         workbook.close()
         a.screenshot(path=output / f"export-{width}.png")
+        assert not any(path.endswith("/selection") for path in writes)
         before = list(writes)
         a.goto(page_url + "?view=saved")
         a.locator('[data-no="1"] [data-action="comments"]').first.click()
         expect(a.locator(".comment-thread")).to_contain_text("円の単位")
         assert before == writes
+        if width == 390:
+            # A long unbroken line and the maximum-length display name must also fit small screens.
+            a.locator("#comment-rename").click()
+            a.locator("#comment-name").fill("確"*40)
+            a.locator("#comment-name-save").click()
+            expect(a.locator("#comment-author")).to_have_text("確"*40)
+            a.locator("#comment-jump").click()
+            expect(a.locator("#comment-body")).to_be_focused()
+            a.locator("#comment-body").fill("A"*1000)
+            a.locator("#comment-submit").click()
+            expect(a.locator(".comment-thread")).to_have_count(2)
+            for w,h in [(320,568),(768,600)]:
+                a.set_viewport_size({"width":w, "height":h})
+                a.locator("#comment-jump").click()
+                expect(a.locator("#comment-body")).to_be_focused()
+                assert a.locator("#review-body").evaluate("el => el.scrollWidth <= el.clientWidth+1")
+                nav = a.locator(".comment-navigation").bounding_box()
+                assert nav["y"] >= 0 and nav["y"]+nav["height"] <= h+1
         assert not attempts and not errors, (attempts, errors)
         print(f"Chrome {width}px: editing, two users, polling {elapsed:.1f}s, filter, instruction, ZIP warning, Google stub and CSV passed", flush=True)
     finally:

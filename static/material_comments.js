@@ -48,10 +48,13 @@
   function threadHtml(thread, esc) {
     const {root:c, replies, active} = thread, resolved = c.status === 'resolved';
     const button = (action, id, label) => '<button type="button" class="text-button" data-comment-action="' + action + '" data-id="' + esc(id) + '">' + label + '</button>';
-    const message = item => '<p class="comment-meta"><b>' + esc(item.author_name) + '</b> · ' + esc(date.format(new Date(item.created_at))) +
-      (item.edited_at && !item.withdrawn ? ' · 編集済み' : '') + '</p><p class="comment-text">' +
-      (item.withdrawn ? '取り消されたコメント' : esc(item.body)) + '</p>' +
-      (item.mine && !item.withdrawn ? '<div class="comment-tools">' + button('edit', item.id, '直す') + button('withdraw', item.id, '取り消す') + '</div>' : '');
+    const badge = active ? '<span class="thread-state">' + (resolved ? '対応済み' : '未対応') + '</span>' : '';
+    const message = item => '<div class="comment-meta"><b>' + esc(item.author_name) + '</b>' +
+      (item.parent_id ? '<span class="reply-tag">返信</span>' : badge) +
+      '<time datetime="' + esc(item.created_at) + '">' + esc(date.format(new Date(item.created_at))) + (item.edited_at && !item.withdrawn ? ' · 編集済み' : '') + '</time>' +
+      (item.mine && !item.withdrawn ? '<details class="comment-menu" data-menu-id="' + esc(item.id) + '"><summary aria-label="自分のコメントの操作">•••</summary><div>' +
+        button('edit', item.id, '直す') + button('withdraw', item.id, '取り消す') + '</div></details>' : '') +
+      '</div><p class="comment-text">' + (item.withdrawn ? '取り消されたコメント' : esc(item.body)) + '</p>';
     return '<article class="comment-thread' + (resolved ? ' resolved' : '') + '">' + message(c) +
       replies.map(r => '<div class="comment-reply">' + message(r) + '</div>').join('') +
       (c.status_by ? '<p class="hint">' + esc(c.status_by) + 'が' + (resolved ? '対応済みにしました' : 'もう一度開きました') + ' · ' + esc(date.format(new Date(c.status_at))) + '</p>' : '') +
@@ -75,8 +78,9 @@
       const requested = state.revision;
       try {
         const packet = await Studio.api(base + '/comments' + (requested < 0 ? '' : '?since=' + requested), {cache:'no-store'});
-        const recovered = !!loadError;
+        const recovered = loadError;
         loadError = '';
+        if (recovered && $('comment-status').textContent === recovered) status('');
         if (merge(state, packet, requested) || recovered) {
           groups = group(state.items);
           onChange(); renderList(); renderVariant();
@@ -84,6 +88,7 @@
       } catch (error) {
         loadError = 'コメントの読み込みに失敗しました。' + error.message;
         $('comment-summary').textContent = loadError;
+        $('comment-count').hidden = true;
         status(loadError);
       }
     }
@@ -92,9 +97,10 @@
       name = result.display_name; nameReady = true; profile();
     }
     function profile() {
-      $('comment-author').textContent = name ? '表示名　' + name : '';
+      $('comment-author').textContent = name;
       $('comment-rename').hidden = !name;
       $('comment-name-field').hidden = !!name;
+      $('comment-name-save').hidden = !name;
       $('comment-name').value = name;
     }
     async function write(path, payload) {
@@ -118,6 +124,9 @@
       mode = nextMode; target = id;
       const label = nextMode === 'reply' ? '返信を書く' : nextMode === 'edit' ? 'コメントを直す' : 'コメントを書く';
       $('comment-label').textContent = label;
+      const item = state.items.get(id);
+      $('comment-context').hidden = !item || nextMode === 'new';
+      $('comment-context').textContent = item ? item.author_name + '「' + item.body + '」' : '';
       $('comment-submit').textContent = nextMode === 'reply' ? '返信する' : nextMode === 'edit' ? '変更を保存' : 'コメントする';
       $('comment-body').value = value;
       $('comment-cancel').hidden = nextMode === 'new';
@@ -126,10 +135,23 @@
       if (!selected) return;
       const threads = groups.byImage.get(selected) || [];
       const resolved = threads.filter(t => t.root.status === 'resolved');
+      $('comment-count').hidden = !threads.length || !!loadError;
+      $('comment-count').textContent = threads.length + '件';
       $('comment-show-resolved').closest('label').hidden = !resolved.length;
       const visible = threads.filter(t => t.root.status !== 'resolved' || $('comment-show-resolved').checked);
-      $('comment-list').innerHTML = visible.length ? visible.map(t => threadHtml(t, esc)).join('') :
-        '<p class="hint">' + esc(loadError || (state.revision < 0 ? 'コメントを読み込んでいます…' : resolved.length ? '未対応のコメントはありません。' : 'この画像にはまだコメントがありません。')) + '</p>';
+      $('comment-jump').hidden = !visible.length;
+      const list = $('comment-list');
+      const menuId = list.querySelector('details[open]')?.dataset.menuId;
+      const focus = document.activeElement, focusMenu = focus?.closest('.comment-menu')?.dataset.menuId;
+      list.innerHTML = visible.length ? visible.map(t => threadHtml(t, esc)).join('') :
+        '<p class="comment-empty">' + esc(loadError || (state.revision < 0 ? 'コメントを読み込んでいます…' : resolved.length ? '未対応のコメントはありません。' : 'この画像にはまだコメントがありません。')) + '</p>';
+      for (const menu of list.querySelectorAll('.comment-menu')) {
+        if (menu.dataset.menuId === menuId) menu.open = true;
+        if (menu.dataset.menuId === focusMenu) {
+          const target = [...menu.querySelectorAll('summary,button')].find(el => el.dataset.commentAction === focus.dataset.commentAction);
+          target?.focus({preventScroll:true});
+        }
+      }
       const candidates = sceneCandidates(scene);
       const index = candidates.findIndex(c => c.id === selected);
       $('comment-others').innerHTML = candidates.filter(c => c.id !== selected && groups.byImage.has(c.id)).map(c =>
@@ -161,14 +183,15 @@
       const c = state.items.get(event.target.closest('[data-insert]')?.dataset.insert);
       if (!c || c.withdrawn) return;
       const input = $('instruction'), value = (input.value ? input.value + '\n' : '') + c.body;
-      if (value.length > input.maxLength) { Studio.notice('指示欄の文字数を超えます。先に内容を短くしてください。', true); return; }
-      input.value = value; input.focus();
+      if (value.length > input.maxLength) { $('variant-comment-status').textContent = '指示欄の文字数を超えます。先に内容を短くしてください。'; return; }
+      input.value = value; $('variant-comment-status').textContent = '指示欄の末尾に追加しました。'; input.focus();
     });
     $('comment-others').addEventListener('click', event => {
       const id = event.target.closest('[data-comment-image]')?.dataset.commentImage;
       if (id) switchImage(id);
     });
     $('comment-show-resolved').addEventListener('change', renderList);
+    $('comment-jump').addEventListener('click', () => $(!name && !$('comment-name-field').hidden ? 'comment-name' : 'comment-body').focus());
     $('comment-rename').addEventListener('click', () => { $('comment-name-field').hidden = false; $('comment-name').focus(); });
     $('comment-cancel').addEventListener('click', () => { setEditor('new', '', ''); status(''); });
     async function perform(task) {
@@ -194,6 +217,8 @@
       const button = event.target.closest('[data-comment-action]');
       if (!button || saving) return;
       const {id, commentAction:action} = button.dataset;
+      const menu = button.closest('.comment-menu');
+      if (menu) menu.open = false;
       if (action === 'reply' || action === 'edit') {
         setEditor(action, id, action === 'edit' ? state.items.get(id).body : '');
         status(''); $('comment-body').focus(); return;
@@ -213,14 +238,16 @@
         watch(document, refresh, window);
       },
       selectImage,
-      variant(no) { variantScene = no; renderVariant(); },
+      variant(no) { variantScene = no; $('variant-comment-status').textContent = ''; renderVariant(); },
       get openScenes() { return groups.openScenes; },
+      hasOpen(id) { return (groups.byImage.get(id) || []).some(t => t.active && t.root.status === 'open'); },
       get total() { return groups.open; },
       get summary() { return loadError || (state.revision < 0 ? 'コメントを読み込んでいます…' : '未対応コメント ' + groups.open + ' 件'); },
       label(id) {
-        if (state.revision < 0) return '💬 コメント';
+        if (state.revision < 0) return 'コメント';
         const threads = groups.byImage.get(id) || [];
-        return '💬 コメント ' + threads.length + '（未対応 ' + threads.filter(t => t.active && t.root.status === 'open').length + '）';
+        const open = threads.filter(t => t.active && t.root.status === 'open').length;
+        return threads.length ? 'コメント ' + threads.length + '件' + (open ? ' · 未対応 ' + open : '') : 'コメント';
       }
     };
   }
