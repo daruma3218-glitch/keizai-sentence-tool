@@ -12,10 +12,11 @@ from PIL import ImageOps
 from image_memory import image_slot
 
 import material_store as store
+from material_comments import export_lines
 from safe_images import open_image
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-HEADERS = ["番号", "画像プレビュー", "コメント", "原稿", "状態", "表示", "章", "種類",
+HEADERS = ["番号", "画像プレビュー", "コメント", "スタジオのコメント", "原稿", "状態", "表示", "章", "種類",
            "画像URL", "出典", "クレジット", "要修正メモ"]
 STATUS = {"ok": "生成済み・未採用", "failed": "生成失敗", "pending": "未生成",
           "generating": "生成中", "skipped": "スキップ", "skip": "スキップ",
@@ -41,11 +42,12 @@ def csv_text(value):
     return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
 
 
-def review_rows(job_dir, origin="https://sozai.apprendre.jp"):
+def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all"):
     """All scenes, with adopted assets first and generated candidates clearly labelled."""
     d = Path(job_dir)
     with store.LOCK:
         library = store.load_library(d)
+        discussions = export_lines(d, comments, library)
         sources = store.source_rows(d)
         rows, previous, chapter = [], None, None
         for row in sources:
@@ -86,7 +88,7 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp"):
             else:
                 previous = (path, image_url, source, credit, checksum) if path else None
             note = library["flags"].get(no) or row.get("verify_reason") or row.get("error", "")
-            rows.append({"values": [row["no"], "", "", row.get("sentence", ""), status,
+            rows.append({"values": [row["no"], "", "", discussions.get(no, ""), row.get("sentence", ""), status,
                                      DISPLAY.get(mode, mode), row.get("chapter_title") or chapter,
                                      ROUTES.get(row.get("route"), row.get("route", "")),
                                      image_url, source, credit, note], "path": path, "sha256": checksum})
@@ -97,22 +99,22 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp"):
     return title, rows
 
 
-def review_csv(job_dir):
-    title, rows = review_rows(job_dir)
+def review_csv(job_dir, comments="all"):
+    title, rows = review_rows(job_dir, comments=comments)
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     # CSV cannot embed images; the preview cell explains the usable link column.
     writer.writerow(HEADERS)
     for row in rows:
         values = list(row["values"])
-        values[1] = "画像URLから開く" if values[8] else ""
+        values[1] = "画像URLから開く" if values[HEADERS.index("画像URL")] else ""
         writer.writerow([csv_text(value) for value in values])
     return title, ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
 def extend_legacy_csv(job_dir, raw_csv):
     """Keep all existing columns/order, append review fields using current row state."""
-    _, rows = review_rows(job_dir)
+    _, rows = review_rows(job_dir, comments="none")
     by_no = {str(row["values"][0]): row["values"] for row in rows}
     reader = csv.reader(io.StringIO(raw_csv.lstrip("\ufeff")))
     header = next(reader, [])
@@ -122,19 +124,19 @@ def extend_legacy_csv(job_dir, raw_csv):
     writer.writerow(header + ["画像URL", "生成・採用状態", "要修正メモ", "コメント"])
     for existing in reader:
         values = by_no.get(str(existing[no_index]) if no_index is not None and len(existing) > no_index else "")
-        extra = [values[8], values[4], values[11], ""] if values else ["", "", "", ""]
+        extra = [values[HEADERS.index(key)] for key in ("画像URL", "状態", "要修正メモ", "コメント")] if values else [""] * 4
         writer.writerow([csv_text(value) for value in existing + extra])
     return ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
-def write_workbook(job_dir, destination):
+def write_workbook(job_dir, destination, comments="all"):
     """Build the app's upload payload, decoding only one small preview at a time."""
     from openpyxl import Workbook
     from openpyxl.drawing.image import Image as SheetImage
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    title, rows = review_rows(job_dir)
+    title, rows = review_rows(job_dir, comments=comments)
     if not rows:
         raise ValueError("書き出せる素材がまだありません")
     workbook = Workbook()
@@ -143,7 +145,7 @@ def write_workbook(job_dir, destination):
     sheet.freeze_panes = "D2"
     sheet.sheet_view.showGridLines = False
     sheet.append(HEADERS)
-    widths = [8, 38, 38, 65, 22, 22, 24, 14, 30, 30, 24, 35]
+    widths = [8, 38, 38, 52, 65, 22, 22, 24, 14, 30, 30, 24, 35]
     for column, width in enumerate(widths, 1):
         sheet.column_dimensions[get_column_letter(column)].width = width
         cell = sheet.cell(1, column)
@@ -152,11 +154,26 @@ def write_workbook(job_dir, destination):
         cell.alignment = Alignment(vertical="center")
     sheet.row_dimensions[1].height = 30
     buffers = []
+    continuation = None
     try:
         for index, row in enumerate(rows, 2):
             sheet.row_dimensions[index].height = 126
             for column, value in enumerate(row["values"], 1):
-                cell = sheet.cell(index, column, text(value))
+                literal = text(value)
+                # Excel truncates strings over 32,767 characters. Keep long conversations in this workbook.
+                if column == HEADERS.index("スタジオのコメント") + 1 and len(literal.encode("utf-16-le")) > 65534:
+                    if continuation is None:
+                        continuation = workbook.create_sheet("コメントの続き")
+                        continuation.append(["場面", "順番", "スタジオのコメント"])
+                        continuation.column_dimensions["C"].width = 80
+                    parts = [literal[n:n+16000] for n in range(0, len(literal), 16000)]
+                    for number, part in enumerate(parts, 1):
+                        continuation.append([str(row["values"][0]), str(number), part])
+                        detail = continuation.cell(continuation.max_row, 3)
+                        detail.data_type = "s"
+                        detail.alignment = Alignment(vertical="top", wrap_text=True)
+                    literal = "全文は「コメントの続き」シートの場面 " + str(row["values"][0]) + " をご覧ください。"
+                cell = sheet.cell(index, column, literal)
                 cell.data_type = "s"  # Manuscripts beginning with '=' are not formulas.
                 cell.font = Font(name="Arial", size=11, color="202B28")
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
@@ -183,8 +200,9 @@ def write_workbook(job_dir, destination):
                     sheet.add_image(image)
                 except (OSError, SyntaxError, ValueError):
                     sheet.cell(index, 2, "画像を読み込めません。画像URLから確認してください。")
-                    sheet.cell(index, 5, row["values"][4] + "・画像要確認")
-        sheet.auto_filter.ref = f"A1:L{len(rows) + 1}"
+                    status_index = HEADERS.index("状態")
+                    sheet.cell(index, status_index + 1, row["values"][status_index] + "・画像要確認")
+        sheet.auto_filter.ref = f"A1:{get_column_letter(len(HEADERS))}{len(rows) + 1}"
         workbook.properties.title = title + "｜素材レビュー"
         workbook.properties.description = "コメント列へ記入してください。書き出した時点の全場面と画像です。"
         workbook.save(destination)

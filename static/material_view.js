@@ -13,7 +13,8 @@
     return (!view.chapter || chapter(row) === view.chapter) &&
       (!view.query || String(row.sentence || '').toLowerCase().includes(view.query.toLowerCase())) &&
       (view.filter === 'all' || view.filter === 'pending' && mode(row, lib) === 'image' && !lib.selections[no] ||
-       view.filter === 'selected' && mode(row, lib) === 'image' && !!lib.selections[no] || view.filter === 'flagged' && !!lib.flags[no]);
+       view.filter === 'selected' && mode(row, lib) === 'image' && !!lib.selections[no] || view.filter === 'flagged' && !!lib.flags[no] ||
+       view.filter === 'comments' && !!view.openScenes?.has(no));
   }
   // Preserve chapter/search scope while moving forward, then wrap once.
   function nextPending(rows, lib, no, view) {
@@ -39,7 +40,7 @@
   }
   function saved(value) {
     if (!value || typeof value !== 'object') return null;
-    return {filter:['all','pending','selected','flagged'].includes(value.filter) ? value.filter : 'all',
+    return {filter:['all','pending','selected','flagged','comments'].includes(value.filter) ? value.filter : 'all',
       chapter:typeof value.chapter === 'string' ? value.chapter.slice(0,200) : '',
       query:typeof value.query === 'string' ? value.query.slice(0,256) : '',
       no:typeof value.no === 'string' ? value.no.slice(0,40) : '',

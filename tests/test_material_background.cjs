@@ -37,6 +37,8 @@ function fixture(saved = []) {
       candidates:{'1':[{id:'one',label:'Original'}],'2':[{id:'two',label:'Original'}]}}};
   const copy = value => JSON.parse(JSON.stringify(value));
   const context = vm.createContext({console, FormData, crypto:require('node:crypto').webcrypto,
+    URLSearchParams, location:{search:''},
+    MaterialComments:{mount:() => ({openScenes:new Map(), label:() => 'コメント', start() {}, selectImage() {}, variant() {}})},
     setTimeout:() => 0, clearTimeout() {}, requestAnimationFrame:fn => fn(),
     localStorage:{getItem:key => storage.get(key), setItem:(key,value) => storage.set(key,value)},
     window:{materialJobId:'sample',scrollY:0,scrollTo() {},addEventListener() {}},

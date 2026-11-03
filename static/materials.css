@@ -168,3 +168,24 @@ body:has(dialog[open]){overflow:hidden}
 
 .review-use-reference { width:100%; min-height:44px; margin-top:12px; border-color:#087f73; color:#087f73; background:#fff; }
 .review-use-reference:hover { background:#eaf7f3; }
+
+.candidate-comments { margin:4px 0 8px; min-height:44px; }
+#comment-summary { margin:8px 0; }
+.comment-panel { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); text-align:left; min-width:0; }
+.comment-panel h3 { color:var(--ink); }
+.comment-thread,.instruction-comment { margin:8px 0; padding:10px 12px; background:#fffaf0; border-left:3px solid #c28836; border-radius:6px; }
+.comment-thread.resolved { background:#f3f4f3; border-color:#a6aca8; }
+.comment-meta,.comment-text { font-size:14px; line-height:1.6; overflow-wrap:anywhere; }
+.comment-text { white-space:pre-wrap; }
+.comment-reply { margin:6px 0 2px 8px; border-left:2px solid #d1d9d4; padding-left:10px; }
+.comment-tools,.comment-profile { display:flex; align-items:center; flex-wrap:wrap; gap:2px 12px; }
+.comment-tools button,.comment-profile button,.other-comment { min-height:40px; }
+.comment-toggle { display:flex; gap:8px; align-items:center; min-height:44px; margin:4px 0; }
+.comment-toggle input { width:auto; }
+.review-pane .other-comment { display:inline-flex; align-items:center; gap:8px; background:white; border:1px solid var(--line); border-radius:6px; padding:4px 8px; margin:4px 6px 4px 0; }
+.review-pane .other-comment img { width:48px; height:32px; object-fit:contain; margin:0; }
+#comment-name-save { margin-top:6px; }
+#comment-status { min-height:1.5em; }
+.comment-navigation { display:flex; justify-content:space-between; gap:8px; padding-top:8px; border-top:1px solid var(--line); }
+.comment-navigation button { min-height:44px; }
+@media(max-width:600px) { .comment-tools button,.comment-profile button { min-height:44px; } .comment-panel input,.comment-panel textarea { font-size:16px; } }

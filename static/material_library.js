@@ -112,7 +112,7 @@
   let lastVisit = null, reviewNo = '', reviewCandidate = '', reviewReference = '';
   try { lastVisit = MaterialView.saved(JSON.parse(localStorage.getItem(storageKey))); } catch (_) { /* Storage is optional. */ }
   if (lastVisit) { filter = lastVisit.filter; $('search').value = lastVisit.query; $('restore-view').hidden = false; }
-  const currentView = () => ({filter, chapter:$('chapter-filter').value, query:$('search').value.trim()});
+  const currentView = () => ({filter, chapter:$('chapter-filter').value, query:$('search').value.trim(), openScenes:comments.openScenes});
   function savePosition() {
     if (!canSavePosition || !data) return;
     const scene = [...document.querySelectorAll('.scene')].find(el => el.getBoundingClientRect().bottom > 0);
@@ -130,6 +130,23 @@
   }
   const src = candidate => '/materials/asset/' + encodeURIComponent(window.materialJobId) + '/' + encodeURIComponent(candidate.id);
   const display = row => MaterialView.mode(row, data.library);
+  const comments = MaterialComments.mount({
+    base, sceneCandidates:no => data?.library.candidates[no] || [], assetUrl:src,
+    switchImage:id => { reviewCandidate = id; renderReview(); $('comment-heading').focus(); },
+    onChange() {
+      $('comment-summary').textContent = comments.summary;
+      if (!data) return;
+      if (filter === 'comments') { draw(); return; }
+      document.querySelector('[data-filter="comments"]').textContent = '未対応コメント ' + comments.openScenes.size;
+      document.querySelectorAll('.scene').forEach(scene => {
+        const count = comments.openScenes.get(scene.dataset.no);
+        scene.querySelector('.scene-comments').innerHTML = count ? StudioStatus.html('attention', '未対応コメント ' + count) : '';
+        scene.querySelectorAll('[data-action="comments"]').forEach(button => {
+          button.textContent = comments.label(button.closest('.candidate').dataset.candidate);
+        });
+      });
+    }
+  });
   function setBusy(value) {
     busy = value;
     document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
@@ -162,8 +179,8 @@
     $('review-next').classList.toggle('dark', choosing);
     $('next-action').textContent = pending ? '画像を押して比較 → 採用して次へ。あと ' + pending + ' 場面。' : remaining ? '要修正や表示方法を確認してください。採用済みでも確認が残っている場面があります。' : data.status === 'completed' ? '選び終わりました。「採用素材を書き出す」で編集担当へ渡すZIPを保存します。' : '完成した素材から確認できます。生成の完了までお待ちください。';
     document.querySelectorAll('[data-filter]').forEach(button => {
-      const labels = {all:'すべて',pending:'未採用',selected:'採用済み',flagged:'要修正'};
-      const count = {all:rows.length,pending,selected:adopted,flagged:flags}[button.dataset.filter];
+      const labels = {all:'すべて',pending:'未採用',selected:'採用済み',flagged:'要修正',comments:'未対応コメント'};
+      const count = {all:rows.length,pending,selected:adopted,flagged:flags,comments:comments.openScenes.size}[button.dataset.filter];
       button.textContent = labels[button.dataset.filter] + ' ' + count;
     });
     const exported = data.export?.last;
@@ -185,7 +202,8 @@
       const selectionState = MaterialView.state(row, lib);
       return '<article tabindex="-1" class="scene" data-tone="' + StudioStatus.describe(selectionState).tone + '" data-selection-tone data-no="' + esc(no) + '"><div class="scene-caption"><div><span class="scene-number">' +
         esc(String(row.no).padStart(3,'0')) + '</span><span class="pill">' + esc(row.chapter_title || ('第' + (row.chapter_index ?? 1) + '章')) +
-        '</span><span class="selection-state">' + StudioStatus.html(selectionState) + '</span>' +
+        '</span><span class="selection-state">' + StudioStatus.html(selectionState) + '</span><span class="scene-comments">' +
+        (comments.openScenes.has(no) ? StudioStatus.html('attention', '未対応コメント ' + comments.openScenes.get(no)) : '') + '</span>' +
         '</div><p class="sentence">' + esc(row.sentence) + '</p><div class="display-options">' +
         '<span class="hint">表示：</span><button data-action="image" class="' + (mode === 'image' ? 'chosen' : '') + '">素材を切り替え</button><button data-action="hold" class="' + (mode === 'hold' ? 'chosen' : '') + '">前の素材を継続</button>' +
         '<button data-action="none" class="' + (mode === 'none' ? 'chosen' : '') + '">素材なし</button>' +
@@ -197,6 +215,7 @@
             '<button class="image-button" data-action="preview" aria-label="候補を拡大"><img loading="lazy" src="' + src(c) + '" alt="' + esc(c.label) + '"></button>' +
             '<div class="candidate-body"><div class="candidate-caption"><strong>' + esc(c.label) + '</strong><span class="hint">' + esc(c.created_at?.slice(0,10)) + '</span></div>' +
             (poseNames[c.presenter?.pose_id] ? '<p class="hint">すあし社長：' + esc(poseNames[c.presenter.pose_id]) + '</p>' : '') +
+            '<button type="button" class="button wide candidate-comments" data-action="comments">' + esc(comments.label(c.id)) + '</button>' +
             '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
             '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><button data-action="flip">左右反転</button></details></div>' +
             (c.web_source_url ? '<a class="hint" href="' + esc(/^https?:\/\//.test(c.web_source_url) ? c.web_source_url : '#') + '" target="_blank" rel="noopener">出典を確認 ↗</a>' : '') +
@@ -242,6 +261,7 @@
     $('variant-scene').textContent = row.sentence;
     $('instruction').value = ''; $('image-file').value = ''; $('variant-count').value = '1';
     const ai = kind === 'generate' || kind === 'edit';
+    comments.variant(ai ? no : '');
     if ($('pose-field')) { $('pose-field').hidden = !ai; $('suasi-pose').value = ''; }
     $('instruction').hidden = $('instruction-label').hidden = !ai;
     $('instruction').required = kind === 'edit';
@@ -260,8 +280,9 @@
     const no = button.closest('.scene').dataset.no, action = button.dataset.action;
     const id = button.closest('.candidate')?.dataset.candidate;
     const candidate = (data.library.candidates[no] || []).find(c => c.id === id);
-    if (action === 'preview' || action === 'compare') {
+    if (action === 'preview' || action === 'compare' || action === 'comments') {
       openReview(no, candidate?.id);
+      if (action === 'comments') $('comment-heading').focus();
     } else if (['generate','edit','flip','upload'].includes(action)) variant(no, action, candidate);
     else if (action === 'flag') {
       flagNo = no;
@@ -277,8 +298,8 @@
   }
   function updateReviewNavigation() {
     const rows = reviewScenes(), index = rows.findIndex(row => String(row.no) === reviewNo);
-    $('review-prev-scene').disabled = busy || index <= 0;
-    $('review-next-scene').disabled = busy || index < 0 || index >= rows.length - 1;
+    $('comment-prev-scene').disabled = $('review-prev-scene').disabled = busy || index <= 0;
+    $('comment-next-scene').disabled = $('review-next-scene').disabled = busy || index < 0 || index >= rows.length - 1;
     $('review-position').textContent = index < 0 ? '' : (index + 1) + ' / ' + rows.length + ' 場面';
   }
   function moveReview(direction) {
@@ -289,6 +310,8 @@
   }
   $('review-prev-scene').addEventListener('click', () => moveReview(-1));
   $('review-next-scene').addEventListener('click', () => moveReview(1));
+  $('comment-prev-scene').addEventListener('click', () => moveReview(-1));
+  $('comment-next-scene').addEventListener('click', () => moveReview(1));
   function renderReview() {
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
@@ -310,6 +333,7 @@
     $('review-grid').hidden = !focused; $('review-no-candidate').hidden = !!focused;
     $('review-adopt').hidden = $('review-adopt-next').hidden = !focused;
     $('review-chosen').textContent = focused?.id === chosen ? '✓ この候補を採用中' : '採用すると、この場面で使う画像として保存されます。';
+    comments.selectImage(reviewNo, reviewCandidate);
     const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
     $('review-skip').hidden = !next;
     $('review-more').hidden = !focused && !next;
@@ -443,15 +467,23 @@
     try {
       exportPlan = await Studio.api(base + '/handoff');
       setBusy(false);
-      if (!exportPlan.ready_for_editing) {
+      const openComments = exportPlan.review_comments.open;
+      if (!exportPlan.ready_for_editing || openComments) {
         const count = new Set(exportPlan.missing.map(item => item.no)).size;
-        $('export-warning').textContent = '未採用・要修正など、確認が必要な場面が ' + count + ' 件あります。' +
-          (exportPlan.source_job_status !== 'completed' ? '生成処理もまだ完了していません。' : '');
+        $('export-title').textContent = exportPlan.ready_for_editing ? '採用素材を書き出します' : '途中の採用素材を書き出します';
+        $('export-confirm').textContent = exportPlan.ready_for_editing ? '採用素材を書き出す' : '途中版として書き出す';
+        $('export-warning').textContent = (count ? '未採用・要修正など、確認が必要な場面が ' + count + ' 件あります。' : '') +
+          (exportPlan.source_job_status !== 'completed' ? '生成処理もまだ完了していません。' : '') +
+          (openComments ? '未対応のコメントが ' + openComments + ' 件あります。' : '');
         $('export-dialog').showModal();
       } else await downloadSelection();
     } catch (error) { Studio.notice(error.message, true); }
     finally { setBusy(false); }
   });
   $('export-confirm').addEventListener('click', downloadSelection);
-  refresh();
+  comments.start();
+  // Open the saved candidates for a read-only spot check without importing images.
+  if (new URLSearchParams(location.search).get('view') === 'saved') {
+    Studio.api(base, {cache:'no-store'}).then(next => applyPayload(next)).catch(error => Studio.notice(error.message, true));
+  } else refresh();
 })();

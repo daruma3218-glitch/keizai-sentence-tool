@@ -281,6 +281,7 @@ def selection_hash(job_dir, lib=None):
 
 
 def handoff(job_dir):
+    from material_comments import counts
     context = read(Path(job_dir) / "material_context.json")
     if not context:
         raise ValueError("先にチャンネルと案件をひも付けてください")
@@ -321,7 +322,7 @@ def handoff(job_dir):
     return {"schema": "material-studio-handoff", "schema_version": 1,
             "context": {k: v for k, v in context.items() if k != "profile"},
             "profile": context["profile"], "material_revision": lib["revision"],
-            "selection_hash": selection_hash(job_dir, lib),
+            "selection_hash": selection_hash(job_dir, lib), "review_comments": counts(job_dir),
             "source_job_status": status, "status": "materials_ready" if ready else "selection_pending",
             "ready_for_editing": ready, "missing": missing, "rows": rows, "exported_at": now(),
             "approval": {"video_approved": False, "note": "素材の採用は動画の最終承認とは別"},

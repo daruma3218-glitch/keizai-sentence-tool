@@ -17,6 +17,8 @@ output/*/
 venv/
 *.log
 .secret_key
+material_people.json
+material_comments.json
 
 # キャラ固定の参照画像はコミットする
 !references/

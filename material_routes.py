@@ -13,6 +13,8 @@ from flask import Blueprint, jsonify, redirect, render_template, request, send_f
 from PIL import Image, ImageOps
 
 import material_store as store
+import cloudflare_access
+import material_comments
 import material_history
 import material_review
 from channel_styles import resolve_style, style_choices
@@ -185,6 +187,7 @@ def register(module):
         from channel_styles import is_suasi_style
         saved = dict((context or {}).get("profile") or {}, **((context or {}).get("generation_settings") or {}))
         return render_template("material_library.html", job_id=job_id, channel=ch, csrf=token(),
+                               studio_comments=True,
                                google_sheets_client_id=material_review.google_client_id(),
                                suasi_presenter_enabled=is_suasi_style(saved.get("worldview_desc", "")),
                                style_name=((context or {}).get("profile") or {}).get("style_name", ""),
@@ -230,6 +233,44 @@ def register(module):
     def select(job_id):
         store.selection_change(job(job_id), request.get_json(silent=True) or {})
         return jsonify(payload(job(job_id)))
+
+    def comment_actor():
+        email = cloudflare_access.verified_email(request.headers)
+        if not email and cloudflare_access.required():
+            raise ValueError("本人を確認できません。ログインし直してください")
+        return email or material_comments.LOCAL
+
+    def comment_body():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            raise ValueError("送信内容を確認してください")
+        return body
+
+    def private_response(value):
+        response = jsonify(value)
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+    @bp.route("/api/me/display-name", methods=["GET", "POST"])
+    @module.login_required
+    def display_name():
+        return private_response(material_comments.display_name(
+            module.OUTPUT_ROOT, comment_actor(), comment_body() if request.method == "POST" else None))
+
+    @bp.route("/api/material-jobs/<job_id>/comments", methods=["GET", "POST"])
+    @module.login_required
+    def comments(job_id):
+        d, actor = job(job_id), comment_actor()
+        if request.method == "POST":
+            return private_response(material_comments.change(d, module.OUTPUT_ROOT, actor, comment_body()))
+        return private_response(material_comments.listing(d, actor, request.args.get("since")))
+
+    @bp.route("/api/material-jobs/<job_id>/comments/<comment_id>", methods=["POST"])
+    @bp.route("/api/material-jobs/<job_id>/comments/<comment_id>/status", methods=["POST"], defaults={"status": True})
+    @module.login_required
+    def update_comment(job_id, comment_id, status=False):
+        return private_response(material_comments.change(job(job_id), module.OUTPUT_ROOT, comment_actor(),
+                                                        comment_body(), comment_id, status=status))
 
     @bp.route("/materials/asset/<job_id>/<candidate_id>")
     @module.login_required
@@ -400,7 +441,7 @@ def register(module):
     @bp.route("/api/material-jobs/<job_id>/review.csv")
     @module.login_required
     def review_csv(job_id):
-        _, content = material_review.review_csv(job(job_id))
+        _, content = material_review.review_csv(job(job_id), request.args.get("comments", "all"))
         response = send_file(io.BytesIO(content), mimetype="text/csv; charset=utf-8",
                              as_attachment=True, download_name=f"review_{job_id}.csv")
         response.headers["Cache-Control"] = "no-store"
@@ -412,7 +453,7 @@ def register(module):
         # Only the small previews are retained. Original files/selection are read-only.
         stream = tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024, mode="w+b")
         try:
-            title, count = material_review.write_workbook(job(job_id), stream)
+            title, count = material_review.write_workbook(job(job_id), stream, request.args.get("comments", "all"))
             stream.seek(0)
             response = send_file(stream, mimetype=material_review.XLSX_MIME,
                                  as_attachment=True, download_name=f"review_{job_id}.xlsx")
@@ -438,7 +479,7 @@ def register(module):
                 stream = io.StringIO()
                 writer = csv.writer(stream)
                 writer.writerow(["章", "番号", "原稿", "表示", "採用画像", "出典", "クレジット", "版", "要修正メモ", "コメント"])
-                review_notes = {str(r["values"][0]): r["values"][11] for r in material_review.review_rows(d)[1]}
+                review_notes = {str(r["values"][0]): r["values"][-1] for r in material_review.review_rows(d, comments="none")[1]}
                 for row in data["rows"]:
                     asset = row["asset"] or {}
                     filename = asset.get("filename", "")

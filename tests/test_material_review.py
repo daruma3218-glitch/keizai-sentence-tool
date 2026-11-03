@@ -57,13 +57,14 @@ def test_all_rows_adoption_hold_and_skips_are_preserved(sample):
     title, rows = review.review_rows(d)
     assert title == "書き出し確認"
     assert [r["values"][0] for r in rows] == [1,2,3,4,5,6]
-    assert rows[0]["values"][4] == "採用済み"
-    assert rows[0]["values"][11] == "数字を確認"
+    status = review.HEADERS.index("状態")
+    assert rows[0]["values"][status] == "採用済み"
+    assert rows[0]["values"][review.HEADERS.index("要修正メモ")] == "数字を確認"
     assert rows[1]["path"] == rows[0]["path"]
-    assert rows[2]["path"] is None and rows[2]["values"][4] == "スキップ"
-    assert rows[3]["path"] is None and rows[3]["values"][4] == "継続元なし・要確認"
-    assert rows[4]["values"][4] == "生成失敗"
-    assert rows[5]["values"][4] == "生成済み・未採用"
+    assert rows[2]["path"] is None and rows[2]["values"][status] == "スキップ"
+    assert rows[3]["path"] is None and rows[3]["values"][status] == "継続元なし・要確認"
+    assert rows[4]["values"][status] == "生成失敗"
+    assert rows[5]["values"][status] == "生成済み・未採用"
     assert before == {p:p.read_bytes() for p in d.rglob("*") if p.is_file()}
 
 
@@ -94,9 +95,9 @@ def test_xlsx_embeds_images_and_literal_formula_like_manuscript(sample):
         assert b"TargetMode=\"External\"" not in archive.read("xl/drawings/_rels/drawing1.xml.rels")
     workbook = load_workbook(io.BytesIO(content))
     sheet = workbook.active
-    assert sheet.max_row == 7 and sheet.max_column == 12
+    assert sheet.max_row == 7 and sheet.max_column == 13
     assert sheet["C1"].value == "コメント" and sheet["C2"].value in (None, "")
-    assert sheet["D4"].value.startswith("=HYPERLINK") and sheet["D4"].data_type == "s"
+    assert sheet["E4"].value.startswith("=HYPERLINK") and sheet["E4"].data_type == "s"
     assert sheet.freeze_panes == "D2" and sheet.row_dimensions[2].height == 126
     workbook.close()
 
@@ -108,7 +109,7 @@ def test_bad_images_are_visible_and_never_replaced_with_a_wrong_candidate(sample
     review.write_workbook(d, stream)
     workbook = load_workbook(stream)
     assert "読み込めません" in workbook.active["B7"].value
-    assert "画像要確認" in workbook.active["E7"].value
+    assert "画像要確認" in workbook.active["F7"].value
     workbook.close()
 
 
@@ -126,7 +127,7 @@ def test_csv_preserves_old_columns_and_appends_current_status(sample):
     assert (d / "result.csv").read_text(encoding="utf-8-sig") == raw
     response = client.get("/api/material-jobs/sample/review.csv")
     rows = list(csv.reader(io.StringIO(response.data.decode("utf-8-sig"))))
-    assert len(rows) == 7 and rows[3][3].startswith("'=HYPERLINK")
+    assert len(rows) == 7 and rows[3][4].startswith("'=HYPERLINK")
 
 
 def test_auth_csrf_and_no_unconfigured_google_button(sample):
