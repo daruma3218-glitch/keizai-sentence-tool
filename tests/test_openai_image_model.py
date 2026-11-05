@@ -20,11 +20,11 @@ def test_resolve_model_priority(monkeypatch):
     monkeypatch.delenv("OPENAI_IMAGE_MODEL", raising=False)
     assert generator.resolve_openai_image_model("gpt-image-2.5-sunburst", "gpt-image-2") == "gpt-image-2.5-sunburst"
     assert generator.resolve_openai_image_model("bogus-model", "gpt-image-2.5-flare") == "gpt-image-2.5-flare"
-    assert generator.resolve_openai_image_model(None, "", "  ") == "gpt-image-2"
+    assert generator.resolve_openai_image_model(None, "", "  ") == "gpt-image-2.6-flare"
     monkeypatch.setenv("OPENAI_IMAGE_MODEL", "gpt-image-2.5-flare")
-    assert generator.resolve_openai_image_model(None) == "gpt-image-2.5-flare"
+    assert generator.resolve_openai_image_model(None) == "gpt-image-2.6-flare"
     monkeypatch.setenv("OPENAI_IMAGE_MODEL", "not-a-real-model")
-    assert generator.resolve_openai_image_model(None) == "gpt-image-2"
+    assert generator.resolve_openai_image_model(None) == "gpt-image-2.6-flare"
 
 
 def test_start_persists_and_passes_openai_model(monkeypatch, tmp_path):
@@ -74,5 +74,18 @@ def test_upload_page_lists_models(monkeypatch):
         s["authenticated"] = True
     html = c.get("/").get_data(as_text=True)
     assert 'name="openai_model"' in html
-    for m in ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
+    for m in ("gpt-image-2.6-flare", "gpt-image-2.6-sunburst", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
         assert m in html
+
+
+def test_environment_upgrade_preserves_roles_and_explicit_saved_models(monkeypatch):
+    for old, expected in generator.CONFIGURED_OPENAI_MODEL_UPGRADES.items():
+        monkeypatch.setenv("OPENAI_IMAGE_MODEL", old)
+        assert generator.resolve_openai_image_model() == expected
+        assert generator.resolve_openai_image_model(old) == old
+
+
+def test_version_exposes_actual_default(monkeypatch):
+    monkeypatch.setenv("OPENAI_IMAGE_MODEL", "gpt-image-2.5-sunburst")
+    data = appmod.app.test_client().get("/version").get_json()
+    assert data["default_openai_image_model"] == "gpt-image-2.6-sunburst"

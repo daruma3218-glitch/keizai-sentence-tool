@@ -780,7 +780,7 @@
         if (state.concurrency) els.concurrencyVal.textContent = state.effective_concurrency ?? state.concurrency;
         if (state.provider) {
           els.providerLabel.textContent = state.provider === 'gpt-image'
-            ? `gpt-image-2 (${state.openai_quality || 'medium'})`
+            ? `${state.openai_model || 'GPT Image'} (${state.openai_quality || 'medium'})`
             : 'nanobanana';
         }
         els.jobTitle.textContent = state.title || state.title_override || JOB_ID;

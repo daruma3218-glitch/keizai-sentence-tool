@@ -48,15 +48,21 @@ def resolve_gemini_image_model(model: str | None) -> str:
     """空・旧モデル名なら既定（Nano Banana 2.1）を返す。"""
     model = (model or "").strip()
     return DEFAULT_GEMINI_MODEL if not model or model in LEGACY_GEMINI_IMAGE_MODELS else model
-DEFAULT_OPENAI_MODEL = "gpt-image-2"
-# UI で選べる OpenAI 画像モデル（順序=表示順）。2026-09-08 公開の gpt-image-2.5 系を追加。
-#   Flare: gpt-image-2 より高品質かつ低遅延(約半分) / Sunburst: 編集制御向けプレミアム
+DEFAULT_OPENAI_MODEL = "gpt-image-2.6-flare"
+# 2026-11-05: 通常生成は2.6 Flare。旧モデルは保存済み案件・明示比較用に残す。
 OPENAI_IMAGE_MODEL_CHOICES = [
-    ("gpt-image-2", "gpt-image-2（標準）"),
-    ("gpt-image-2.5-flare", "gpt-image-2.5 Flare（高品質・低遅延）"),
-    ("gpt-image-2.5-sunburst", "gpt-image-2.5 Sunburst（編集制御向け・プレミアム）"),
+    ("gpt-image-2.6-flare", "GPT Image 2.6 Flare（標準・速度重視）"),
+    ("gpt-image-2.6-sunburst", "GPT Image 2.6 Sunburst（細かな編集重視）"),
+    ("gpt-image-2.5-flare", "GPT Image 2.5 Flare（従来・比較用）"),
+    ("gpt-image-2.5-sunburst", "GPT Image 2.5 Sunburst（従来・比較用）"),
+    ("gpt-image-2", "GPT Image 2（従来・比較用）"),
 ]
 VALID_OPENAI_IMAGE_MODELS = {m for m, _ in OPENAI_IMAGE_MODEL_CHOICES}
+CONFIGURED_OPENAI_MODEL_UPGRADES = {
+    "gpt-image-2": DEFAULT_OPENAI_MODEL,
+    "gpt-image-2.5-flare": DEFAULT_OPENAI_MODEL,
+    "gpt-image-2.5-sunburst": "gpt-image-2.6-sunburst",
+}
 
 
 def resolve_openai_image_model(*candidates) -> str:
@@ -67,6 +73,7 @@ def resolve_openai_image_model(*candidates) -> str:
         if c in VALID_OPENAI_IMAGE_MODELS:
             return c
     env = os.environ.get("OPENAI_IMAGE_MODEL", "").strip()
+    env = CONFIGURED_OPENAI_MODEL_UPGRADES.get(env, env)
     return env if env in VALID_OPENAI_IMAGE_MODELS else DEFAULT_OPENAI_MODEL
 
 
@@ -1199,7 +1206,7 @@ def run_parallel_generation(
     if gemini_model is None:
         gemini_model = resolve_gemini_image_model(os.environ.get("GEMINI_IMAGE_MODEL"))
     if openai_model is None:
-        openai_model = os.environ.get("OPENAI_IMAGE_MODEL", DEFAULT_OPENAI_MODEL)
+        openai_model = resolve_openai_image_model()
 
     generator = ParallelImageGenerator(
         provider=provider,

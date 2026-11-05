@@ -49,7 +49,7 @@ def test_build_resume_args_restores_and_falls_back(tmp_path, monkeypatch):
      worldview_desc, verify_diagrams, channel_id, ch_keys, character_ref_path,
      title_override, fact_context, resume, openai_model) = args
     assert resume is True
-    assert openai_model in ('gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst')
+    assert openai_model in ('gpt-image-2.6-flare', 'gpt-image-2.6-sunburst', 'gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst')
     assert channel_id == "keizai" and provider == "nanobanana"
     assert concurrency == 24  # クランプ
     assert route_mode in ("auto", "all_ai")

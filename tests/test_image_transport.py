@@ -72,7 +72,7 @@ def test_four_generations_overlap_but_response_bodies_are_read_one_at_a_time(tmp
 
     def handler(request):
         payload = json.loads(request.content)
-        assert payload["model"] == "gpt-image-2"
+        assert payload["model"] == "gpt-image-2.6-flare"
         assert payload["size"] == "1536x864" and payload["quality"] == "medium" and payload["n"] == 1
         with lock:
             state["requests"] += 1

@@ -267,6 +267,8 @@ def version():
         subsk_worker = False
     return jsonify({
         "service": "keizai-sentence-tool",
+        "openai_image_models": [m for m, _ in OPENAI_IMAGE_MODEL_CHOICES],
+        "default_openai_image_model": resolve_openai_image_model(),
         "material_studio": {"version": material_store.VERSION, "entry": "/materials",
                             "immutable_candidates": True, "handoff_schema": 1,
                             "background_candidates": True, "selection_revision": True},
