@@ -43,3 +43,12 @@ def test_start_screen_summarizes_and_folds_detailed_settings(monkeypatch):
                  'name="concurrency"', 'name="max_diagrams"', 'name="web_image_count"', 'name="verify_diagrams"'):
         assert name in folded, name
     assert "① チャンネルを選ぶ" in html and "② 原稿を入れる" in html and "③ 素材をまとめて作る" in html
+
+
+def test_file_and_pasted_text_notice(monkeypatch):
+    """2026-11-06: ファイルを選ぶと貼り付けた本文は使われない（サーバーの扱い）。それを原稿の欄のそばで知らせ、外せるようにする。"""
+    html = _page(monkeypatch, lambda cid: {"gemini": "g", "openai": "o", "anthropic": ""})
+    assert 'id="manuscriptSourceNote"' in html and 'id="clearManuscriptFile"' in html
+    assert "下に貼り付けた本文は使いません。" in html
+    # 選んだ時・落とした時・本文を打った時・Trello から入れた時に知らせを更新する
+    assert html.count("updateManuscriptSource()") >= 5

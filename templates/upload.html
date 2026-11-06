@@ -154,6 +154,10 @@
             <div class="text-xs text-gray-400 mt-1 text-right">
               <span id="charCount">0</span> 文字（目安: 1,000文字あたり20〜40場面。実際の画像数は場面の判定と枚数上限で変わります）
             </div>
+            <div id="manuscriptSourceNote" role="status" aria-live="polite" class="hidden mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+              <span id="manuscriptSourceText"></span>
+              <button type="button" id="clearManuscriptFile" class="ml-2 font-semibold text-cyan-700 hover:underline">ファイルを外す</button>
+            </div>
           </div>
 
           <!-- 枚数上限は原稿に応じて変更。他はチャンネルの既定値で始められる。 -->
@@ -433,9 +437,7 @@
 
     dropZone.addEventListener('click', () => fileInput.click());
     dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files.length > 0) dropText.textContent = `📄 ${fileInput.files[0].name}`;
-    });
+    fileInput.addEventListener('change', () => updateManuscriptSource());
     ['dragenter', 'dragover'].forEach(ev => {
       dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('dragover'); });
     });
@@ -444,11 +446,30 @@
     });
     dropZone.addEventListener('drop', e => {
       const files = e.dataTransfer.files;
-      if (files.length > 0) { fileInput.files = files; dropText.textContent = `📄 ${files[0].name}`; }
+      if (files.length > 0) { fileInput.files = files; updateManuscriptSource(); }
     });
 
     manuscriptText.addEventListener('input', () => {
       charCount.textContent = manuscriptText.value.length.toLocaleString();
+      updateManuscriptSource();
+    });
+
+    // 原稿のファイルと貼り付けの両方がある時は、ファイルを使う（サーバーの扱い）。それを原稿の欄のそばで知らせ、
+    // ファイルを外せるようにする（2026-11-06。以前はファイル名が出るだけで、貼り付けた本文が黙って使われなかった）。
+    const DROP_TEXT = dropText.textContent;
+    const sourceNote = document.getElementById('manuscriptSourceNote');
+    function updateManuscriptSource() {
+      const file = fileInput.files.length ? fileInput.files[0].name : '';
+      dropText.textContent = file ? `📄 ${file}` : DROP_TEXT;
+      sourceNote.classList.toggle('hidden', !file);
+      document.getElementById('manuscriptSourceText').textContent = !file ? ''
+        : manuscriptText.value.trim() ? `ファイル「${file}」から作ります。下に貼り付けた本文は使いません。`
+        : `ファイル「${file}」から作ります。`;
+    }
+    document.getElementById('clearManuscriptFile').addEventListener('click', () => {
+      fileInput.value = '';
+      updateManuscriptSource();
+      manuscriptText.focus();
     });
 
     // ハブの案件から開いた時：カードの原稿を原稿欄へ入れる。入力済みの原稿は上書きしない。生成はまだ始めない。
@@ -470,6 +491,7 @@
           } else {
             manuscriptText.value = data.text;
             charCount.textContent = manuscriptText.value.length.toLocaleString();
+            updateManuscriptSource();
             say(`Trello のカードから原稿「${data.title}」（${data.provider}）を入れました。確かめて「③ 素材をまとめて作る」を押すと始まります。`);
           }
         } else {
