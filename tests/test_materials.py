@@ -103,7 +103,7 @@ def test_channel_entry_templates_and_no_secret_output(studio, monkeypatch):
         assert response.status_code == 200
         assert "素材スタジオ" in response.text
         assert "do-not-print-this" not in response.text
-    assert "zukai-studio.onrender.com" in client.get("/materials?channel=russia").text
+    assert "https://zukai.apprendre.jp/" in client.get("/materials?channel=russia").text
     assert client.get("/?channel_id=nonexistent").status_code == 400
     make_job(root)
     assert "/progress/sample" in client.get("/?channel_id=keizai").text
