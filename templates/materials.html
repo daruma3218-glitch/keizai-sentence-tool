@@ -1,7 +1,7 @@
 {% extends "material_base.html" %}
 {% block content %}
 {% if not selected %}
-<section class="intro"><p class="eyebrow">SOZAI STUDIO</p><h1>チャンネルの世界観で、<br>素材をそろえる。</h1><p class="subtle">いつものチャンネルから、新しい制作も、前回の続きも。<br>作り直した案も、選んだ素材も、案件の中に残ります。</p></section>
+<section class="intro home-intro"><div><p class="eyebrow">SOZAI STUDIO</p><h1><span>伝えたいことを、</span><span>使える素材に。</span></h1><p class="subtle">前回の続きも、新しい制作も。<br>まずはチャンネルを選びましょう。</p></div><ol class="home-workflow" aria-label="素材制作の流れ"><li><span>01</span><div><strong>原稿を入れる</strong><small>チャンネルに合う素材を作成</small></div></li><li><span>02</span><div><strong>見比べて採用</strong><small>気になる場面はそのまま手直し</small></div></li><li><span>03</span><div><strong>編集へ渡す</strong><small>採用画像と原稿をまとめて保存</small></div></li></ol></section>
 {% endif %}
 {% if not selected %}{% include "material_queue.html" %}{% endif %}
 <nav class="channel-grid {% if selected %}channel-grid-compact{% endif %}" aria-label="チャンネル">
@@ -15,7 +15,7 @@
 </nav>
 {% if selected %}
 {% set chosen = (channels | selectattr('id','equalto',selected) | first) %}
-<section class="workspace-heading"><div><h1>{{ chosen.name }}</h1><p class="subtle">前回の続きから、制作を始めましょう。</p></div><button class="button dark" type="button" data-open-project>＋ 新しく作る</button></section>
+<section class="workspace-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h1>{{ chosen.name }}</h1><p class="subtle">前回の続きから、制作を始めましょう。</p></div><div class="workspace-quick-actions"><a class="button" href="#production-history">制作履歴へ ↓</a><button class="button dark new-project-action" type="button" data-open-project>＋ 新しく作る</button></div></section>
 {% if history.jobs %}
 {% set recent = history.jobs[0] %}
 <section class="continue-card" data-tone="{{ recent.tone }}" aria-label="直近の作業">
@@ -36,14 +36,15 @@
 </nav></details>
 {% if history.warning %}<p class="info" role="status">一部の制作記録を読み込めませんでした。表示できた履歴は下に残しています。少し待って画面を更新してください。</p>{% endif %}
 <section class="workspace-layout history-only">
-<div class="workspace-history">
+<div class="workspace-history" id="production-history" data-history-channel="{{ selected }}">
 <div class="history-heading"><h2>制作履歴 <span class="count">{{ history.jobs | length }} 件</span></h2><a class="quiet-link" href="/materials?channel={{ selected }}">最新の状態に更新</a></div>
 {% if history.jobs %}
 <div class="history-tools"><div class="filters history-filters" role="group" aria-label="制作履歴の状態">
   <button type="button" class="active" data-history-filter="all" aria-pressed="true">すべて</button>
   <button type="button" data-history-filter="unfinished" aria-pressed="false">作業途中 <span>{{ history.unfinished }}</span></button>
   <button type="button" data-history-filter="completed" aria-pressed="false">生成済み <span>{{ history.completed }}</span></button>
-</div><label class="history-search"><span class="sr-only">制作履歴を検索</span><input id="history-search" type="search" placeholder="タイトル・制作IDで検索"></label></div>
+</div><div class="history-search-group"><label class="history-search" for="history-search"><span class="sr-only">制作履歴を検索</span><input id="history-search" type="search" placeholder="タイトル・制作IDで検索" aria-describedby="history-search-hint" autocomplete="off"></label><button class="button compact" type="button" id="history-clear" hidden>条件を解除</button></div></div>
+<p id="history-search-hint" class="hint history-search-hint">スペースで区切ると、複数の言葉で絞り込めます。<kbd>/</kbd> キーで検索へ。</p>
 <div id="job-history" class="job-history">
 {% for j in history.jobs %}
 <article class="job-row" data-tone="{{ j.tone }}" data-job="{{ j.id }}" data-bucket="{{ j.bucket }}" data-search="{{ j.title }} {{ j.id }} {{ j.project_id }}">
@@ -60,10 +61,10 @@
 </article>
 {% endfor %}
 </div>
-<p id="history-no-match" class="empty" hidden>条件に合う制作履歴はありません。</p>
+<div id="history-no-match" class="empty history-empty" hidden><strong>条件に合う制作履歴が見つかりません</strong><p class="hint">言葉を短くするか、絞り込みを解除して探してください。</p><button class="button" type="button" data-clear-history>すべての履歴に戻す</button></div>
 <div class="history-pagination"><p id="history-count" class="hint" aria-live="polite"></p><button id="history-more" class="button" type="button" hidden>さらに表示</button></div>
 <p class="hint history-note">従来のセンテンスで作った制作履歴も表示しています。生成済みは、素材選びの前の段階です。</p>
-{% else %}<div class="empty"><span>▧</span><p>このチャンネルの制作履歴はまだありません。</p><p class="hint">「新しく作る」から原稿を入れると、ここに続きが保存されます。{% if selected == 'russia' %}<br>従来の図解は「図解の履歴・続きへ」から開けます。{% endif %}</p></div>{% endif %}
+{% else %}<div class="empty history-empty"><span aria-hidden="true">▧</span><strong>最初の素材を作りましょう</strong><p class="hint">原稿を入れると、ここに制作の続きが保存されます。{% if selected == 'russia' %}<br>従来の図解は「図解の履歴・続きへ」から開けます。{% endif %}</p><button class="button dark" type="button" data-open-project>＋ 新しく作る</button></div>{% endif %}
 {% if history.drafts %}
 <section class="draft-list"><h3>原稿を入れる案件 <span class="count">{{ history.drafts | length }} 件</span></h3>
 {% for p in history.drafts %}<article class="draft-row"><div><h3>{{ p.title }}</h3><p class="hint">{% if p.missing_jobs %}過去の制作データが見つかりません。案件の設定は保存されています。{% else %}案件を作成済み · 原稿の入力待ち{% endif %}</p></div><a class="button compact" href="/?channel_id={{ p.source_channel_id }}&amp;project_id={{ p.project_id }}">原稿を入れる →</a></article>{% endfor %}
@@ -91,4 +92,4 @@
 {% endif %}
 <footer>素材の採用情報は、原稿とセットでAI編集へ渡せます。動画の確認・最終承認は編集後に行います。</footer>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='material_home.js') }}"></script><script src="{{ url_for('static', filename='material_queue.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='material_home.js', v='20261110') }}"></script><script src="{{ url_for('static', filename='material_queue.js') }}"></script>{% endblock %}
