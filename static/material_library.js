@@ -130,9 +130,10 @@
     });
   }
   const src = candidate => '/materials/asset/' + encodeURIComponent(window.materialJobId) + '/' + encodeURIComponent(candidate.id);
+  const sceneCandidates = no => data ? MaterialView.candidates(data.library, no, $('show-hidden-candidates').checked) : [];
   const display = row => MaterialView.mode(row, data.library);
   const comments = MaterialComments.mount({
-    base, sceneCandidates:no => data?.library.candidates[no] || [], assetUrl:src,
+    base, sceneCandidates, assetUrl:src,
     switchImage:id => { reviewCandidate = id; renderReview(); $('comment-history-bar').focus(); },
     onChange() {
       $('comment-summary').textContent = comments.summary;
@@ -151,13 +152,17 @@
   function setBusy(value) {
     busy = value;
     $('comment-review-start').disabled = value || !firstCommentRow;
-    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id').forEach(button => { button.disabled = value; });
+    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
     updateReviewNavigation();
     updateOperations();
   }
   function draw() {
     if (!data) return;
     const lib = data.library, rows = data.rows;
+    const hiddenCount = Object.values(lib.hidden_candidates || {}).filter(Boolean).length;
+    $('hidden-candidates-control').hidden = !hiddenCount;
+    $('hidden-candidates-count').textContent = '（' + hiddenCount + '枚）';
+    if (!hiddenCount) $('show-hidden-candidates').checked = false;
     const required = rows.filter(row => display(row) === 'image');
     const adopted = required.filter(row => lib.selections[String(row.no)]).length;
     $('adoption-count').textContent = adopted + ' / ' + required.length + ' 場面の素材を採用';
@@ -197,11 +202,12 @@
     $('chapter-filter').value = chapters.has(selectedChapter) ? selectedChapter : '';
     document.querySelectorAll('[data-filter]').forEach(button => { const active = button.dataset.filter === filter; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
     const visible = rows.filter(row => MaterialView.matches(row, lib, currentView()));
-    firstCommentRow = visible.find(row => lib.candidates[String(row.no)]?.length);
+    firstCommentRow = visible.find(row => sceneCandidates(row.no).length);
     if (pending && !MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
     $('visible-count').textContent = visible.length + ' / ' + rows.length + ' 場面を表示';
     $('rows').innerHTML = visible.map(row => {
-      const no = String(row.no), candidates = lib.candidates[no] || [], selected = lib.selections[no], mode = display(row);
+      const no = String(row.no), candidates = sceneCandidates(no), selected = lib.selections[no], mode = display(row);
+      const hiddenInScene = (lib.candidates[no] || []).filter(c => lib.hidden_candidates?.[c.id]).length;
       const selectionState = MaterialView.state(row, lib);
       return '<article tabindex="-1" class="scene" data-tone="' + StudioStatus.describe(selectionState).tone + '" data-selection-tone data-no="' + esc(no) + '"><div class="scene-caption"><div><span class="scene-number">' +
         esc(String(row.no).padStart(3,'0')) + '</span><span class="pill">' + esc(row.chapter_title || ('第' + (row.chapter_index ?? 1) + '章')) +
@@ -212,15 +218,19 @@
         '<button data-action="none" class="' + (mode === 'none' ? 'chosen' : '') + '">素材なし</button>' +
         '<button class="compare-scene" data-action="compare">大きく比較・採用</button><button data-action="flag">' + (lib.flags[no] ? '修正メモを変更' : '要修正にする') + '</button></div>' +
         (lib.flags[no] ? '<p class="hint flag-label">' + esc(lib.flags[no]) + '</p>' : '') +
-        '<p class="scene-operation status-text" role="status" aria-live="polite" hidden></p></div><div class="candidate-strip">' + candidates.map(c => {
-          const chosen = c.id === selected;
-          return '<div class="candidate ' + (chosen ? 'selected' : '') + '" data-candidate="' + esc(c.id) + '">' +
+        '<p class="scene-operation status-text" role="status" aria-live="polite" hidden></p>' +
+        (hiddenInScene ? '<p class="hint">非表示の候補 ' + hiddenInScene + '枚' + (!candidates.length ? ' · 上の「非表示の候補も表示」から戻せます。' : '') + '</p>' : '') +
+        '</div><div class="candidate-strip">' + candidates.map(c => {
+          const chosen = c.id === selected, hidden = !!lib.hidden_candidates?.[c.id];
+          return '<div class="candidate ' + (chosen ? 'selected' : hidden ? 'candidate-hidden' : '') + '" data-candidate="' + esc(c.id) + '">' +
             '<button class="image-button" data-action="preview" aria-label="候補を拡大"><img loading="lazy" src="' + src(c) + '" alt="' + esc(c.label) + '"></button>' +
             '<div class="candidate-body"><div class="candidate-caption"><strong>' + esc(c.label) + '</strong><span class="hint">' + esc(c.created_at?.slice(0,10)) + '</span></div>' +
+            (hidden ? '<p class="hidden-candidate-label">非表示</p>' : '') +
             (poseNames[c.presenter?.pose_id] ? '<p class="hint">すあし社長：' + esc(poseNames[c.presenter.pose_id]) + '</p>' : '') +
             '<button type="button" class="button wide candidate-comments" data-action="comments">' + esc(comments.label(c.id)) + '</button>' +
-            '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
-            '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><button data-action="flip">左右反転</button></details></div>' +
+            (hidden ? '<button class="button wide" data-action="restore">候補に戻す</button>' :
+              '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
+              '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><button data-action="flip">左右反転</button><button data-action="hide" data-visibility-locked="' + chosen + '"' + (chosen ? ' disabled title="採用を解除してから非表示にできます"' : '') + '>候補から非表示</button></details></div>') +
             (c.web_source_url ? '<a class="hint" href="' + esc(/^https?:\/\//.test(c.web_source_url) ? c.web_source_url : '#') + '" target="_blank" rel="noopener">出典を確認 ↗</a>' : '') +
             '</div></div>';
         }).join('') + '<div class="add-candidate"><span>＋</span><strong>' + (candidates.length ? '別の案も比べる' : 'この場面の素材を追加') + '</strong>' +
@@ -249,7 +259,7 @@
     try {
       applyPayload(await Studio.api(base + '/selection', {method:'POST', body:JSON.stringify({revision:data.library.revision,
         selection_revision:data.library.selection_revision, no, action, candidate_id:candidate, note})}));
-      Studio.notice(action === 'undo' ? '採用操作を戻しました。' : '保存しました。');
+      Studio.notice(action === 'hide' ? '候補から非表示にしました。画像とコメントは残っています。' : action === 'restore' ? '候補に戻しました。' : action === 'undo' ? '直前の操作を戻しました。' : '保存しました。');
       return true;
     } catch (error) { Studio.notice(error.message, true); if ($('preview-dialog').open) $('review-status').textContent = error.message; return false; }
     finally { setBusy(false); }
@@ -293,6 +303,7 @@
       $('flag-dialog').showModal();
     } else select(no, action, id);
   });
+  $('show-hidden-candidates').addEventListener('change', () => draw());
 
   function reviewScenes() {
     if ($('preview-dialog').dataset.mode === 'comments') return commentScenes;
@@ -327,7 +338,7 @@
   function renderReview() {
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
-    const candidates = data.library.candidates[reviewNo] || [], chosen = data.library.selections[reviewNo];
+    const candidates = sceneCandidates(reviewNo), chosen = data.library.selections[reviewNo];
     if (!candidates.some(c => c.id === reviewCandidate)) reviewCandidate = candidates.find(c => c.id === chosen)?.id || candidates[0]?.id || '';
     if (!candidates.some(c => c.id === reviewReference) || reviewReference === reviewCandidate) reviewReference = candidates.find(c => c.id !== reviewCandidate)?.id || '';
     $('review-location').textContent = '場面 ' + String(row.no).padStart(3,'0') + ' · ' + (row.chapter_title || '章 ' + (row.chapter_index ?? 1));
@@ -341,18 +352,25 @@
     $('review-candidate-id').hidden = reading && candidates.length < 2;
     $('review-flag').hidden = !data.library.flags[reviewNo];
     $('review-flag').textContent = '要修正：' + (data.library.flags[reviewNo] || '') + '（採用後もメモは残ります）';
-    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + (reading && c.label === '最初の候補' ? '' : ' · ' + esc(c.label)) + (c.id === chosen ? ' · 採用中' : '') + '</option>').join('');
+    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + (reading && c.label === '最初の候補' ? '' : ' · ' + esc(c.label)) + (c.id === chosen ? ' · 採用中' : '') + (data.library.hidden_candidates?.[c.id] ? ' · 非表示' : '') + '</option>').join('');
     $('review-candidate-id').innerHTML = $('review-reference-id').innerHTML = options;
     $('review-candidate-id').value = reviewCandidate; $('review-reference-id').value = reviewReference;
     const focused = candidates.find(c => c.id === reviewCandidate), reference = candidates.find(c => c.id === reviewReference);
+    const isHidden = !!data.library.hidden_candidates?.[focused?.id];
     if (focused) $('preview-image').src = src(focused); else $('preview-image').removeAttribute('src');
     const showReference = !!reference && $('preview-dialog').dataset.mode !== 'comments';
     if (showReference) $('review-reference-image').src = src(reference); else $('review-reference-image').removeAttribute('src');
     $('review-reference').hidden = !showReference;
     $('review-grid').classList.toggle('single', !reference);
     $('review-grid').hidden = !focused; $('review-no-candidate').hidden = !!focused;
-    $('review-adopt').hidden = $('review-adopt-next').hidden = !focused;
-    $('review-chosen').textContent = focused?.id === chosen ? '✓ 採用中の画像' :
+    $('review-adopt').hidden = $('review-adopt-next').hidden = !focused || isHidden;
+    $('review-visibility').hidden = !focused;
+    $('review-visibility').textContent = isHidden ? '候補に戻す' : '候補から非表示';
+    $('review-visibility').dataset.visibilityLocked = String(!focused || focused.id === chosen);
+    $('review-visibility').disabled = busy || !focused || focused.id === chosen;
+    $('review-visibility').title = focused?.id === chosen ? '採用を解除してから非表示にできます' : '';
+    $('review-show-hidden').hidden = !!focused || !MaterialView.candidates(data.library, reviewNo, true).length;
+    $('review-chosen').textContent = isHidden ? '非表示の候補 · 候補に戻すと採用できます' : focused?.id === chosen ? '✓ 採用中の画像' :
       $('preview-dialog').dataset.mode === 'comments' ? '未採用の候補' : '採用すると、この場面で使う画像として保存されます。';
     comments.selectImage(reviewNo, reviewCandidate);
     const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
@@ -368,7 +386,7 @@
       reviewTrigger = document.activeElement;
       // Keep the route stable even when the reviewer resolves the last open thread on the current scene.
       if (mode === 'comments') commentScenes = data.rows.filter(row =>
-        data.library.candidates[String(row.no)]?.length && MaterialView.matches(row, data.library, currentView()));
+        sceneCandidates(row.no).length && MaterialView.matches(row, data.library, currentView()));
     }
     dialog.dataset.mode = mode;
     if (opening) showCommentScript(false);
@@ -376,7 +394,7 @@
     $('review-candidate-label').textContent = mode === 'comments' ? '確認する画像' : '採用する候補';
     reviewNo = String(no); reviewCandidate = candidate || ''; reviewReference = '';
     if (mode === 'comments' && !reviewCandidate) {
-      const candidates = data.library.candidates[reviewNo] || [];
+      const candidates = sceneCandidates(reviewNo);
       const unresolved = filter === 'comments' && candidates.find(c => comments.hasOpen(c.id));
       reviewCandidate = unresolved?.id || data.library.selections[reviewNo] || candidates.at(-1)?.id || '';
     }
@@ -422,6 +440,15 @@
   }
   $('review-adopt').addEventListener('click', () => adoptReview(false));
   $('review-adopt-next').addEventListener('click', () => adoptReview(true));
+  $('review-visibility').addEventListener('click', async () => {
+    if (busy || !reviewCandidate) return;
+    const action = data.library.hidden_candidates?.[reviewCandidate] ? 'restore' : 'hide';
+    if (await select(reviewNo, action, reviewCandidate)) {
+      $('review-status').textContent = action === 'hide' ? '候補から非表示にしました。画像とコメントは残っています。' : '候補に戻しました。';
+      ($('review-visibility').hidden ? $('review-show-hidden') : $('review-visibility')).focus({preventScroll:true});
+    }
+  });
+  $('review-show-hidden').addEventListener('click', () => { $('show-hidden-candidates').checked = true; draw(); });
   $('review-add').addEventListener('click', () => {
     $('preview-dialog').close();
     const scene = [...document.querySelectorAll('.scene')].find(el => el.dataset.no === reviewNo);

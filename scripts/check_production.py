@@ -19,7 +19,7 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          # 2026-10-14 章の先頭・素材なしの後で、存在しない画像を継続しない
          "allocator", "non_image_rows", "image_memory", "image_transport", "image_files",
          "result_boundaries", "safe_images", "material_review", "material_comments",
-         "openai_image_model"]
+         "openai_image_model", "material_visibility"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

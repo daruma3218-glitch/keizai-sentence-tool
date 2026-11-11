@@ -2,6 +2,8 @@
 (function(root) {
   const mode = (row, lib) => lib.display[String(row.no)] || row.display || (row.route === 'skip' ? 'none' : 'image');
   const chapter = row => row.chapter_index != null ? 'i:' + row.chapter_index : row.chapter_title ? 't:' + row.chapter_title : 'unknown';
+  const candidates = (lib, no, includeHidden = false) => (lib.candidates[String(no)] || [])
+    .filter(c => includeHidden || !lib.hidden_candidates?.[c.id]);
   function state(row, lib) {
     const no = String(row.no);
     if (lib.flags[no]) return 'flagged';
@@ -47,7 +49,7 @@
       offset:Number.isFinite(value.offset) ? Math.max(-5000, Math.min(5000, value.offset)) : 0,
       y:Number.isFinite(value.y) ? Math.max(0, value.y) : 0};
   }
-  const api = {mode, chapter, state, matches, saved, nextPending, remaining};
+  const api = {mode, chapter, state, matches, saved, nextPending, remaining, candidates};
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.MaterialView = api;
 })(typeof window === 'object' ? window : {});

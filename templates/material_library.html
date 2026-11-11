@@ -10,7 +10,8 @@
   <div class="summary-bar"><div class="library-task-heading"><img src="/static/brand/sozai-choose-v1.png" width="56" height="56" alt=""><div><span class="next-kicker">画像を見比べて選ぶ</span><strong id="adoption-count">読込中…</strong><span id="job-status" class="subtle"></span><p id="next-action" class="hint" role="status"></p></div></div><div class="actions"><button class="button dark compact" id="review-next">次の未採用を確認 →</button><a class="button compact" id="download" href="/materials/jobs/{{ job_id }}/download">採用素材を書き出す ↓</a></div></div>
   <progress id="adoption-progress" class="adoption-progress" value="0" max="1" aria-label="素材を採用した場面の割合"></progress>
   <div class="library-controls"><nav class="filters selection-filters" aria-label="素材の絞り込み"><button data-filter="all" data-tone="neutral" class="active" aria-pressed="true">すべて</button><button data-filter="pending" data-tone="queued" aria-pressed="false">未採用</button><button data-filter="selected" data-tone="done" aria-pressed="false">採用済み</button><button data-filter="flagged" data-tone="attention" aria-pressed="false">要修正</button><button data-filter="comments" data-tone="attention" aria-pressed="false">未対応コメント</button></nav><select id="chapter-filter" aria-label="章"><option value="">すべての章</option></select><input id="search" type="search" placeholder="原稿から検索" aria-label="原稿から検索"></div>
-  <div class="library-location"><span id="visible-count" class="hint" role="status"></span><button id="clear-view" class="text-button" type="button">絞り込みを解除</button><button id="restore-view" class="text-button" type="button" hidden>前回の位置へ</button><button class="text-button" id="undo">直前の採用操作を戻す</button></div>
+  <div class="library-location"><span id="visible-count" class="hint" role="status"></span><button id="clear-view" class="text-button" type="button">絞り込みを解除</button><button id="restore-view" class="text-button" type="button" hidden>前回の位置へ</button><button class="text-button" id="undo">直前の採用・非表示操作を戻す</button></div>
+  <label id="hidden-candidates-control" class="hidden-candidates-control" hidden><input id="show-hidden-candidates" type="checkbox">非表示の候補も表示 <span id="hidden-candidates-count"></span></label>
 </div>
 <section class="image-review-entry" aria-label="画像のコメント">
   <span class="review-mark" aria-hidden="true"></span>
@@ -45,7 +46,7 @@
   <nav class="review-navigation" aria-label="拡大したまま場面を移動"><button id="review-prev-scene" type="button" class="button compact">← 前の場面</button><span id="review-position" class="hint" role="status"></span><button id="review-next-scene" type="button" class="button compact">次の場面 →</button></nav>
   <div id="review-grid" class="review-grid">
     <div id="review-reference" class="review-pane"><label for="review-reference-id">比較する候補</label><select id="review-reference-id"></select><img id="review-reference-image" alt="比較する候補の拡大表示"><button id="review-use-reference" type="button" class="button review-use-reference">この候補を選ぶ →</button></div>
-    <div class="review-pane review-choice"><div class="review-image-tools"><label id="review-candidate-label" for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><button type="button" id="comment-script-toggle" class="text-button" aria-expanded="false" aria-controls="comment-script" hidden>原稿<span aria-hidden="true">⌄</span></button></div><img id="preview-image" alt="表示中の候補画像"><p id="comment-script" hidden></p><p id="review-chosen" class="hint"></p></div>
+    <div class="review-pane review-choice"><div class="review-image-tools"><label id="review-candidate-label" for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><button type="button" id="comment-script-toggle" class="text-button" aria-expanded="false" aria-controls="comment-script" hidden>原稿<span aria-hidden="true">⌄</span></button></div><img id="preview-image" alt="表示中の候補画像"><p id="comment-script" hidden></p><p id="review-chosen" class="hint"></p><button type="button" id="review-visibility" class="text-button">候補から非表示</button></div>
       <section id="image-comments" class="comment-panel" aria-labelledby="comment-heading">
         <h3 id="comment-heading" class="sr-only">この画像のコメント</h3>
         <div class="comment-composer">
@@ -64,7 +65,7 @@
         <div id="comment-others"></div>
       </section>
   </div>
-  <div id="review-no-candidate" class="empty" hidden><p>この場面には、まだ候補がありません。</p><button id="review-add" type="button" class="button">一覧で候補を追加する</button></div>
+  <div id="review-no-candidate" class="empty" hidden><p>表示できる候補がありません。</p><button id="review-show-hidden" type="button" class="button" hidden>非表示の候補を確認</button><button id="review-add" type="button" class="button">一覧で候補を追加する</button></div>
   <p id="review-status" class="hint" role="status" aria-live="polite"></p>
   </div>
   <nav class="comment-navigation" aria-label="コメント画面の場面移動"><button id="comment-prev-scene" class="button compact" type="button">← 前の場面</button><span id="comment-position" role="status"></span><button id="comment-next-scene" class="button compact" type="button">次の場面 →</button></nav>

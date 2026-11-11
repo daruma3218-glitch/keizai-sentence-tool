@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from PIL import Image
 from safe_images import open_image
 
-VERSION = "2026-10-11.6"
+VERSION = "2026-11-11.1"
 LOCK = threading.RLock()
 CHANNELS = {
     "otona": {"id": "otona", "source_id": "otona", "name": "大人の学び直しTV", "color": "#305a75",
@@ -155,6 +155,7 @@ def load_library(job_dir):
     # Migrate on the next write. Candidate work must not invalidate a selection
     # the user is making while generation runs in the background.
     library.setdefault("selection_revision", library["revision"])
+    library.setdefault("hidden_candidates", {})
     return library
 
 
@@ -227,6 +228,11 @@ def candidate(library, no, candidate_id):
     return found
 
 
+def visible_candidates(library, no):
+    return [item for item in library["candidates"].get(str(no), [])
+            if not library.get("hidden_candidates", {}).get(item["id"])]
+
+
 def selection_change(job_dir, body):
     with LOCK:
         lib = load_library(job_dir)
@@ -239,8 +245,18 @@ def selection_change(job_dir, body):
         action = body.get("action")
         if action == "select":
             picked = candidate(lib, no, body.get("candidate_id"))
+            if lib["hidden_candidates"].get(picked["id"]):
+                raise ValueError("非表示の候補です。候補に戻してから採用してください")
             lib["selections"][no] = picked["id"]
             lib["display"][no] = "image"
+        elif action in {"hide", "restore"}:
+            picked = candidate(lib, no, body.get("candidate_id"))
+            if action == "hide":
+                if lib["selections"].get(no) == picked["id"]:
+                    raise ValueError("採用中の画像です。採用を解除するか、別の候補を採用してから非表示にしてください")
+                lib["hidden_candidates"][picked["id"]] = True
+            else:
+                lib["hidden_candidates"].pop(picked["id"], None)
         elif action == "clear":
             lib["selections"].pop(no, None)
         elif action == "flag":
@@ -255,17 +271,21 @@ def selection_change(job_dir, body):
         elif action == "undo":
             previous = read(Path(job_dir) / "material_previous.json")
             if not previous or previous.get("after_selection_revision", previous["after_revision"]) != lib["selection_revision"]:
-                raise ValueError("戻せる採用操作がありません")
+                raise ValueError("戻せる採用・非表示操作がありません")
             for key in ("selections", "display", "flags"):
                 lib[key] = previous[key]
+            lib["hidden_candidates"] = previous.get("hidden_candidates", {})
         else:
             raise ValueError("操作が不正です")
         old = load_library(job_dir)
         save(Path(job_dir) / "material_previous.json",
-             {k: old[k] for k in ("selections", "display", "flags")} |
+             {k: old[k] for k in ("selections", "display", "flags", "hidden_candidates")} |
              {"after_revision": lib["revision"] + 1, "after_selection_revision": lib["selection_revision"] + 1})
         lib["selection_revision"] += 1
-        commit_library(job_dir, lib, action, {"no": no})
+        detail = {"no": no}
+        if action in {"hide", "restore"}:
+            detail["candidate_id"] = picked["id"]
+        commit_library(job_dir, lib, action, detail)
         return lib
 
 

@@ -57,7 +57,7 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
             chapter = row.get("chapter_index", 0)
             mode = library["display"].get(no, row.get("display") or ("none" if row.get("route") == "skip" else "image"))
             chosen = library["selections"].get(no)
-            candidates = library["candidates"].get(no, [])
+            candidates = store.visible_candidates(library, no)
             candidate = store.candidate(library, no, chosen) if chosen else (candidates[-1] if candidates else None)
             path, image_url, source, credit, checksum = None, "", row.get("web_source_url", ""), row.get("attribution", ""), ""
             status = STATUS.get(row.get("status", ""), row.get("status") or "未生成")
@@ -67,6 +67,9 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
                 image_url = origin + "/materials/asset/" + quote(d.name, safe="") + "/" + quote(candidate["id"], safe="")
                 source, credit = candidate.get("web_source_url", source), candidate.get("attribution", credit)
                 status = "採用済み" if chosen else "候補あり・未採用"
+            elif library["candidates"].get(no):
+                # Do not reintroduce a hidden original through the legacy fallback.
+                status = "候補はすべて非表示・未採用"
             elif row.get("filename") or row.get("web_local_file"):
                 filename = row.get("filename") or row["web_local_file"]
                 path = store.safe_path(d / "images", filename)

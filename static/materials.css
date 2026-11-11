@@ -289,3 +289,8 @@ body:has(dialog[open]){overflow:hidden}
   .comment-panel input,.comment-panel textarea { font-size:16px; }
   .image-review-entry { padding:10px; gap:8px; flex-wrap:wrap; }
 }
+/* Hidden candidates remain recoverable, outside the default review route. */
+.hidden-candidates-control{display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:var(--muted,#5c6863);padding:.5rem 0}
+.hidden-candidates-control input{width:auto;margin:0;accent-color:var(--accent,#28785c)}
+.candidate.candidate-hidden{border-style:dashed;background:#f4f5f4}
+.hidden-candidate-label{font-size:.8rem;color:#5c6863;margin:.2rem 0}
