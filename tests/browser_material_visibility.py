@@ -48,6 +48,9 @@ def exercise(browser, origin, root, width, output):
         expect(adopted.locator('[data-action="hide"]')).to_be_disabled()
         adopted.locator("summary").click()
         other.locator("summary").click()
+        # A click helper can scroll a clipped menu into view. Check its geometry
+        # before clicking, so users do not have to discover an inner scroll area.
+        assert other.evaluate("el => { const menu = el.querySelector('.candidate-more-actions').getBoundingClientRect(); const card = el.getBoundingClientRect(); return menu.bottom <= card.bottom && menu.right <= card.right; }")
         other.locator('[data-action="hide"]').click()
         expect(scene.locator(".candidate")).to_have_count(1)
         expect(page.locator("#hidden-candidates-count")).to_have_text("（1枚）")

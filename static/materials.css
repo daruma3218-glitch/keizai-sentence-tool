@@ -152,7 +152,8 @@ body:has(dialog[open]){overflow:hidden}
 .candidate-more { position:relative; flex:none; }
 .candidate-more summary { cursor:pointer; min-height:44px; display:flex; align-items:center; padding:0 10px; border:1px solid #d9e4df; border-radius:8px; font-size:13px; }
 .candidate-more summary::after { content:"⌄"; margin-left:7px; }
-.candidate-more[open] > button { position:absolute; right:0; top:48px; z-index:4; min-width:110px; min-height:44px; border:1px solid #c5d8cf; background:white; box-shadow:0 8px 24px #173e3820; border-radius:8px; }
+.candidate-more-actions { display:flex; flex-direction:column; width:150px; margin-top:6px; border:1px solid #c5d8cf; background:white; border-radius:8px; }
+.candidate-more-actions > button { min-height:44px; text-align:left; }
 .candidate button:focus-visible,.candidate summary:focus-visible { outline:3px solid #087f73; outline-offset:3px; }
 @media(max-width:600px) { .library-task-heading > img { width:44px; height:44px; } .summary-bar { gap:12px; } .library-task-heading .hint { font-size:12px; } }
 
