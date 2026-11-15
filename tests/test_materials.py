@@ -373,6 +373,9 @@ def test_generate_uses_frozen_style_and_keeps_selection(studio, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["style_lock_text"] == "same flat drawing"
     assert calls[0]["edit_image_path"] == str((d / original["filename"]).resolve())
+    # 背景の色を選ぶ段落の番号も元の行から渡す（無いと1・2番目の色になっていた・2026-11-15）
+    assert calls[0]["prompts"][0]["chapter_index"] == 1
+    assert "block_index" in calls[0]["prompts"][0]
     assert store.load_library(d)["selections"]["1"] == original["id"]
 
 

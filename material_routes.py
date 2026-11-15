@@ -372,6 +372,8 @@ def register(module):
                 prompts = [{"index": i, "prompt": module._build_scene_fix_prompt(
                     row.get("sentence", ""), route, i, extra, defaults, fix_mode="same_style",
                     style_locked=bool(locked)), "type": route, "section": row.get("chapter_title", ""),
+                    # 追加の候補も元の場面と同じ段落の背景色に（2026-11-15。無いと1・2番目の色になっていた）
+                    "chapter_index": row.get("chapter_index"), "block_index": row.get("block_index"),
                     "excerpt": row.get("sentence", ""), "keypoint": row.get("sentence", "")[:30],
                     "suasi_pose": pose_override or row.get("suasi_pose", ""),
                     "suasi_pose_reason": "編集画面で選択" if pose_override else row.get("suasi_pose_reason", ""),

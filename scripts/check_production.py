@@ -21,7 +21,9 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          "result_boundaries", "safe_images", "material_review", "material_comments",
          "openai_image_model", "material_visibility",
          # 2026-11-15 先生の見本を複数枚に・手直しでも見本を渡す（ずれたイラストを防ぐ）
-         "character_refs"]
+         "character_refs",
+         # 2026-11-15 手直しで前の手直しの背景が場面の色へ戻らない
+         "keep_source_background"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

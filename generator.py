@@ -398,11 +398,26 @@ def backdrop_key(entry: dict) -> int:
         return 0
 
 
-def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0) -> str:
-    """設定文の BACKDROP COLORS の行を、この画像の背景色の指示に置き換える（行が無ければそのまま）。"""
+# コメントの手直しでは、場面ごとの色を指定し直さず、元画像の背景をそのまま保つ（2026-11-15 社長「直してほしい」）。
+# 手直しは毎回「場面の最初の指示＋今回の指示」で作るため、色を指定し直すと、前の手直しで
+# 変えた背景（水色にした等）が場面の色へ戻っていた（試験の回 20261115_010251_1b39f2 の2回目）。
+# 素材画面の手直しは段落の番号を持たず、1・2番目の色が指定されて元と違う色になることもあった。
+_KEEP_SOURCE_BACKGROUND = (
+    "BACKGROUND OF THIS IMAGE: keep the background of the attached source image as it is (the same "
+    "place or plain backdrop, the same colors and the same board surface), unless this request "
+    "explicitly asks to change the background.")
+
+
+def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0, keep_source: bool = False) -> str:
+    """設定文の BACKDROP COLORS の行を、この画像の背景色の指示に置き換える（行が無ければそのまま）。
+
+    keep_source=True（元画像を直す時）は、色を選ばず「元画像の背景を保つ」指示にする。
+    """
     m = _BACKDROP_LINE_RE.search(lock_text or "")
     if not m:
         return lock_text
+    if keep_source:
+        return lock_text[:m.start()] + _KEEP_SOURCE_BACKGROUND + lock_text[m.end():]
     tones = [t.strip() for t in m.group(1).split("|") if t.strip()]
     if not tones:
         return (lock_text[:m.start()] + lock_text[m.end():]).strip()
@@ -427,11 +442,15 @@ def apply_backdrop(lock_text: str, prompt_type: str, key: int = 0) -> str:
 _BOARD_LINE_RE = re.compile(r"^DIAGRAM BOARDS:(.*)$", re.MULTILINE)
 
 
-def apply_board(lock_text: str, prompt_type: str, key: int = 0) -> str:
+def apply_board(lock_text: str, prompt_type: str, key: int = 0, keep_source: bool = False) -> str:
     m = _BOARD_LINE_RE.search(lock_text or "")
     if not m:
         return lock_text
     boards = [b.strip() for b in m.group(1).split("|") if b.strip()]
+    if prompt_type == "diagram" and boards and keep_source:
+        # 元画像を直す時は板を選び直さない（前の手直しで変えた板が戻らないように）
+        return (lock_text[:m.start()] + "BOARD OF THIS IMAGE: the same board surface as the attached "
+                "source image." + lock_text[m.end():])
     if prompt_type != "diagram" or not boards:
         return (lock_text[:m.start()] + lock_text[m.end():]).replace("\n\n\n", "\n\n")
     board = boards[int(key or 0) % len(boards)]
@@ -466,6 +485,7 @@ def _build_full_prompt(
     backdrop: int = 0,
     board: int = 0,
     preserve_source_text: bool = False,
+    keep_source_background: bool = False,
 ) -> str:
     """画像生成用のシステム接頭辞を付与
 
@@ -516,7 +536,8 @@ def _build_full_prompt(
     }
     lock = (style_lock or "").strip() if prompt_type in STYLE_LOCK_TYPES else ""
     if lock:
-        lock = apply_board(apply_backdrop(lock, prompt_type, backdrop), prompt_type, board)
+        lock = apply_board(apply_backdrop(lock, prompt_type, backdrop, keep_source_background),
+                           prompt_type, board, keep_source_background)
         style = _STYLE_LOCK_SCENE_HINTS.get(prompt_type) or style_hints.get(prompt_type, "")
         if prompt_type == "diagram":
             style = _LOCKED_DIAGRAM_HINT + style
@@ -1027,6 +1048,10 @@ class ParallelImageGenerator:
                                              style_preset=row_style, style_lock=self.style_lock_text,
                                              backdrop=backdrop_key(prompt_entry), board=idx,
                                              preserve_source_text=bool(self.suasi_artwork
+                                                 and prompt_entry.get("edit_source")
+                                                 and self.edit_reference_bytes),
+                                             # 元画像を直す時は背景の色・板を指定し直さない（2026-11-15）
+                                             keep_source_background=bool(not self.suasi_artwork
                                                  and prompt_entry.get("edit_source")
                                                  and self.edit_reference_bytes))
             # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
