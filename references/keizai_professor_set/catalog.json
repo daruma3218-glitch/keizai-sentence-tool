@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "primary": "references/keizai_professor.png",
+  "primary_sha256": "ad6c74354e2bc867cb2a185c65100de844d46f64927ebb109ecdf7f905f62774",
+  "approval": "2026-11-15: 社長「ドライブに上がっているイラストを参考として取り入れて、今後はずれイラストがでないようにすること」。新居先生が11/13にChatworkで共有した「キャラクター画像」フォルダ（前に生成させたキャラクター画像一式・オリジナルの参考）から取り込んだ。新居先生「キャラが変だと思う時は、ほとんど目の形に違和感」。",
+  "drive_folder_id": "1jKZJqFWAs4l3qoxikKBLNdhLaLIy8ZyZ",
+  "preparation": "ドライブの原画（RGBA・透明部分なし）をRGBにし、人物の周りの白い余白を切って長辺1024px以下に収めた（拡大はしない）。顔・服・線は描き直していない。",
+  "use": "先生が描かれる画像（character=true か、文面に先生が出る画像）と、コメントの手直し（元画像＋先生の見本）で、基準画像の後ろに順に渡す。先生が出てこない画像には基準画像1枚だけを渡す（入力の費用を抑える）。",
+  "images": [
+    {
+      "file": "standing_open_palm.png",
+      "name": "立って手のひらで紹介（笑顔）",
+      "sha256": "70059f13b827947f00289b42b0f84368989ed50930ab1f2eef39c67ae5beec0f",
+      "drive_file_id": "1qwu-tiIwxLntjidmuVjwbRUxNjRFcGYL",
+      "drive_title": "IMG_0264.PNG のコピー",
+      "source_sha256": "0cc939d7e0f9b79f17e028fc74b773ede5e5bac0fee100261275ae0879f61eeb"
+    },
+    {
+      "file": "chalk_pointing.png",
+      "name": "チョークで指す（口を閉じた落ち着いた顔）",
+      "sha256": "38f792e425cd8b33f1ebf770008ebf117dc6cd92edafc136db7d80924b2732a1",
+      "drive_file_id": "1U4NqVpKZQk8o7l6A0Ygw3BWT7Gx_ihdO",
+      "drive_title": "IMG_0271.PNG のコピー",
+      "source_sha256": "80a64e4744907b0db44bbc22ba4180f638a51e479201aad379aa41fb05a6d3dd"
+    },
+    {
+      "file": "thinking_chin.png",
+      "name": "あごに手を当てて考える（座り）",
+      "sha256": "b55c1eb95a232434c2c2e81d2151bafa12ef44235971bb19b653759e45a93a14",
+      "drive_file_id": "1hk991ZLvprTMgziIt-n_tu7IA8vEh_3y",
+      "drive_title": "IMG_0283.PNG のコピー",
+      "source_sha256": "80b1883c11cf7672720f3a561b2893bd0304c1ab0ae9996df72bfdccab90e710"
+    }
+  ],
+  "excluded": [
+    {
+      "drive_file_id": "1CSYoapKnIE1pupq_q7jRMFpjBVZ4L2Rq",
+      "drive_title": "IMG_0278.PNG のコピー",
+      "reason": "眉を寄せて口を開けた表情。チャンネルの決まり（半目・口を閉じた笑顔、気持ちは身ぶりと「？」「！」で表す・2026-09-25）と合わないため、見本に入れると口を開けた先生が出やすくなる。"
+    },
+    {
+      "drive_file_id": "192pvCgvGHGl1VU0vPd7pxplHpKlIDNV_",
+      "drive_title": "IMG_0267.PNG のコピー",
+      "reason": "IMG_0283 と同じ絵に椅子を足したもの。顔の見本としては同じなので重ねない。"
+    },
+    {
+      "drive_file_id": "1Xp-1bbcF16NMbLKh__WrV3Mv40ahwQKo",
+      "drive_title": "Untitled design.png のコピー",
+      "reason": "基準画像 keizai_professor.png と同じポーズ・同じ顔の全身版。基準画像で足りるので重ねない。"
+    }
+  ]
+}

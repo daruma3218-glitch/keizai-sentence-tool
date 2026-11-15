@@ -32,6 +32,7 @@ from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
 from suasi_pose import select_pose, POSE_NAMES
 from safe_images import open_image
+from character_refs import load_reference_set
 
 
 # ===== モデル設定 =====
@@ -268,6 +269,19 @@ _OTHER_PEOPLE_EYES = (
     "natural expression that fits the scene. "
 )
 
+# 先生の目の形（2026-11-15 新居先生「キャラが変だと思う時は、ほとんど目の形に違和感」。
+# せいまさん：細くなる・まぶたがなくなる・白くなる）。基準画像とドライブの見本を拡大して書き起こした。
+# 旧い設定文の「small dark pupils」は見本と違い（黒目は大きい）、白目ばかりの目の一因になりうるため直した。
+_PROFESSOR_EYES = (
+    "HIS EYES (the part that most often goes wrong): each eye is a large white half-oval whose lower "
+    "edge is a round U-shaped curve, cut across the top by a thick, almost straight dark upper-eyelid "
+    "line (the calm half-lidded look), with a thin curved eyelid crease line above it (double eyelid); "
+    "a large round black pupil is tucked under the upper eyelid, with one small white highlight dot; "
+    "the eyes fill most of the height of his glasses lenses, under thick dark eyebrows. Never draw his "
+    "eyes as thin slits or simple lines, never drop the thick upper eyelids or the crease, never leave "
+    "the eyes blank white or with tiny dot pupils, and keep his skin light peach, not pale white. "
+)
+
 _CHARACTER_LOCK_INSTRUCTION = (
     "CHARACTER & STYLE REFERENCE: The attached reference image shows the EXACT recurring "
     "character (the teacher / professor) and the EXACT art style for this video series. "
@@ -276,8 +290,31 @@ _CHARACTER_LOCK_INSTRUCTION = (
     "thick-outline FLAT CARTOON tone, line weight and flat coloring as the reference image. "
     "Only change the pose, gesture and background to fit the new scene described below. "
     "Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    + _PROFESSOR_EYES
     + _OTHER_PEOPLE_EYES +
     "Do NOT redesign the character, and do NOT switch to a detailed, anime, or realistic style."
+)
+
+# 見本が複数枚のとき、キャラ固定の指示の後ろに足す（2026-11-15 ドライブの「キャラクター画像」を見本に追加）
+_REFERENCE_SET_NOTE = (
+    "REFERENCE IMAGES: every attached image shows the same professor (a close-up and full-body views "
+    "in different poses). Use them together to keep his face — above all the eye shape — hair, glasses, "
+    "body shape and outfit identical to them. Do not copy their poses or backgrounds, and draw him only once."
+)
+
+# コメントの手直し（元画像を直す）で、先生の見本も一緒に渡すとき。
+# 2026-11-15 まで手直しには元画像だけを渡していたため、手直しを重ねるたびに写しの写しになり、
+# 先生の顔（特に目）がずれていった（三上さん・せいまさんの報告：細くなる・まぶたがなくなる・白くなる）。
+_EDIT_CHARACTER_REFERENCE_INSTRUCTION = (
+    "ATTACHED IMAGES: the FIRST attached image is the source image to edit. Every other attached image "
+    "is a character reference of the channel's professor (the same man in different poses); use them "
+    "only for how he looks, and never copy their pose, background or layout into the result. If the "
+    "professor appears in the source image, keep his position, pose and size, but draw his face, hair, "
+    "glasses and outfit exactly like the references, even if the source image drew them differently. "
+    + _PROFESSOR_EYES +
+    "If the professor does not appear in the source image, do not add him. Other people keep their own "
+    "faces. "
+    + _OTHER_PEOPLE_EYES
 )
 
 # v3 Step6: エンティティ参照（一貫性ロック）。同じ被写体が繰り返し出るとき、初出画像を
@@ -312,6 +349,7 @@ _CHARACTER_LOCK_IN_DIAGRAM = (
     "voluminous wavy dark-brown hair, thin dark glasses, calm half-lidded eyes, closed-mouth gentle "
     "smile, gray tweed blazer over a wine-red V-neck sweater — in the same flat cartoon style, as a "
     "presenter beside the diagram. Draw him at most once. Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    + _PROFESSOR_EYES
     + _OTHER_PEOPLE_EYES +
     "Keep the diagram itself as the main "
     "subject; do not turn the image into a portrait and do not copy the reference background."
@@ -326,6 +364,7 @@ _STYLE_REFERENCE_INSTRUCTION = (
     "Draw the professor only if this scene needs someone to explain or react; if you draw him, he "
     "must be this exact person (identical face, voluminous wavy dark-brown hair, thin dark glasses, "
     "gray tweed blazer over a wine-red V-neck sweater). Keep his calm half-lidded eyes and closed-mouth gentle smile in every scene; show surprise, doubt or worry only with his gestures, eyebrows and simple symbols such as \"?\" or \"!\" beside him, never by opening his eyes wide or opening his mouth. "
+    + _PROFESSOR_EYES
     + _OTHER_PEOPLE_EYES +
     "Do not copy the reference background or pose."
 )
@@ -621,6 +660,20 @@ def _build_full_prompt(
     )
 
 
+def _reference_parts(reference_bytes, reference_mime: str = "image/png") -> list:
+    """参照画像を (bytes, mime) の並びにそろえる。1枚の bytes でも、複数枚の並び（bytes か (bytes, mime)）でもよい。"""
+    if not reference_bytes:
+        return []
+    if isinstance(reference_bytes, (bytes, bytearray)):
+        return [(reference_bytes, reference_mime)]
+    parts = []
+    for item in reference_bytes:
+        data, mime = (item[0], item[1]) if isinstance(item, (tuple, list)) else (item, "image/png")
+        if data:
+            parts.append((data, mime or "image/png"))
+    return parts
+
+
 # ===== Gemini (nanobanana) =====
 def _sync_generate_image_gemini(
     client: genai.Client,
@@ -661,8 +714,9 @@ def _sync_generate_image_gemini(
     last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
-            contents = ([types.Part.from_bytes(data=reference_bytes, mime_type=reference_mime), full_prompt]
-                        if reference_bytes else full_prompt)
+            refs = _reference_parts(reference_bytes, reference_mime)
+            contents = ([types.Part.from_bytes(data=data, mime_type=mime) for data, mime in refs] + [full_prompt]
+                        if refs else full_prompt)
             success, last_error = consume_gemini_image(client, save_response, defer_body=defer_body,
                 model=model_name, contents=contents,
                 config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]))
@@ -721,12 +775,20 @@ def _sync_generate_image_openai(
     last_error = ""
     for attempt in range(MAX_RETRIES):
         try:
-            if reference_bytes:
-                with BytesIO(reference_bytes) as bio:
-                    bio.name = "reference.jpg" if reference_bytes.startswith(b"\xff\xd8\xff") else "reference.png"
+            refs = _reference_parts(reference_bytes)
+            if refs:
+                # 複数枚（手直しの元画像＋先生の見本、先生の見本の組）は images.edit に並びで渡す
+                # （グラフの清書 chart_restyle.py でも同じ形で2枚を渡している）
+                with ExitStack() as stack:
+                    files = []
+                    for i, (data, _mime) in enumerate(refs):
+                        bio = stack.enter_context(BytesIO(data))
+                        stem = "reference" if len(refs) == 1 else f"reference{i + 1}"
+                        bio.name = stem + (".jpg" if data.startswith(b"\xff\xd8\xff") else ".png")
+                        files.append(bio)
                     success, last_error = consume_openai_image(client.images, "edit", save_response,
-                        model=model_name, image=bio, prompt=full_prompt, n=1,
-                        size=size, quality=quality,
+                        model=model_name, image=files[0] if len(files) == 1 else files,
+                        prompt=full_prompt, n=1, size=size, quality=quality,
                     )
             else:
                 success, last_error = consume_openai_image(client.images, "generate", save_response,
@@ -807,6 +869,9 @@ class ParallelImageGenerator:
                     self.reference_mime = "image/jpeg" if rp.suffix.lower() in (".jpg", ".jpeg") else "image/png"
             except Exception:
                 self.reference_bytes = None
+        # 基準画像の後ろに足す見本（references/<基準画像の名前>_set/catalog.json・2026-11-15）。
+        # 先生が描かれる画像と手直しにだけ渡す（_character_refs）。無ければ従来どおり基準画像1枚。
+        self.reference_set = load_reference_set(reference_image_path) if self.reference_bytes is not None else []
 
         self.edit_reference_bytes = None
         # Also correct saved V1 projects, whose profile points at the award avatar.
@@ -868,6 +933,12 @@ class ParallelImageGenerator:
         self._completed = 0
         self._failed = 0
         self._total = 0
+
+    def _character_refs(self) -> Optional[list]:
+        """先生を描く時に渡す見本の並び（基準画像が先頭）。足す見本が無ければ None（基準画像1枚の従来の形）。"""
+        if self.reference_bytes is None or not self.reference_set:
+            return None
+        return [(self.reference_bytes, self.reference_mime)] + list(self.reference_set)
 
     def _dispatch_sync_generate(self, full_prompt: str, output_path: Path,
                                 use_reference: bool = False,
@@ -974,6 +1045,10 @@ class ParallelImageGenerator:
                                     and prompt_type in STYLE_LOCK_TYPES)
             use_reference = (not self.suasi_artwork and self.reference_bytes is not None
                              and (shows_professor or style_reference_only))
+            scene_prompt = full_prompt  # 見本の指示を付ける前の文（手直しで先生の見本も渡す時に使う）
+            ref_override = None
+            ref_mime_override = None
+            character_set = self._character_refs()
             if use_reference:
                 if style_reference_only:
                     lock = _STYLE_REFERENCE_INSTRUCTION
@@ -981,17 +1056,28 @@ class ParallelImageGenerator:
                     lock = _CHARACTER_LOCK_INSTRUCTION
                 else:
                     lock = _CHARACTER_LOCK_IN_DIAGRAM
+                if character_set and not style_reference_only:
+                    # 先生が描かれる画像には、基準画像に加えてドライブの見本も渡す（2026-11-15）
+                    ref_override = character_set
+                    lock = lock + "\n\n" + _REFERENCE_SET_NOTE
                 full_prompt = lock + "\n\n" + full_prompt
 
             # v3 Step6: エンティティ follower の一貫性ロック（キャラ固定シーンとは排他）。
             # nanobanana は canonical 画像を参照に渡す。gpt-image は文言のみ（v3.0）。
-            ref_override = None
-            ref_mime_override = None
             if prompt_entry.get("edit_source") and self.edit_reference_bytes:
-                ref_override = self.edit_reference_bytes
-                ref_mime_override = self.edit_reference_mime
-                if not self.suasi_artwork:
-                    full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
+                if (not self.suasi_artwork and self.style_lock_text and self.reference_bytes is not None):
+                    # 世界観ロックのチャンネルの手直し：元画像を1枚目に、先生の見本を後ろに渡す（2026-11-15）。
+                    # 元画像だけだと、手直しを重ねるたびに先生の顔（特に目）がずれていった
+                    refs = character_set or [(self.reference_bytes, self.reference_mime)]
+                    ref_override = [(self.edit_reference_bytes, self.edit_reference_mime)] + refs
+                    ref_mime_override = None
+                    full_prompt = (_EDIT_SOURCE_INSTRUCTION + "\n\n" + _EDIT_CHARACTER_REFERENCE_INSTRUCTION
+                                   + "\n\n" + scene_prompt)
+                else:
+                    ref_override = self.edit_reference_bytes
+                    ref_mime_override = self.edit_reference_mime
+                    if not self.suasi_artwork:
+                        full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
 
             if entity_role == "follower" and not use_reference and not self.suasi_artwork:
                 if self.provider == PROVIDER_NANOBANANA and entity_ref_bytes:

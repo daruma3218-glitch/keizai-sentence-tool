@@ -59,10 +59,12 @@ CHART_RESTYLE_INSTRUCTION = (
     "itself names (for example coins when it talks about yen). If the sentence does not name a "
     "concrete object, add no objects at all. Never draw food, products or packages that the "
     "sentence does not name (the video may still be hiding what the product is). "
-    "If a SECOND image is attached, it shows the channel's professor: draw him once, placed as "
+    "If a SECOND image is attached, it shows the channel's professor (any further images show the same "
+    "man in other poses, only as references for how he looks): draw him once, placed as "
     "LAYOUT OF THIS IMAGE says, as that SAME person (identical face, hair, glasses, half-lidded "
-    "eyes, closed-mouth smile and outfit). He never covers any number or label. If no second image "
-    "is attached, leave the professor out. The chart stays the main subject."
+    "eyes, closed-mouth smile and outfit; keep the eye shape of the references: thick upper eyelids "
+    "and large round black pupils, never thin slits). He never covers any number or label. If no "
+    "second image is attached, leave the professor out. The chart stays the main subject."
 )
 
 # 「先生が紹介」の見せ方（2026-09-28 社長「まだ単調な雰囲気」: 試験 20260928_010838 の数字カード
@@ -171,6 +173,10 @@ def redraw_chart(openai_client, rendered_path: Path, out_path: Path, *, model: s
     images = [_image_file(Path(rendered_path).read_bytes(), "chart.png")]
     if reference_path and Path(reference_path).exists():
         images.append(_image_file(Path(reference_path).read_bytes(), "professor.png"))
+        # ドライブの見本（references/<基準画像>_set・2026-11-15）も後ろに足す。先生の顔を見本にそろえる
+        from character_refs import load_reference_set
+        for i, (data, _mime) in enumerate(load_reference_set(reference_path), start=2):
+            images.append(_image_file(data, f"professor{i}.png"))
     prompt = (CHART_RESTYLE_INSTRUCTION
               + f"\n\nLAYOUT OF THIS IMAGE: {CHART_LAYOUTS[int(layout or 0) % len(CHART_LAYOUTS)]}.")
     if (sentence or "").strip():
