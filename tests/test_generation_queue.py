@@ -107,6 +107,14 @@ def test_notice_goes_to_the_channel_room(isolated, monkeypatch):
     assert "body=" in sent["data"]
 
 
+def test_karakuri_notice_goes_to_the_theme_room_not_the_team_room():
+    # 2026-11-16 社長「リマインドなどの通知もルームID：437763937にいれてほしい」。
+    # チームのルーム 420258013 は会話の場として残し、システムの知らせは【テーマ出し】へ（原稿スタジオと同じ宛先）
+    room = appmod.get_channel("keizai")["defaults"]["chatwork_room_id"]
+    assert room == "437763937"
+    assert room != "420258013"
+
+
 def test_running_job_is_not_notified(isolated, monkeypatch):
     monkeypatch.setenv("CHATWORK_API_TOKEN", "dummy")
     (isolated / "j3").mkdir()
