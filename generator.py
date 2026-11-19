@@ -331,6 +331,30 @@ _ENTITY_LOCK_TEXT_ONLY = (
     "series style, so repeated appearances of the same subject feel coherent."
 )
 
+# 素材画面の「手直し」は、編集者の依頼だけを元画像に当てる（2026-11-19 さゆみさん「画像を作り直す際、
+# 指示していない部分まで勝手に変更されることが多い（図解スタジオと比較して）」）。
+# それまでは場面の最初の指示（図の決まり・構図の案「Variant A: causal flow diagram…」・文字の決まり）と
+# 「読みやすさ・重なりも直す」を一緒に送っていたため描き直しになり、2枚頼むと2枚目は別の構図を指示していた。
+# 図解スタジオ（zukai-tool の image_edit.INSTRUCT_SUFFIX）と同じ「依頼＋ほかは全く同じに保つ」の形にする。
+_INSTRUCTION_EDIT_HEADER = (
+    "IMAGE EDIT: Edit the attached source image. Apply only the change requested below."
+)
+_INSTRUCTION_EDIT_SUFFIX = (
+    "Only change what is requested above. Keep everything else in the image exactly the same: "
+    "composition, layout, camera angle, art style, outlines, colors, background, board surface, "
+    "other objects, people, and any existing text, labels or numbers that are not mentioned. "
+    "Do not redraw the image from scratch, and do not tidy up, rearrange or restyle other parts. "
+    "Do not add new text, labels, numbers, facts or people unless the request asks for them. "
+    "Keep the same 16:9 landscape frame."
+)
+
+
+def instruction_edit_prompt(instruction: str) -> str:
+    """元画像に編集者の依頼だけを当てる文（場面の指示・構図の案・文字の決まりは入れない）。"""
+    return (f"{_INSTRUCTION_EDIT_HEADER}\n\nREQUESTED CHANGE:\n{str(instruction or '').strip()}\n\n"
+            f"{_INSTRUCTION_EDIT_SUFFIX}")
+
+
 _EDIT_SOURCE_INSTRUCTION = (
     "IMAGE EDIT MODE: Use the attached image as the source image to refine, not as a loose "
     "style reference. Preserve the same overall composition, camera angle, layout, main objects, "
@@ -1044,16 +1068,23 @@ class ParallelImageGenerator:
                 "provider": self.provider,
             })
 
-            full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
-                                             style_preset=row_style, style_lock=self.style_lock_text,
-                                             backdrop=backdrop_key(prompt_entry), board=idx,
-                                             preserve_source_text=bool(self.suasi_artwork
-                                                 and prompt_entry.get("edit_source")
-                                                 and self.edit_reference_bytes),
-                                             # 元画像を直す時は背景の色・板を指定し直さない（2026-11-15）
-                                             keep_source_background=bool(not self.suasi_artwork
-                                                 and prompt_entry.get("edit_source")
-                                                 and self.edit_reference_bytes))
+            # 素材画面の「手直し」は、編集者の依頼だけを元画像に当てる（2026-11-19・instruction_edit_prompt）
+            instruction_edit = bool(prompt_entry.get("edit_mode") == "instruction_only"
+                                    and prompt_entry.get("edit_source") and self.edit_reference_bytes
+                                    and str(prompt_entry.get("edit_instruction") or "").strip())
+            if instruction_edit:
+                full_prompt = instruction_edit_prompt(prompt_entry["edit_instruction"])
+            else:
+                full_prompt = _build_full_prompt(prompt_text, prompt_type, allowed_terms=allowed_terms,
+                                                 style_preset=row_style, style_lock=self.style_lock_text,
+                                                 backdrop=backdrop_key(prompt_entry), board=idx,
+                                                 preserve_source_text=bool(self.suasi_artwork
+                                                     and prompt_entry.get("edit_source")
+                                                     and self.edit_reference_bytes),
+                                                 # 元画像を直す時は背景の色・板を指定し直さない（2026-11-15）
+                                                 keep_source_background=bool(not self.suasi_artwork
+                                                     and prompt_entry.get("edit_source")
+                                                     and self.edit_reference_bytes))
             # キャラ固定: character=True のシーンに加え、世界観ロック中は文面に先生が出てくる
             # 図解・グラフにも参照画像を渡す（図解の先生が別人になっていた 2026-09-27）
             shows_professor = bool(prompt_entry.get("character")) or depicts_recurring_character(
@@ -1096,12 +1127,17 @@ class ParallelImageGenerator:
                     refs = character_set or [(self.reference_bytes, self.reference_mime)]
                     ref_override = [(self.edit_reference_bytes, self.edit_reference_mime)] + refs
                     ref_mime_override = None
-                    full_prompt = (_EDIT_SOURCE_INSTRUCTION + "\n\n" + _EDIT_CHARACTER_REFERENCE_INSTRUCTION
-                                   + "\n\n" + scene_prompt)
+                    # 依頼だけの手直しでも先生の見本は渡す（顔がずれないように・11/15）。
+                    # 「読みやすさ・重なりも直す」の _EDIT_SOURCE_INSTRUCTION は付けない（指示外を変える元だった）
+                    full_prompt = (("" if instruction_edit else _EDIT_SOURCE_INSTRUCTION + "\n\n")
+                                   + _EDIT_CHARACTER_REFERENCE_INSTRUCTION + "\n\n" + scene_prompt)
                 else:
                     ref_override = self.edit_reference_bytes
                     ref_mime_override = self.edit_reference_mime
-                    if not self.suasi_artwork:
+                    if instruction_edit:
+                        # 渡すのは元画像だけなので、先生の参照画像を前提にした文も付けない
+                        full_prompt = scene_prompt
+                    elif not self.suasi_artwork:
                         full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
 
             if entity_role == "follower" and not use_reference and not self.suasi_artwork:

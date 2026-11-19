@@ -1138,6 +1138,9 @@ def api_scene_fix_revise(job_id):
         "style": style_preset,
         "character": False,
         "edit_source": True,
+        # 案の再修正も、今回の依頼だけを元画像に当てる（素材画面の手直しと同じ・2026-11-19）
+        "edit_mode": "instruction_only",
+        "edit_instruction": instruction,
     }
 
     try:

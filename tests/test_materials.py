@@ -376,6 +376,9 @@ def test_generate_uses_frozen_style_and_keeps_selection(studio, monkeypatch):
     # 背景の色を選ぶ段落の番号も元の行から渡す（無いと1・2番目の色になっていた・2026-11-15）
     assert calls[0]["prompts"][0]["chapter_index"] == 1
     assert "block_index" in calls[0]["prompts"][0]
+    # 手直しは依頼だけを元画像に当てる（2026-11-19 さゆみさん「指示していない部分まで変更される」）
+    assert calls[0]["prompts"][0]["edit_mode"] == "instruction_only"
+    assert calls[0]["prompts"][0]["edit_instruction"] == "図を大きく"
     assert store.load_library(d)["selections"]["1"] == original["id"]
 
 

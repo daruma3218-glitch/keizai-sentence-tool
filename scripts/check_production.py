@@ -23,7 +23,9 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          # 2026-11-15 先生の見本を複数枚に・手直しでも見本を渡す（ずれたイラストを防ぐ）
          "character_refs",
          # 2026-11-15 手直しで前の手直しの背景が場面の色へ戻らない
-         "keep_source_background"]
+         "keep_source_background",
+         # 2026-11-19 手直しは依頼だけを元画像に当てる・章題の印の行は画像の対象にしない（さゆみさんの①②）
+         "instruction_edit", "chapter_headings"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

@@ -381,6 +381,8 @@ def register(module):
                     "diagram_blueprint": row.get("diagram_blueprint", {}),
                     "style": defaults.get("style_preset", "flat_infographic"), "character": False,
                     "edit_source": kind == "edit",
+                    # 手直しは依頼だけを元画像に当て、ほかは変えない（2026-11-19・generator.instruction_edit_prompt）
+                    **({"edit_mode": "instruction_only", "edit_instruction": extra} if kind == "edit" else {}),
                     "allowed_terms": module._scene_fix_allowed_terms(row.get("sentence", ""), route)}
                     for i in range(1, count + 1)]
                 reference = defaults.get("character_ref", "")

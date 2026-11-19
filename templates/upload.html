@@ -149,8 +149,9 @@
             </div>
 
             <textarea id="manuscriptText" name="manuscript_text" rows="12"
-                      placeholder="ここに完成原稿を貼り付け（章の区切りは空行2〜3行）。原稿パイプラインの final.json をそのまま貼り付けてもOK"
+                      placeholder="ここに完成原稿を貼り付け。章題の行は先頭に【章】か■を付けると、画像を作らず章の区切りになります（例：【章】なぜ日本だけ金利が低いのか？）。原稿パイプラインの final.json をそのまま貼り付けてもOK"
                       class="mt-3 w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm resize-y"></textarea>
+            <p class="text-xs text-gray-500 mt-1">章題の行：先頭に <span class="font-medium">【章】</span>（原稿スタジオと同じ印）か <span class="font-medium">■</span>・<span class="font-medium">#</span> を付けるか、「第1章」で始めると、その行は画像を作らず章の区切りになります。原稿スタジオ・Trello の Doc から読み込んだ原稿は自動で付きます。</p>
             <div class="text-xs text-gray-400 mt-1 text-right">
               <span id="charCount">0</span> 文字（目安: 1,000文字あたり20〜40場面。実際の画像数は場面の判定と枚数上限で変わります）
             </div>

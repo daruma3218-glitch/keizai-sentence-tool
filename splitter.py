@@ -67,6 +67,91 @@ def split_into_sentences(text: str) -> list:
     return sentences
 
 
+# 章題の印（2026-11-19 さゆみさん「章タイトルが本文と同じように『1センテンス』として認識され、
+# 画像生成の対象になっていた」「章タイトルの書式や記号などをあらかじめ統一し、その形式の文は除外」）。
+# 印のある行は章の区切り（章題）にして、画像を作る文に入れない。標準は原稿スタジオと同じ「【章】」。
+# 原稿スタジオの【導入】【締め】、Markdown の「#」、「■」などの記号、「第1章」で始まる行も章題として読む。
+# 「●」は伏せ字（●●）に使うので章題の印にしない。印の無い行は今までどおり（短い行を推測で章題にしない）。
+_STUDIO_PART = re.compile(r"^【(導入|締め)】\s*(.*)$")
+_STUDIO_CHAPTER = re.compile(r"^【章】\s*(.*)$")
+_SYMBOL_HEADING = re.compile(r"^(?:#{1,6}|[■□◆◇▼▶])\s*(.*)$")
+_NUMBERED_HEADING = re.compile(r"^(?:第[0-9０-９一二三四五六七八九十百]+[章部]|序章|終章|プロローグ|エピローグ)")
+_BRACKET_HEADING = re.compile(r"^【[^】]{1,30}】")
+HEADING_MAX_CHARS = 60
+
+
+def heading_line(line: str):
+    """章題の印のある行なら (章題, 同じ行の本文, 種類) を返す。印が無ければ None。
+
+    種類は "part"（【導入】【締め】＝後ろの文は本文）／"chapter"（【章】＝章題が空なら次の短い行が章題）／"title"。
+    """
+    s = (line or "").strip()
+    if not s:
+        return None
+    m = _STUDIO_PART.match(s)
+    if m:
+        return m.group(1), m.group(2).strip(), "part"
+    m = _STUDIO_CHAPTER.match(s)
+    if m:
+        return m.group(1).strip(), "", "chapter"
+    m = _SYMBOL_HEADING.match(s)
+    if m and m.group(1).strip():
+        return m.group(1).strip(), "", "title"
+    if ((_NUMBERED_HEADING.match(s) or _BRACKET_HEADING.match(s))
+            and len(s) <= HEADING_MAX_CHARS and not s.endswith("。")):
+        return s, "", "title"
+    return None
+
+
+def _blocks_from_lines(lines: list) -> list:
+    blocks = []
+    for b_text in lines:
+        b_text = b_text.strip()
+        if not b_text:
+            continue
+        sentences = split_into_sentences(b_text)
+        if sentences:
+            blocks.append({"text": b_text, "sentences": sentences})
+    return blocks
+
+
+def split_marked_chapters(manuscript_text: str):
+    """章題の印のある原稿を、印の行で章に分ける。印が1つも無ければ None（従来の分け方へ）。
+
+    印の行は章題になり、画像を作る文（センテンス）には入らない。最初の印より前の本文は題の無い章にする。
+    """
+    lines = (manuscript_text or "").replace("\r\n", "\n").split("\n")
+    if not any(heading_line(line) for line in lines):
+        return None
+    chapters = []
+    current = {"title": "", "lines": []}
+    wants_title = False
+
+    def flush():
+        blocks = _blocks_from_lines(current["lines"])
+        if blocks:  # 章題だけで本文が無い章（文書の題の行など）は作らない
+            chapters.append({"title": current["title"], "blocks": blocks})
+
+    for line in lines:
+        found = heading_line(line)
+        if found:
+            flush()
+            title, body, kind = found
+            current = {"title": title, "lines": [body] if body else []}
+            wants_title = kind == "chapter" and not title
+            continue
+        stripped = line.strip()
+        if wants_title and stripped:
+            wants_title = False
+            # 【章】の次の行に章題を書いた形（原稿スタジオの parse_draft と同じ：短く、句点で終わらない1行）
+            if len(stripped) <= 40 and not stripped.endswith("。"):
+                current["title"] = stripped
+                continue
+        current["lines"].append(line)
+    flush()
+    return chapters
+
+
 def mechanical_split(manuscript_text: str) -> list:
     """機械的な分割（章/ブロック/センテンスのツリー）
 
@@ -85,6 +170,11 @@ def mechanical_split(manuscript_text: str) -> list:
     # 章は「3行以上の連続改行」で区切る（明示的な大区切り）
     # ブロックは「1〜2行の連続改行」で区切る
     text = manuscript_text.replace('\r\n', '\n').replace('\r', '\n')
+
+    # 章題の印（【章】・■・# など）がある原稿は、印の行で章に分ける（印の行は画像の対象にしない・2026-11-19）
+    marked = split_marked_chapters(text)
+    if marked is not None:
+        return marked
 
     # 3行以上の改行 → 章区切り
     chapter_chunks = re.split(r'\n{3,}', text)
@@ -407,10 +497,17 @@ def parse_docx_to_chapters(file_bytes: bytes) -> tuple:
             or "見出し" in style_name
             or "タイトル" in style_name
         )
-        if is_heading:
-            current = {"title": text, "blocks": []}
+        # 見出しの書式でなくても、章題の印（【章】・■・# など）の段落は章題にする（2026-11-19）
+        marked = None if is_heading else heading_line(text)
+        if is_heading or marked:
+            title, body = (text, "") if is_heading else (marked[0], marked[1])
+            current = {"title": title, "blocks": []}
             chapters.append(current)
             text_parts.append("\n\n\n" + text)
+            if body:
+                sentences = split_into_sentences(body)
+                if sentences:
+                    current["blocks"].append({"text": body, "sentences": sentences})
         else:
             if current is None:
                 current = {"title": "", "blocks": []}
