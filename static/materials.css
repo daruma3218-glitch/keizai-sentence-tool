@@ -295,7 +295,15 @@ body:has(dialog[open]){overflow:hidden}
 .hidden-candidates-control input{width:auto;margin:0;accent-color:var(--accent,#28785c)}
 .candidate.candidate-hidden{border-style:dashed;background:#f4f5f4}
 .hidden-candidate-label{font-size:.8rem;color:#5c6863;margin:.2rem 0}
-/* 編集への指示：画像1枚ごとの、編集担当への指示と出典URL。コメントとは別に残る。 */
-.edit-note-label{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;color:#1f4d78;background:#e8f1fb;border-left:3px solid #6d9ccc;border-radius:4px;padding:6px 9px;margin:4px 0}
-.edit-note-button{display:block;margin:2px 0 6px;color:#1f4d78}
-.review-pane .edit-note-box{margin-top:6px}
+/* 編集への指示：採用した画像の真下の欄。書けば自動で保存（スプシの「備考」のセルと同じ感覚）。コメントとは別。 */
+.note-field{position:relative;margin:8px 0 4px}
+.edit-note-input{display:block;width:100%;field-sizing:content;min-height:40px;max-height:200px;resize:none;font-size:12.5px;line-height:1.65;padding:9px 11px;color:#1f4d78;background:#f6f9fc;border:1px dashed #a8c2dc;border-radius:7px}
+.edit-note-input::placeholder{color:#7d96ae}
+.edit-note-input:not(:placeholder-shown){background:#e8f1fb;border:1px solid #8fb3d6}
+.edit-note-input:focus{background:#fff;border:1px solid #4f86bd;outline:none;box-shadow:0 0 0 3px #4f86bd22}
+.note-state{position:absolute;right:9px;top:-9px;padding:0 5px;background:#fff;border-radius:4px;font-size:10.5px;color:#2e6b4f;pointer-events:none}
+.note-state:empty{display:none}
+.note-field[data-state="error"] .edit-note-input{border-color:#c0392b}
+.note-field[data-state="error"] .note-state{color:#b03a2e}
+.review-pane .note-field{margin-top:10px}
+.candidate:not(.selected) .edit-note-input:not(:focus){opacity:.55}

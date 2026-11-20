@@ -151,10 +151,11 @@ def test_export_identity_changes_only_when_an_adopted_images_note_changes(sample
     assert store.selection_hash(d) == before  # 指示の無い制作は、これまでと同じ照合値
 
 
-def test_library_page_has_note_dialog_and_review_button(sample):
+def test_library_page_writes_notes_in_place_without_a_dialog(sample):
     _, client, *_ = sample
     page = client.get("/materials/jobs/sample").get_data(as_text=True)
-    assert 'id="note-dialog"' in page and 'id="edit-note"' in page and 'maxlength="1000"' in page
-    assert 'id="review-note"' in page and 'id="review-note-text"' in page
+    # 比較の窓の画像の下に、そのまま書ける欄（保存ボタンも説明の窓も無い）
+    assert 'id="review-note-input"' in page and 'class="edit-note-input"' in page and 'maxlength="1000"' in page
+    assert 'id="note-dialog"' not in page
     script = (Path(__file__).resolve().parents[1] / "static" / "material_library.js").read_text(encoding="utf-8")
-    assert "/edit-note" in script and "data-action=\"note\"" in script
+    assert "/edit-note" in script and "edit-note-input" in script and "keepalive" in script
