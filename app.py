@@ -283,6 +283,8 @@ def version():
         "template_has_diagram_style_text": "図解スタイル" in upload_html,
         "output_dir": str(OUTPUT_DIR),
         "output_storage_mode": OUTPUT_STORAGE_MODE,
+        # 完了の知らせ（Chatwork）を送れる状態か。真偽値だけ・鍵の値は返さない（2026-11-20）
+        "job_notice_ready": bool(_notice_token()),
         "output_is_persistent": OUTPUT_IS_PERSISTENT,
         "data_dir_env": os.environ.get("DATA_DIR", ""),
         "subsk_gateway_enabled": subsk_enabled,
@@ -476,7 +478,8 @@ def _run_pipeline_thread(job_id: str, *args, **kwargs):
 
 # ====== 完了の知らせ（Chatwork） ======
 # 回が終わったら、そのチャンネルの Chatwork の部屋（channels.json の chatwork_room_id）へ知らせる。
-# 送信用の鍵は Render の環境変数 CHATWORK_API_TOKEN（無ければ知らせない）。
+# 送信用の鍵は Render の環境変数 CHATWORK_BOT_API_TOKEN（原稿スタジオと同じボット）、無ければ CHATWORK_API_TOKEN。
+# どちらも無ければ知らせず、ログに1行残す（2026-11-20：鍵が無くて黙って送らず、一度も届いていなかった）。
 PUBLIC_BASE_URL = os.environ.get("SENTENCE_PUBLIC_URL", "https://sentence.apprendre.jp").rstrip("/")
 
 
@@ -498,11 +501,20 @@ def _job_done_message(job_id: str, state: dict, rows: list, next_job: Optional[d
     return body + "[/info]"
 
 
+def _notice_token() -> str:
+    return (os.environ.get("CHATWORK_BOT_API_TOKEN", "").strip()
+            or os.environ.get("CHATWORK_API_TOKEN", "").strip())
+
+
 def _notify_job_done(job_id: str, next_job: Optional[dict] = None) -> bool:
-    token = os.environ.get("CHATWORK_API_TOKEN", "").strip()
+    token = _notice_token()
     state = _get_job_state(job_id)
     room = str((get_channel(state.get("channel_id", "")).get("defaults") or {}).get("chatwork_room_id") or "")
-    if not token or not room.isdigit() or state.get("status") not in ("completed", "error"):
+    if state.get("status") not in ("completed", "error"):
+        return False
+    if not token or not room.isdigit():
+        why = "送信の鍵（CHATWORK_BOT_API_TOKEN）が無い" if not token else "チャンネルに Chatwork の部屋が無い"
+        print(f"  [notify] {why}ため、完了の知らせを送りませんでした（{job_id}）", flush=True)
         return False
     rows = load_json(OUTPUT_DIR / job_id / "rows_progress.json", {"rows": []}).get("rows", [])
     body = _job_done_message(job_id, state, rows, next_job)

@@ -72,11 +72,40 @@ def test_stopped_job_message_points_to_resume():
 _REAL_NOTIFY = appmod._notify_job_done
 
 
-def test_no_notice_without_token(isolated, monkeypatch):
+def test_no_notice_without_token(isolated, monkeypatch, capsys):
     monkeypatch.delenv("CHATWORK_API_TOKEN", raising=False)
+    monkeypatch.delenv("CHATWORK_BOT_API_TOKEN", raising=False)
     (isolated / "j1").mkdir()
     appmod._set_job_state("j1", status="completed", channel_id="keizai", title="t")
     assert _REAL_NOTIFY("j1") is False  # 鍵が無ければ送らない（生成は止めない）
+    assert "送りませんでした" in capsys.readouterr().out  # 黙って送らないのではなく、ログに残す（2026-11-20）
+
+
+def test_bot_token_is_used_first(isolated, monkeypatch):
+    # 2026-11-20：原稿スタジオと同じボットの鍵を先に使う（無ければ CHATWORK_API_TOKEN）
+    monkeypatch.setenv("CHATWORK_BOT_API_TOKEN", "bot")
+    monkeypatch.setenv("CHATWORK_API_TOKEN", "owner")
+    (isolated / "j4").mkdir()
+    appmod._set_job_state("j4", status="completed", channel_id="keizai", title="t", generated=1, total_sentences=1)
+    sent = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=0):
+        sent["token"] = req.get_header("X-chatworktoken")
+        return FakeResponse()
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert _REAL_NOTIFY("j4") is True
+    assert sent["token"] == "bot"
 
 
 def test_notice_goes_to_the_channel_room(isolated, monkeypatch):
