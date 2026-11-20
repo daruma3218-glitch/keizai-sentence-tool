@@ -295,3 +295,7 @@ body:has(dialog[open]){overflow:hidden}
 .hidden-candidates-control input{width:auto;margin:0;accent-color:var(--accent,#28785c)}
 .candidate.candidate-hidden{border-style:dashed;background:#f4f5f4}
 .hidden-candidate-label{font-size:.8rem;color:#5c6863;margin:.2rem 0}
+/* 編集への指示：画像1枚ごとの、編集担当への指示と出典URL。コメントとは別に残る。 */
+.edit-note-label{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.7;color:#1f4d78;background:#e8f1fb;border-left:3px solid #6d9ccc;border-radius:4px;padding:6px 9px;margin:4px 0}
+.edit-note-button{display:block;margin:2px 0 6px;color:#1f4d78}
+.review-pane .edit-note-box{margin-top:6px}

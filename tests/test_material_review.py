@@ -95,7 +95,8 @@ def test_xlsx_embeds_images_and_literal_formula_like_manuscript(sample):
         assert b"TargetMode=\"External\"" not in archive.read("xl/drawings/_rels/drawing1.xml.rels")
     workbook = load_workbook(io.BytesIO(content))
     sheet = workbook.active
-    assert sheet.max_row == 7 and sheet.max_column == 13
+    assert sheet.max_row == 7 and sheet.max_column == 14
+    assert sheet["F1"].value == "編集への指示"
     assert sheet["C1"].value == "コメント" and sheet["C2"].value in (None, "")
     assert sheet["E4"].value.startswith("=HYPERLINK") and sheet["E4"].data_type == "s"
     assert sheet.freeze_panes == "D2" and sheet.row_dimensions[2].height == 126
@@ -109,7 +110,7 @@ def test_bad_images_are_visible_and_never_replaced_with_a_wrong_candidate(sample
     review.write_workbook(d, stream)
     workbook = load_workbook(stream)
     assert "読み込めません" in workbook.active["B7"].value
-    assert "画像要確認" in workbook.active["F7"].value
+    assert "画像要確認" in workbook.active["G7"].value
     workbook.close()
 
 
@@ -121,9 +122,9 @@ def test_csv_preserves_old_columns_and_appends_current_status(sample):
     rows = list(csv.reader(io.StringIO(response.data.decode("utf-8-sig"))))
     assert rows[0][:4] == ["章", "センテンス", "№", "画像"]
     assert rows[1][:4] == ["1", "元の原稿", "1", "old.png"]
-    assert rows[0][-4:] == ["画像URL", "生成・採用状態", "要修正メモ", "コメント"]
-    assert rows[1][-3:] == ["採用済み", "数字を確認", ""]
-    assert rows[2][-3] == "スキップ"
+    assert rows[0][-5:] == ["画像URL", "生成・採用状態", "編集への指示", "要修正メモ", "コメント"]
+    assert rows[1][-4:] == ["採用済み", "", "数字を確認", ""]
+    assert rows[2][-4] == "スキップ"
     assert (d / "result.csv").read_text(encoding="utf-8-sig") == raw
     response = client.get("/api/material-jobs/sample/review.csv")
     rows = list(csv.reader(io.StringIO(response.data.decode("utf-8-sig"))))

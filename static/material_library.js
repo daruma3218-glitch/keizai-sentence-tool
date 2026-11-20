@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id), esc = Studio.escape;
   const poseNames = {pointing:'指差し', thinking:'考える', surprised:'驚く', explaining:'両手で説明', good:'グッド'};
   const base = '/api/material-jobs/' + encodeURIComponent(window.materialJobId);
-  let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
+  let data = null, filter = 'all', busy = false, operation = null, flagNo = '', noteNo = '', noteCandidate = '', initialView = true, canSavePosition = false;
   const storageKey = 'material.selection.v1.' + window.materialJobId;
   const pendingKey = 'material.pending.v1.' + window.materialJobId;
   const pending = new Map(), watching = new Set();
@@ -152,7 +152,7 @@
   function setBusy(value) {
     busy = value;
     $('comment-review-start').disabled = value || !firstCommentRow;
-    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
+    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #review-note, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
     updateReviewNavigation();
     updateOperations();
   }
@@ -228,6 +228,8 @@
             (hidden ? '<p class="hidden-candidate-label">非表示</p>' : '') +
             (poseNames[c.presenter?.pose_id] ? '<p class="hint">すあし社長：' + esc(poseNames[c.presenter.pose_id]) + '</p>' : '') +
             '<button type="button" class="button wide candidate-comments" data-action="comments">' + esc(comments.label(c.id)) + '</button>' +
+            (hidden ? '' : (lib.edit_notes?.[c.id] ? '<p class="edit-note-label">' + esc(lib.edit_notes[c.id]) + '</p>' : '') +
+              '<button type="button" class="text-button edit-note-button" data-action="note">' + (lib.edit_notes?.[c.id] ? '編集への指示を変更' : '編集への指示を書く') + '</button>') +
             (hidden ? '<button class="button wide" data-action="restore">候補に戻す</button>' :
               '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
               '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><div class="candidate-more-actions"><button data-action="flip">左右反転</button><button data-action="hide" data-visibility-locked="' + chosen + '"' + (chosen ? ' disabled title="採用を解除してから非表示にできます"' : '') + '>候補から非表示</button></div></details></div>') +
@@ -296,6 +298,7 @@
     if (action === 'preview' || action === 'compare' || action === 'comments') {
       openReview(no, candidate?.id, action === 'comments' ? 'comments' : 'compare');
     } else if (['generate','edit','flip','upload'].includes(action)) variant(no, action, candidate);
+    else if (action === 'note') openNote(no, id);
     else if (action === 'flag') {
       flagNo = no;
       $('flag-note').value = data.library.flags[no] || '';
@@ -370,7 +373,12 @@
     $('review-visibility').disabled = busy || !focused || focused.id === chosen;
     $('review-visibility').title = focused?.id === chosen ? '採用を解除してから非表示にできます' : '';
     $('review-show-hidden').hidden = !!focused || !MaterialView.candidates(data.library, reviewNo, true).length;
-    $('review-chosen').textContent = isHidden ? '非表示の候補 · 候補に戻すと採用できます' : focused?.id === chosen ? '✓ 採用中の画像' :
+    const focusedNote = focused ? data.library.edit_notes?.[focused.id] || '' : '';
+    $('review-note').hidden = !focused || isHidden;
+    $('review-note').textContent = focusedNote ? '編集への指示を変更' : '編集への指示を書く';
+    $('review-note-text').hidden = !focusedNote || isHidden;
+    $('review-note-text').textContent = focusedNote;
+    $('review-chosen').textContent = isHidden ?'非表示の候補 · 候補に戻すと採用できます' : focused?.id === chosen ? '✓ 採用中の画像' :
       $('preview-dialog').dataset.mode === 'comments' ? '未採用の候補' : '採用すると、この場面で使う画像として保存されます。';
     comments.selectImage(reviewNo, reviewCandidate);
     const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
@@ -494,6 +502,31 @@
     $('flag-dialog').close(); select(flagNo, 'flag', undefined, $('flag-note').value.trim());
   });
   $('clear-flag').addEventListener('click', () => { if (!busy) { $('flag-dialog').close(); select(flagNo, 'unflag'); } });
+  function openNote(no, candidateId) {
+    const candidates = data.library.candidates[no] || [], index = candidates.findIndex(c => c.id === candidateId);
+    if (index < 0) return;
+    noteNo = no; noteCandidate = candidateId;
+    const note = data.library.edit_notes?.[candidateId] || '';
+    $('note-target').textContent = '場面 ' + String(no).padStart(3,'0') + ' · 候補 ' + (index + 1) +
+      (data.library.selections[no] === candidateId ? '（採用中）' : '（未採用。採用すると編集担当に渡ります）');
+    $('edit-note').value = note;
+    $('clear-note').hidden = !note;
+    $('note-dialog').showModal();
+    $('edit-note').focus();
+  }
+  async function saveNote(note) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      applyPayload(await Studio.api(base + '/edit-note', {method:'POST', body:JSON.stringify({no:noteNo, candidate_id:noteCandidate, note})}));
+      $('note-dialog').close();
+      Studio.notice(note ? '編集への指示を保存しました。' : '編集への指示を消しました。');
+    } catch (error) { Studio.notice(error.message, true); }
+    finally { setBusy(false); }
+  }
+  $('note-form').addEventListener('submit', event => { event.preventDefault(); saveNote($('edit-note').value.trim()); });
+  $('clear-note').addEventListener('click', () => saveNote(''));
+  $('review-note').addEventListener('click', () => { if (!busy && reviewNo && reviewCandidate) openNote(reviewNo, reviewCandidate); });
   document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
     filter = button.dataset.filter;
     draw(); savePosition();

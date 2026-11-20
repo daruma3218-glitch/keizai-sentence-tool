@@ -234,6 +234,13 @@ def register(module):
         store.selection_change(job(job_id), request.get_json(silent=True) or {})
         return jsonify(payload(job(job_id)))
 
+    @bp.route("/api/material-jobs/<job_id>/edit-note", methods=["POST"])
+    @module.login_required
+    def edit_note(job_id):
+        # Directions for the editor (and web source URLs), one per image. Not part of undo.
+        store.edit_note_change(job(job_id), request.get_json(silent=True) or {})
+        return jsonify(payload(job(job_id)))
+
     def comment_actor():
         email = cloudflare_access.verified_email(request.headers)
         if not email and cloudflare_access.required():
@@ -482,13 +489,15 @@ def register(module):
                 archive.writestr("material-handoff.json", json.dumps(data, ensure_ascii=False, indent=2))
                 stream = io.StringIO()
                 writer = csv.writer(stream)
-                writer.writerow(["章", "番号", "原稿", "表示", "採用画像", "出典", "クレジット", "版", "要修正メモ", "コメント"])
-                review_notes = {str(r["values"][0]): r["values"][-1] for r in material_review.review_rows(d, comments="none")[1]}
+                writer.writerow(["章", "番号", "原稿", "表示", "採用画像", "編集への指示", "出典", "クレジット", "版", "要修正メモ", "コメント"])
+                memo = material_review.HEADERS.index("要修正メモ")
+                review_notes = {str(r["values"][0]): r["values"][memo] for r in material_review.review_rows(d, comments="none")[1]}
                 for row in data["rows"]:
                     asset = row["asset"] or {}
                     filename = asset.get("filename", "")
                     writer.writerow([material_review.csv_text(v) for v in [row["chapter_index"], row["no"], row["sentence"], row["display"],
-                                     filename, asset.get("web_source_url", ""), asset.get("attribution", ""), asset.get("sha256", ""), review_notes.get(str(row["no"]), ""), ""]])
+                                     filename, row.get("edit_note", ""), asset.get("web_source_url", ""), asset.get("attribution", ""),
+                                     asset.get("sha256", ""), review_notes.get(str(row["no"]), ""), ""]])
                 archive.writestr("採用素材.csv", "\ufeff" + stream.getvalue())
                 for filename in {r["asset"]["filename"] for r in data["rows"] if r["asset"]}:
                     archive.write(store.safe_path(d, filename), filename)

@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from PIL import Image
 from safe_images import open_image
 
-VERSION = "2026-11-11.1"
+VERSION = "2026-11-20.1"
 LOCK = threading.RLock()
 CHANNELS = {
     "otona": {"id": "otona", "source_id": "otona", "name": "大人の学び直しTV", "color": "#305a75",
@@ -156,6 +156,7 @@ def load_library(job_dir):
     # the user is making while generation runs in the background.
     library.setdefault("selection_revision", library["revision"])
     library.setdefault("hidden_candidates", {})
+    library.setdefault("edit_notes", {})
     return library
 
 
@@ -289,6 +290,42 @@ def selection_change(job_dir, body):
         return lib
 
 
+EDIT_NOTE_MAX = 1000
+
+
+def clean_edit_note(value):
+    """One free-text field per image: directions for the editor and web source URLs."""
+    note = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    note = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", note).strip()
+    if len(note) > EDIT_NOTE_MAX:
+        raise ValueError(f"編集への指示は{EDIT_NOTE_MAX}字までです")
+    return note
+
+
+def edit_note_change(job_dir, body):
+    """Save or clear the editor note of one image. Notes follow the image, not the scene."""
+    with LOCK:
+        lib = load_library(job_dir)
+        no = str(body.get("no"))
+        if not any(str(r.get("no")) == no for r in source_rows(job_dir)):
+            raise ValueError("場面が見つかりません")
+        picked = candidate(lib, no, body.get("candidate_id"))
+        note = clean_edit_note(body.get("note"))
+        if note == lib["edit_notes"].get(picked["id"], ""):
+            return lib
+        if note:
+            lib["edit_notes"][picked["id"]] = note
+        else:
+            lib["edit_notes"].pop(picked["id"], None)
+        commit_library(job_dir, lib, "edit_note", {"no": no, "candidate_id": picked["id"]})
+        return lib
+
+
+def selected_edit_note(lib, no, display="image"):
+    chosen = lib["selections"].get(str(no))
+    return lib.get("edit_notes", {}).get(chosen, "") if chosen and display == "image" else ""
+
+
 def selection_hash(job_dir, lib=None):
     """Stable export identity, excluding unused candidates and operation history."""
     lib = lib if lib is not None else load_library(job_dir)
@@ -297,6 +334,11 @@ def selection_hash(job_dir, lib=None):
     contents = {"rows": [{k: row.get(k) for k in row_keys} for row in source_rows(job_dir)],
                 "selections": selected, "display": lib["display"], "flags": lib["flags"],
                 "source_job_status": (read(Path(job_dir) / "job.json", {}) or {}).get("status", "unknown")}
+    notes = {no: lib.get("edit_notes", {}).get(cid) for no, cid in lib["selections"].items()
+             if lib.get("edit_notes", {}).get(cid)}
+    if notes:
+        # Only notes of adopted images reach the editor. Older exports keep their identity.
+        contents["edit_notes"] = notes
     return hashlib.sha256(json.dumps(contents, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -335,6 +377,7 @@ def handoff(job_dir):
         rows.append({"no": r["no"], "chapter_index": r.get("chapter_index", 0),
                      "block_index": r.get("block_index", 0), "sentence": r.get("sentence", ""),
                      "display": display, "asset": asset if display == "image" else None,
+                     "edit_note": selected_edit_note(lib, no, display),
                      "hold_asset_id": previous["id"] if display == "hold" and previous else None,
                      "estimated_start": r.get("est_start"), "timing_status": "narration_alignment_required"})
     status = state.get("status", "unknown")

@@ -16,7 +16,7 @@ from material_comments import export_lines
 from safe_images import open_image
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-HEADERS = ["番号", "画像プレビュー", "コメント", "スタジオのコメント", "原稿", "状態", "表示", "章", "種類",
+HEADERS = ["番号", "画像プレビュー", "コメント", "スタジオのコメント", "原稿", "編集への指示", "状態", "表示", "章", "種類",
            "画像URL", "出典", "クレジット", "要修正メモ"]
 STATUS = {"ok": "生成済み・未採用", "failed": "生成失敗", "pending": "未生成",
           "generating": "生成中", "skipped": "スキップ", "skip": "スキップ",
@@ -91,7 +91,9 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
             else:
                 previous = (path, image_url, source, credit, checksum) if path else None
             note = library["flags"].get(no) or row.get("verify_reason") or row.get("error", "")
-            rows.append({"values": [row["no"], "", "", discussions.get(no, ""), row.get("sentence", ""), status,
+            # The note belongs to the image shown in this row. A continued scene reuses the earlier note's row.
+            edit_note = library["edit_notes"].get(candidate["id"], "") if candidate and mode == "image" else ""
+            rows.append({"values": [row["no"], "", "", discussions.get(no, ""), row.get("sentence", ""), edit_note, status,
                                      DISPLAY.get(mode, mode), row.get("chapter_title") or chapter,
                                      ROUTES.get(row.get("route"), row.get("route", "")),
                                      image_url, source, credit, note], "path": path, "sha256": checksum})
@@ -124,10 +126,11 @@ def extend_legacy_csv(job_dir, raw_csv):
     no_index = next((header.index(key) for key in ("№", "番号", "No", "no") if key in header), None)
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
-    writer.writerow(header + ["画像URL", "生成・採用状態", "要修正メモ", "コメント"])
+    writer.writerow(header + ["画像URL", "生成・採用状態", "編集への指示", "要修正メモ", "コメント"])
     for existing in reader:
         values = by_no.get(str(existing[no_index]) if no_index is not None and len(existing) > no_index else "")
-        extra = [values[HEADERS.index(key)] for key in ("画像URL", "状態", "要修正メモ", "コメント")] if values else [""] * 4
+        keys = ("画像URL", "状態", "編集への指示", "要修正メモ", "コメント")
+        extra = [values[HEADERS.index(key)] for key in keys] if values else [""] * len(keys)
         writer.writerow([csv_text(value) for value in existing + extra])
     return ("\ufeff" + stream.getvalue()).encode("utf-8")
 
@@ -148,7 +151,8 @@ def write_workbook(job_dir, destination, comments="all"):
     sheet.freeze_panes = "D2"
     sheet.sheet_view.showGridLines = False
     sheet.append(HEADERS)
-    widths = [8, 38, 38, 52, 65, 22, 22, 24, 14, 30, 30, 24, 35]
+    widths = [8, 38, 38, 52, 65, 45, 22, 22, 24, 14, 30, 30, 24, 35]
+    note_column = HEADERS.index("編集への指示") + 1
     for column, width in enumerate(widths, 1):
         sheet.column_dimensions[get_column_letter(column)].width = width
         cell = sheet.cell(1, column)
@@ -180,7 +184,8 @@ def write_workbook(job_dir, destination, comments="all"):
                 cell.data_type = "s"  # Manuscripts beginning with '=' are not formulas.
                 cell.font = Font(name="Arial", size=11, color="202B28")
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
-                cell.fill = PatternFill("solid", fgColor="FFF5CD" if column == 3 else ("F4F8F6" if index % 2 == 0 else "FFFFFF"))
+                cell.fill = PatternFill("solid", fgColor="FFF5CD" if column == 3 else "E8F1FB" if column == note_column and literal
+                                        else ("F4F8F6" if index % 2 == 0 else "FFFFFF"))
             path = row["path"]
             if path:
                 try:
