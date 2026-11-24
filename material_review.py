@@ -61,11 +61,13 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
             candidate = store.candidate(library, no, chosen) if chosen else (candidates[-1] if candidates else None)
             path, image_url, source, credit, checksum = None, "", row.get("web_source_url", ""), row.get("attribution", ""), ""
             status = STATUS.get(row.get("status", ""), row.get("status") or "未生成")
+            route = row.get("route", "")
             if candidate:
                 path = store.safe_path(d, candidate["filename"])
                 checksum = candidate["sha256"]
                 image_url = origin + "/materials/asset/" + quote(d.name, safe="") + "/" + quote(candidate["id"], safe="")
                 source, credit = candidate.get("web_source_url", source), candidate.get("attribution", credit)
+                route = candidate.get("route") or route
                 status = "採用済み" if chosen else "候補あり・未採用"
             elif library["candidates"].get(no):
                 # Do not reintroduce a hidden original through the legacy fallback.
@@ -78,7 +80,7 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
                     status = "生成済み・未採用"
             if mode == "hold":
                 if previous:
-                    path, image_url, source, credit, checksum = previous
+                    path, image_url, source, credit, checksum, route = previous
                     status = "前の素材を継続"
                 else:
                     path, image_url, checksum = None, "", ""
@@ -89,13 +91,13 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
                 previous = None
                 status = ("素材なし・候補あり" if path else STATUS.get(row.get("status"), "素材なし"))
             else:
-                previous = (path, image_url, source, credit, checksum) if path else None
+                previous = (path, image_url, source, credit, checksum, route) if path else None
             note = library["flags"].get(no) or row.get("verify_reason") or row.get("error", "")
             # The note belongs to the image shown in this row. A continued scene reuses the earlier note's row.
             edit_note = library["edit_notes"].get(candidate["id"], "") if candidate and mode == "image" else ""
             rows.append({"values": [row["no"], "", "", discussions.get(no, ""), row.get("sentence", ""), edit_note, status,
                                      DISPLAY.get(mode, mode), row.get("chapter_title") or chapter,
-                                     ROUTES.get(row.get("route"), row.get("route", "")),
+                                     ROUTES.get(route, route),
                                      image_url, source, credit, note], "path": path, "sha256": checksum})
         context = store.read(d / "material_context.json", {}) or {}
         manifest = store.read(d / "manifest.json", {}) or {}

@@ -79,6 +79,23 @@
     <div id="review-reference" class="review-pane"><label for="review-reference-id">比較する候補</label><select id="review-reference-id"></select><img id="review-reference-image" alt="比較する候補の拡大表示"><button id="review-use-reference" type="button" class="button review-use-reference">この候補を選ぶ →</button></div>
     <div class="review-pane review-choice"><div class="review-image-tools"><label id="review-candidate-label" for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><button type="button" id="comment-script-toggle" class="text-button" aria-expanded="false" aria-controls="comment-script" hidden>原稿<span aria-hidden="true">⌄</span></button></div><img id="preview-image" alt="表示中の候補画像"><p id="comment-script" hidden></p><p id="review-chosen" class="hint"></p>
       {% if channel.id == 'economy' %}<button type="button" id="review-mark" class="button compact">囲んで直す</button>{% endif %}
+      {% if channel.id == 'russia' %}
+      <div id="review-image-actions" hidden>
+        <div class="quick-image-buttons" role="group" aria-label="表示中の候補を直す">
+          <button type="button" class="button compact" data-edit="flip" title="文字も左右反転します">左右反転<small>費用なし</small></button>
+          <button type="button" class="button compact" data-edit="remove_text">文字を全部消す<small>画像1枚分</small></button>
+          <button type="button" class="button compact" data-edit="add_icons">各ボックスにアイコンを追加<small>画像1枚分</small></button>
+          <button type="button" class="button compact" data-edit="instruct">指示して直す</button>
+        </div>
+        <p class="hint">同じ原稿から別の候補を作る</p>
+        <div class="quick-image-buttons" role="group" aria-label="別の種類で作り直す">
+          {% for key, label in [('diagram','図解'),('illustration','イラスト'),('realphoto','実写風'),('map','地図')] %}
+          <button type="button" class="button compact" data-type="{{ key }}"><span>{{ label }}</span><small>{{ '画像代なし' if key == 'map' else '画像1枚分' }}</small></button>
+          {% endfor %}
+        </div>
+        <p id="review-operation" class="hint" role="status" hidden></p>
+      </div>
+      {% endif %}
       <button type="button" id="review-visibility" class="text-button">候補から非表示</button><div id="review-note-box" class="note-field" hidden><textarea id="review-note-input" class="edit-note-input" rows="1" maxlength="1000" placeholder="✎ 編集への指示・出典URL" aria-label="編集への指示・出典URL"></textarea><span class="note-state" aria-live="polite"></span></div></div>
       <section id="image-comments" class="comment-panel" aria-labelledby="comment-heading">
         <h3 id="comment-heading" class="sr-only">この画像のコメント</h3>
@@ -114,10 +131,10 @@
 <dialog id="export-dialog" aria-labelledby="export-title"><div class="dialog-heading"><h2 id="export-title">途中の採用素材を書き出します</h2><button class="icon-button" data-close="export-dialog" aria-label="閉じる">×</button></div><p id="export-warning"></p><p class="hint">採用されている素材だけを書き出します。要修正の採用画像も含まれます。素材の準備完了・動画の最終承認にはなりません。</p><div class="actions"><button class="button" data-close="export-dialog" type="button">確認を続ける</button><button class="button dark" id="export-confirm" type="button">途中版として書き出す</button></div></dialog>
 {% endblock %}
 {% block scripts %}
-<script>window.materialJobId = {{ job_id | tojson }};</script>
+<script>window.materialJobId = {{ job_id | tojson }}; window.materialChannelId = {{ channel.id | tojson }};</script>
 <script src="{{ url_for('static', filename='material_view.js') }}"></script>
 <script src="{{ url_for('static', filename='material_comments.js') }}"></script>
 {% if channel.id == 'economy' %}<script src="{{ url_for('static', filename='material_regions.js', v='20261124') }}"></script>{% endif %}
-<script src="{{ url_for('static', filename='material_library.js', v='20261124') }}"></script>
+<script src="{{ url_for('static', filename='material_library.js', v='20261124r') }}"></script>
 <script src="{{ url_for('static', filename='material_sheet_export.js') }}"></script>
 {% endblock %}

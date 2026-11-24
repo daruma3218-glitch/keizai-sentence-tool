@@ -1,5 +1,13 @@
 # assets/geo — 地図データ（v3 Step2）
 
+ロシアの素材選びで手動の「地図」を押したときは、図解スタジオの
+`geodata/countries.json` と同じ `russia-countries.json` を使う。
+Natural Earth 1:10m Admin 0 Countries（日本の立場版・パブリックドメイン）を出典に、
+図解スタジオで南樺太と千島列島の帰属未定部分を分けたデータ。
+2026-11-24 の移植元は zukai-tool `4c19cc0`。データの SHA-256 は
+`a01804909d67a94ea2b49304715e7658ab28c487facdc725d91605b76497281d`。
+自動生成用の既存データは下記のファイルを使う。
+
 `renderer.py` の map 描画に使う国境データ。
 
 ## ファイル

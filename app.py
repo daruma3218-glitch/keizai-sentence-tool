@@ -272,7 +272,7 @@ def version():
         "material_studio": {"version": material_store.VERSION, "entry": "/materials",
                             "immutable_candidates": True, "handoff_schema": 1,
                             "background_candidates": True, "selection_revision": True,
-                            "edit_notes": True},
+                            "edit_notes": True, "russia_image_actions": True},
         "image_generation": {**generation_status(), "operation_slots": studio_operations.limit(),
                              "accepted_operations_limit": studio_operations.queue_limit()},
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),

@@ -27,7 +27,7 @@ TESTS = ["migration_entry", "deploy_guard", "auth_json", "block_download",
          # 2026-11-19 手直しは依頼だけを元画像に当てる・章題の印の行は画像の対象にしない（さゆみさんの①②）
          "instruction_edit", "chapter_headings",
          # 2026-11-20 画像1枚ごとの「編集への指示」（指示と出典URL）をスプシ・CSV・ZIPへ（さゆみさんの③）
-         "edit_notes", "material_regions"]
+         "edit_notes", "material_regions", "russia_materials"]
 
 if __name__ == "__main__":
     # Build containers cannot mount /data. Tests must never inherit production

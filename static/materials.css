@@ -306,4 +306,11 @@ body:has(dialog[open]){overflow:hidden}
 .note-field[data-state="error"] .edit-note-input{border-color:#c0392b}
 .note-field[data-state="error"] .note-state{color:#b03a2e}
 .review-pane .note-field{margin-top:10px}
+
+#review-image-actions { margin:12px 0; text-align:left; }
+#review-image-actions .hint { margin:8px 0 4px; }
+.quick-image-buttons { display:flex; flex-wrap:wrap; gap:6px; }
+.quick-image-buttons .button { display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; width:auto; min-height:44px; padding:5px 10px; font-size:.88rem; line-height:1.35; }
+.quick-image-buttons [data-type] { color:#1a6254; border-color:#8db5a9; }
+.quick-image-buttons small { display:block; color:#54655d; font-size:.72rem; }
 .candidate:not(.selected) .edit-note-input:not(:focus){opacity:.55}

@@ -18,6 +18,7 @@ import material_comments
 import material_history
 import material_review
 import material_regions
+import russia_materials
 from character_refs import edit_subject
 from channel_styles import resolve_style, style_choices
 from safe_images import open_image
@@ -310,9 +311,22 @@ def register(module):
             raise ValueError("素材を読み込んでから操作してください")
         extra = body.get("instruction", "").strip()[:2000]
         count = 2 if body.get("count") == "2" else 1
+        ch = store.channel(context.get("channel_id") or context.get("source_channel_id"))
+        preset = body.get("preset", "")
+        target_type = body.get("target_type", "")
+        if preset or target_type:
+            if ch["id"] != "russia" or count != 1 or (preset and target_type):
+                raise ValueError("ロシアの画像操作は、表示中の候補に1枚ずつ使えます")
+            if preset:
+                if kind != "edit" or preset not in russia_materials.EDIT_PRESETS:
+                    raise ValueError("この手直しは選べません")
+                extra = russia_materials.EDIT_PRESETS[preset][1]
+            if target_type and (kind != "generate" or target_type not in russia_materials.TYPE_LABELS):
+                raise ValueError("作り直す種類を選んでください")
+            if target_type and not str(row.get("sentence") or "").strip():
+                raise ValueError("この場面に作り直し元の原稿がありません")
         if kind == "edit" and not extra:
             raise ValueError("直したい内容を入力してください")
-        ch = store.channel(context.get("channel_id") or context.get("source_channel_id"))
         scope = body.get("edit_scope", "whole")
         person = body.get("edit_person", "auto")
         if scope not in ("whole", "regions") or person not in ("auto", "ordinary", "professor"):
@@ -331,17 +345,6 @@ def register(module):
         pose_override = body.get("suasi_pose", "").strip()
         if pose_override and (pose_override not in POSE_NAMES or not is_suasi_style(defaults.get("worldview_desc", ""))):
             raise ValueError("この素材で使える表情・ポーズを選んでください")
-        route = row.get("route")
-        if route not in {"diagram", "illustration", "realphoto"}:
-            route = "diagram"
-        if route == "realphoto" and not defaults.get("allow_ai_realphoto", True):
-            route = "illustration"
-        type_providers, _ = module._effective_type_providers(defaults, keys)
-        provider = type_providers.get(route) or defaults.get("provider") or "gpt-image"
-        if provider not in {"gpt-image", "nanobanana"}:
-            raise ValueError("画像生成の設定を確認してください")
-        if kind in {"generate", "edit"} and not keys["openai" if provider == "gpt-image" else "gemini"]:
-            raise ValueError("このチャンネルの画像生成設定が未完了です")
         with store.LOCK:
             lib = store.load_library(d)
             old = lib["requests"].get(request_id)
@@ -357,11 +360,30 @@ def register(module):
             if not 0 <= int(body.get("revision", -1)) <= lib["revision"]:
                 raise ValueError("別の操作で更新されています。読み込み直してください")
             source = None
-            if kind in {"edit", "flip"}:
+            if kind in {"edit", "flip"} or target_type:
                 source = store.candidate(lib, no, body.get("candidate_id"))
+            if (preset or target_type) and source["id"] in lib.get("hidden_candidates", {}):
+                raise ValueError("候補に戻してから手直ししてください")
+            source_type = (source or {}).get("route") or row.get("route")
+            variant_offset = sum(c.get("route") == target_type for c in lib["candidates"].get(no, [])) if target_type else 0
+            route = target_type or source_type
+            if route not in {"diagram", "illustration", "realphoto"}:
+                route = "diagram"
+            if route == "realphoto" and not defaults.get("allow_ai_realphoto", True):
+                if target_type:
+                    raise ValueError("この案件の設定では実写風を生成できません")
+                route = "illustration"
+            uses_image_ai = kind in {"generate", "edit"} and target_type != "map"
+            if uses_image_ai:
+                type_providers, _ = module._effective_type_providers(defaults, keys)
+                provider = type_providers.get(route) or defaults.get("provider") or "gpt-image"
+                if provider not in {"gpt-image", "nanobanana"} or not keys["openai" if provider == "gpt-image" else "gemini"]:
+                    raise ValueError("このチャンネルの画像生成設定が未完了です")
             lib["requests"][request_id] = {"status": "running", "kind": kind, "no": no,
                                           "operation_id": request.environ.get("studio.operation", ""),
-                                          "requested_images": count if kind in {"generate", "edit"} else 0,
+                                          "requested_images": count if uses_image_ai else 0,
+                                          **({"preset": preset} if preset else {}),
+                                          **({"target_type": target_type} if target_type else {}),
                                           "started_at": store.now(), "cost_amount": None}
             store.commit_library(d, lib, "operation_started", {"request_id": request_id})
             ACTIVE.add(scene_key)
@@ -386,13 +408,21 @@ def register(module):
                 with open_image(store.safe_path(d, source["filename"])) as im:
                     with ImageOps.mirror(im) as mirrored:
                         mirrored.save(target)
-                produced.append((target, "左右反転", {"parent_id": source["id"]}))
+                preserved = {k: source[k] for k in ("route", "web_source_url", "attribution", "license") if k in source}
+                produced.append((target, "左右反転", {**preserved, "parent_id": source["id"], "request_id": request_id}))
+            elif target_type == "map":
+                target = output / "map.png"
+                notes = russia_materials.make_map(row["sentence"], target, no_text=bool(defaults.get("no_image_text")))
+                produced.append((target, "地図", {"parent_id": source["id"], "route": "map", "origin": "data_map",
+                                                 "request_id": request_id, "attribution": "Natural Earth（日本の立場版）",
+                                                 "web_source_url": "", "map_notes": notes}))
             else:
                 from generator import run_parallel_generation
-                source_path = store.safe_path(d, source["filename"]) if source else None
+                source_path = store.safe_path(d, source["filename"]) if kind == "edit" else None
                 locked = defaults.get("worldview_desc", "") if defaults.get("style_lock") else ""
                 prompts = [{"index": i, "prompt": module._build_scene_fix_prompt(
-                    row.get("sentence", ""), route, i, extra, defaults, fix_mode="same_style",
+                    row.get("sentence", ""), route, i + variant_offset, extra, defaults,
+                    fix_mode="balanced" if target_type else "same_style",
                     style_locked=bool(locked)), "type": route, "section": row.get("chapter_title", ""),
                     # 追加の候補も元の場面と同じ段落の背景色に（2026-11-15。無いと1・2番目の色になっていた）
                     "chapter_index": row.get("chapter_index"), "block_index": row.get("block_index"),
@@ -400,7 +430,7 @@ def register(module):
                     "suasi_pose": pose_override or row.get("suasi_pose", ""),
                     "suasi_pose_reason": "編集画面で選択" if pose_override else row.get("suasi_pose_reason", ""),
                     "suasi_pose_override": bool(pose_override),
-                    "diagram_blueprint": row.get("diagram_blueprint", {}),
+                    "diagram_blueprint": row.get("diagram_blueprint", {}) if not target_type else {},
                     "style": defaults.get("style_preset", "flat_infographic"), "character": False,
                     "edit_source": kind == "edit",
                     # 手直しは依頼だけを元画像に当て、ほかは変えない（2026-11-19・generator.instruction_edit_prompt）
@@ -425,7 +455,7 @@ def register(module):
                         reference_image_path=str(reference) if reference and reference.exists() else None,
                         edit_image_path=str(source_path) if source_path else None,
                         **({"region_edit": region} if region else {}),
-                        realphoto_watermark=bool(defaults.get("realphoto_watermark")) and route == "realphoto",
+                        realphoto_watermark=bool(defaults.get("realphoto_watermark", ch["id"] == "russia")) and route == "realphoto",
                         style_lock_text=locked)
                 for result in results:
                     if result.get("success") and result.get("filename"):
@@ -433,8 +463,17 @@ def register(module):
                         if region:
                             material_regions.restore_outside(source_path, path, region, polygons)
                         label = "部分修正案" if region else ("手直し案" if kind == "edit" else "追加の候補")
+                        if preset:
+                            label = russia_materials.EDIT_PRESETS[preset][0]
+                        elif target_type:
+                            label = russia_materials.TYPE_LABELS[target_type] + "の別案"
+                        credit = {}
+                        if ch["id"] == "russia":
+                            credit = {k: (source or {}).get(k, "") if kind == "edit" else ""
+                                      for k in ("web_source_url", "attribution", "license")}
                         produced.append((path, label,
-                                         {"parent_id": source["id"] if source else None, "origin": "ai",
+                                         {**credit, "parent_id": source["id"] if source else None, "origin": "ai",
+                                          "route": source_type if kind == "edit" and source_type else route,
                                           "provider": provider, "request_id": request_id,
                                           "presenter": result.get("presenter")}))
                 if not produced:
@@ -452,7 +491,7 @@ def register(module):
                 lib = store.load_library(d)
                 lib["requests"][request_id].update(status="failed", finished_at=store.now())
                 store.commit_library(d, lib, "operation_failed", {"request_id": request_id})
-            if isinstance(exc, material_regions.RegionEditError):
+            if isinstance(exc, (material_regions.RegionEditError, russia_materials.MapUnavailable)):
                 raise
             raise ValueError("候補の作成に失敗しました。元画像・採用状態を保持しました。再読込で結果を確認してください")
         finally:

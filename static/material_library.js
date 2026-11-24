@@ -5,6 +5,7 @@
   const base = '/api/material-jobs/' + encodeURIComponent(window.materialJobId);
   let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
   const regionEditor = window.MaterialRegions?.(valid => { $('variant-submit').disabled = busy || !valid; });
+  const imageActions = window.materialChannelId === 'russia' ? $('review-image-actions') : null;
   const storageKey = 'material.selection.v1.' + window.materialJobId;
   const pendingKey = 'material.pending.v1.' + window.materialJobId;
   // 編集への指示：書きかけ（まだ保存していない文）・保存待ちのタイマー・画像の場面番号
@@ -53,6 +54,15 @@
     });
     $('operation-state').hidden = !active.size;
     if (regionEditor && $('preview-dialog').open) $('review-mark').disabled = busy || active.has(reviewNo);
+    if (imageActions && !imageActions.hidden) {
+      const op = sceneOperation(reviewNo);
+      imageActions.querySelectorAll('button').forEach(button => {
+        button.disabled = busy || active.has(reviewNo);
+      });
+      const status = $('review-operation');
+      status.hidden = !op;
+      status.textContent = op ? (op.error || labels[op.state] || labels.running) : '';
+    }
     $('operation-state').dataset.tone = 'working';
     $('operation-state').textContent = active.size + ' 場面の候補を作成・確認中です。ほかの場面の確認・採用・候補追加を続けられます。';
   }
@@ -109,14 +119,29 @@
       try {
         const latest = await Studio.api(base, {cache:'no-store'});
         const saved = latest.library.requests[op.request_id];
-        if (saved?.status === 'completed') pending.delete(op.request_id);
+        if (saved?.status === 'completed') {
+          pending.delete(op.request_id);
+          const added = latest.library.candidates[String(op.no)]?.find(c => c.request_id === op.request_id);
+          if (added && op.source_id && $('preview-dialog').open && $('preview-dialog').dataset.mode === 'compare' &&
+              reviewNo === String(op.no) && reviewCandidate === op.source_id &&
+              !document.activeElement?.matches('textarea, input')) {
+            reviewReference = op.source_id; reviewCandidate = added.id;
+          }
+        }
         else if (saved?.status === 'failed' && pending.has(op.request_id)) {
           op.state = 'failed'; op.error ||= '候補を作成できませんでした。元画像と採用状態は保持しています。';
         }
         savePending(); applyPayload(latest, true);
+        if (op.source_id && $('preview-dialog').open) renderReview();
       }
       catch (_) { Studio.notice('候補の表示を更新できませんでした。「素材を読み込む」で確認してください。', true); }
     }
+  }
+  function queueCandidate(submitted, body, sourceId = '') {
+    for (const [id, op] of pending) if (String(op.no) === String(submitted.no) && op.state === 'failed') pending.delete(id);
+    const op = {request_id:submitted.request_id, no:submitted.no, kind:submitted.kind, source_id:sourceId, state:'submitting'};
+    pending.set(op.request_id, op); savePending(); updateOperations();
+    runPending(op, body);
   }
   function resumePending() {
     for (const [request_id, op] of Object.entries(data?.library.requests || {})) {
@@ -379,6 +404,16 @@
     $('review-candidate-id').value = reviewCandidate; $('review-reference-id').value = reviewReference;
     const focused = candidates.find(c => c.id === reviewCandidate), reference = candidates.find(c => c.id === reviewReference);
     const isHidden = !!data.library.hidden_candidates?.[focused?.id];
+    if (imageActions) {
+      imageActions.hidden = reading || !focused || isHidden;
+      const type = focused?.route || row.route;
+      imageActions.querySelectorAll('[data-type]').forEach(button => {
+        button.hidden = !row.sentence || (button.dataset.type === type && type !== 'diagram') ||
+          (button.dataset.type === 'realphoto' && (data.context?.generation_settings?.allow_ai_realphoto ?? data.context?.profile?.allow_ai_realphoto) === false);
+      });
+      imageActions.querySelector('[data-type="diagram"] span').textContent = type === 'diagram' ? '図解（再生成）' : '図解';
+      updateOperations();
+    }
     if (focused) $('preview-image').src = src(focused); else $('preview-image').removeAttribute('src');
     const showReference = !!reference && $('preview-dialog').dataset.mode !== 'comments';
     if (showReference) $('review-reference-image').src = src(reference); else $('review-reference-image').removeAttribute('src');
@@ -445,6 +480,23 @@
   }
   $('review-next').addEventListener('click', reviewNext);
   $('review-candidate-id').addEventListener('change', event => { reviewCandidate = event.target.value; renderReview(); });
+  imageActions?.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled || busy) return;
+    const current = sceneOperation(reviewNo);
+    if (current && current.state !== 'failed') return;
+    const candidate = sceneCandidates(reviewNo).find(c => c.id === reviewCandidate);
+    if (!candidate || data.library.hidden_candidates?.[candidate.id]) return;
+    if (button.dataset.edit === 'instruct') { variant(reviewNo, 'edit', candidate); return; }
+    const kind = button.dataset.type ? 'generate' : button.dataset.edit === 'flip' ? 'flip' : 'edit';
+    const submitted = {kind, no:reviewNo, candidate_id:candidate.id, count:'1', revision:data.library.revision,
+      request_id:crypto.randomUUID().replaceAll('-','')};
+    const body = new FormData();
+    Object.entries(submitted).forEach(([key, value]) => body.append(key, value));
+    if (button.dataset.type) body.append('target_type', button.dataset.type);
+    if (kind === 'edit') body.append('preset', button.dataset.edit);
+    queueCandidate(submitted, body, candidate.id);
+  });
   $('review-mark')?.addEventListener('click', () => {
     const candidate = sceneCandidates(reviewNo).find(c => c.id === reviewCandidate);
     if (!busy && candidate) variant(reviewNo, 'edit', candidate, true);
@@ -513,10 +565,7 @@
     if (slow) {
       // Only this scene's generation controls wait. Adoption and other scenes
       // remain available, and the server keeps its existing resource limits.
-      for (const [id, op] of pending) if (String(op.no) === String(submitted.no) && op.state === 'failed') pending.delete(id);
-      const op = {request_id:submitted.request_id, no:submitted.no, kind:submitted.kind, state:'submitting'};
-      pending.set(op.request_id, op); savePending(); updateOperations();
-      runPending(op, body);
+      queueCandidate(submitted, body);
       return;
     }
     setBusy(true);
