@@ -12,12 +12,35 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 CATALOG = "catalog.json"
 MIN_BYTES = 200
+
+# Match the requested subject, never the channel description or an old scene prompt.
+_TEACHER = r"(?:(?:新居|新井|あらい)\s*)?(?:先生|教授)|\b(?:the professor|professor arai)\b"
+_ORDINARY = r"サラリーマン|会社員|店員|お?客(?:さん)?|一般(?:の)?(?:人|男性|女性)|男性|女性|ビジネスマン|office worker|salaryman"
+_PROTECTED = r"(?:の.{0,8})?(?:は|を)?\s*(?:そのまま|変えず|変えない|変更しない|残し|触[れら]|以外|ではなく|じゃなく|ではない|には?(?:似せない|似せず|しない|ならない|なって(?:しま|いる))|を?(?:消|削除|外))"
+_TARGET = r"^(?:本人)?(?:の(?:顔|目|まぶた|眉|眼鏡|メガネ|髪|服|表情|ポーズ|イラスト|キャラ|向き|手|体)|に|を|も|が|だけ|風に|[。！!]|$)"
+_ORDINARY_DESTINATION = r"(?:" + _ORDINARY + r")(?:らしい)?(?:の(?:顔|目|表情))?に(?:して|する|変|戻|描|替|差し替|$)"
+
+
+def edit_subject(instruction, choice="auto"):
+    """Decide whose face is being edited. Ambiguous edits keep the source alone."""
+    if choice in ("ordinary", "professor"):
+        return choice
+    text = instruction.strip()
+    for clause in re.split(r"[、。，,\n;；]", text):
+        for match in re.finditer(_TEACHER, clause, re.I):
+            tail = clause[match.end():].lstrip()
+            if re.match(_PROTECTED, tail) or re.search(_ORDINARY_DESTINATION, tail, re.I):
+                continue
+            if re.match(_TARGET, tail) or re.search(r"\b(?:draw|add|restore|change to)\s+$", clause[:match.start()], re.I):
+                return "professor"
+    return "ordinary" if re.search(_ORDINARY, text, re.I) else "source"
 
 
 def _mime(path: Path) -> str:

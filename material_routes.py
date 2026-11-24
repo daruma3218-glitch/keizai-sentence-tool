@@ -17,6 +17,8 @@ import cloudflare_access
 import material_comments
 import material_history
 import material_review
+import material_regions
+from character_refs import edit_subject
 from channel_styles import resolve_style, style_choices
 from safe_images import open_image
 from image_memory import REQUEST_CAPACITY
@@ -182,7 +184,8 @@ def register(module):
         context = store.read(d / "material_context.json")
         state = store.read(d / "job.json", {}) or {}
         manifest = store.read(d / "manifest.json", {}) or {}
-        source_channel = (context or {}).get("source_channel_id") or manifest.get("channel_id") or state.get("channel_id")
+        source_channel = ((context or {}).get("source_channel_id") or (context or {}).get("channel_id")
+                          or manifest.get("channel_id") or state.get("channel_id"))
         ch = store.channel(source_channel)
         from channel_styles import is_suasi_style
         saved = dict((context or {}).get("profile") or {}, **((context or {}).get("generation_settings") or {}))
@@ -309,7 +312,18 @@ def register(module):
         count = 2 if body.get("count") == "2" else 1
         if kind == "edit" and not extra:
             raise ValueError("直したい内容を入力してください")
-        config = profile(context["channel_id"])
+        ch = store.channel(context.get("channel_id") or context.get("source_channel_id"))
+        scope = body.get("edit_scope", "whole")
+        person = body.get("edit_person", "auto")
+        if scope not in ("whole", "regions") or person not in ("auto", "ordinary", "professor"):
+            raise ValueError("修正範囲と人物の指定を確認してください")
+        if (scope == "regions" or "regions" in body or person != "auto") and (kind != "edit" or ch["id"] != "economy"):
+            raise ValueError("この候補では部分修正・人物指定を使えません")
+        if "regions" in body and scope != "regions":
+            raise ValueError("囲みを使う場合は「囲んだ部分」を選んでください")
+        polygons = material_regions.parse_regions(body.get("regions")) if scope == "regions" else None
+        subject = edit_subject(extra, person) if kind == "edit" and ch["id"] == "economy" else None
+        config = profile(ch["id"])
         keys = module.resolve_channel_keys(config)
         defaults = dict(context["profile"], **context.get("generation_settings", {}))
         from channel_styles import is_suasi_style
@@ -375,6 +389,7 @@ def register(module):
                 produced.append((target, "左右反転", {"parent_id": source["id"]}))
             else:
                 from generator import run_parallel_generation
+                source_path = store.safe_path(d, source["filename"]) if source else None
                 locked = defaults.get("worldview_desc", "") if defaults.get("style_lock") else ""
                 prompts = [{"index": i, "prompt": module._build_scene_fix_prompt(
                     row.get("sentence", ""), route, i, extra, defaults, fix_mode="same_style",
@@ -390,11 +405,17 @@ def register(module):
                     "edit_source": kind == "edit",
                     # 手直しは依頼だけを元画像に当て、ほかは変えない（2026-11-19・generator.instruction_edit_prompt）
                     **({"edit_mode": "instruction_only", "edit_instruction": extra} if kind == "edit" else {}),
+                    **({"edit_subject": subject} if subject else {}),
                     "allowed_terms": module._scene_fix_allowed_terms(row.get("sentence", ""), route)}
                     for i in range(1, count + 1)]
                 reference = defaults.get("character_ref", "")
+                if subject == "professor" and not reference:
+                    reference = config.get("defaults", {}).get("character_ref", "")
+                if subject in ("ordinary", "source"):
+                    reference = None
                 reference = module.PROJECT_ROOT / reference if reference else None
                 with IMAGE_SLOTS:
+                    region = material_regions.prepare(source_path, polygons, provider) if polygons else None
                     results = run_parallel_generation(
                         prompts=prompts, output_dir=output, provider=provider,
                         gemini_api_key=keys["gemini"], openai_api_key=keys["openai"],
@@ -402,17 +423,23 @@ def register(module):
                         openai_model=defaults.get("openai_image_model"),
                         style_preset=defaults.get("style_preset", "flat_infographic"), concurrency=1,
                         reference_image_path=str(reference) if reference and reference.exists() else None,
-                        edit_image_path=str(store.safe_path(d, source["filename"])) if source else None,
+                        edit_image_path=str(source_path) if source_path else None,
+                        **({"region_edit": region} if region else {}),
                         realphoto_watermark=bool(defaults.get("realphoto_watermark")) and route == "realphoto",
                         style_lock_text=locked)
                 for result in results:
                     if result.get("success") and result.get("filename"):
-                        produced.append((store.safe_path(output, result["filename"]),
-                                         "手直し案" if kind == "edit" else "追加の候補",
+                        path = store.safe_path(output, result["filename"])
+                        if region:
+                            material_regions.restore_outside(source_path, path, region, polygons)
+                        label = "部分修正案" if region else ("手直し案" if kind == "edit" else "追加の候補")
+                        produced.append((path, label,
                                          {"parent_id": source["id"] if source else None, "origin": "ai",
                                           "provider": provider, "request_id": request_id,
                                           "presenter": result.get("presenter")}))
                 if not produced:
+                    if region:
+                        raise material_regions.RegionEditError("部分修正案を作成できませんでした。元画像と採用状態を保持しました。")
                     raise ValueError("候補を作成できませんでした。元画像と採用状態は保持しています")
             with store.LOCK:
                 lib = store.load_library(d)
@@ -420,11 +447,13 @@ def register(module):
                     store.snapshot(d, lib, no, path, label, metadata)
                 lib["requests"][request_id].update(status="completed", finished_at=store.now(), created_images=len(produced))
                 store.commit_library(d, lib, "operation_completed", {"request_id": request_id})
-        except Exception:
+        except Exception as exc:
             with store.LOCK:
                 lib = store.load_library(d)
                 lib["requests"][request_id].update(status="failed", finished_at=store.now())
                 store.commit_library(d, lib, "operation_failed", {"request_id": request_id})
+            if isinstance(exc, material_regions.RegionEditError):
+                raise
             raise ValueError("候補の作成に失敗しました。元画像・採用状態を保持しました。再読込で結果を確認してください")
         finally:
             with store.LOCK:

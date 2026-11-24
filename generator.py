@@ -32,7 +32,8 @@ from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
 from suasi_pose import select_pose, POSE_NAMES
 from safe_images import open_image
-from character_refs import load_reference_set
+from character_refs import edit_subject, load_reference_set
+from material_regions import RegionEdit
 
 
 # ===== モデル設定 =====
@@ -176,6 +177,11 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
     with ExitStack() as stack:
         source = stack.enter_context(BytesIO(image_bytes))
         img = stack.enter_context(closing(open_image(source)))
+        if fill == "region":
+            if abs(img.width / img.height / TARGET_RATIO - 1) > 0.02:
+                raise ValueError("部分修正の出力が元の画角と合いません")
+            save_png_atomic(img, output_path)
+            return
         if img.mode not in ("RGB", "RGBA"):
             img = stack.enter_context(closing(img.convert("RGB")))
         if fill == "crop":
@@ -306,15 +312,22 @@ _REFERENCE_SET_NOTE = (
 # 2026-11-15 まで手直しには元画像だけを渡していたため、手直しを重ねるたびに写しの写しになり、
 # 先生の顔（特に目）がずれていった（三上さん・せいまさんの報告：細くなる・まぶたがなくなる・白くなる）。
 _EDIT_CHARACTER_REFERENCE_INSTRUCTION = (
-    "ATTACHED IMAGES: the FIRST attached image is the source image to edit. Every other attached image "
+    "ATTACHED IMAGES: the FIRST attached image is the source image to edit. Each additional character illustration "
     "is a character reference of the channel's professor (the same man in different poses); use them "
     "only for how he looks, and never copy their pose, background or layout into the result. If the "
     "professor appears in the source image, keep his position, pose and size, but draw his face, hair, "
     "glasses and outfit exactly like the references, even if the source image drew them differently. "
     + _PROFESSOR_EYES +
-    "If the professor does not appear in the source image, do not add him. Other people keep their own "
+    "Only introduce the professor if the editor specifically asks to add him or turn someone into him. Other people keep their own "
     "faces. "
     + _OTHER_PEOPLE_EYES
+)
+
+_ORDINARY_PERSON_EDIT = (
+    "When drawing or replacing the requested ordinary person, use this source illustration's style. "
+    "Give that person their own everyday face with small open dark dot or oval eyes, light curved brows "
+    "and a natural expression. Do not inherit heavy upper lids or glasses from the previous character. "
+    "Respect any explicitly requested glasses or other features. Keep every other person's face as it is."
 )
 
 # v3 Step6: エンティティ参照（一貫性ロック）。同じ被写体が繰り返し出るとき、初出画像を
@@ -728,6 +741,7 @@ def _sync_generate_image_gemini(
     reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像
     reference_mime: str = "image/png",
     defer_body: bool = False,
+    region_edit: bool = False,
 ) -> tuple:
     """1 枚の画像を同期生成（Gemini）。
 
@@ -748,7 +762,7 @@ def _sync_generate_image_gemini(
                 img_data = inline.data
                 if isinstance(img_data, str):
                     img_data = base64.b64decode(img_data)
-                _save_as_16_9(img_data, output_path)
+                _save_as_16_9(img_data, output_path, fill="region" if region_edit else "pad")
                 return True, ""
         for part in parts_iter:
             txt = getattr(part, "text", None)
@@ -764,7 +778,8 @@ def _sync_generate_image_gemini(
                         if refs else full_prompt)
             success, last_error = consume_gemini_image(client, save_response, defer_body=defer_body,
                 model=model_name, contents=contents,
-                config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]))
+                config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"],
+                    **({"image_config": types.ImageConfig(aspect_ratio="16:9")} if region_edit else {})))
             if success:
                 return True, ""
 
@@ -793,6 +808,7 @@ def _sync_generate_image_openai(
     quality: str = "medium",  # low / medium / high
     reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像（あれば images.edit）
     fill: str = "pad",  # 16:9 への合わせ方（"crop" で画面いっぱい）
+    mask_png: Optional[bytes] = None,
 ) -> tuple:
     """1 枚の画像を同期生成（OpenAI gpt-image）。
 
@@ -829,11 +845,17 @@ def _sync_generate_image_openai(
                     for i, (data, _mime) in enumerate(refs):
                         bio = stack.enter_context(BytesIO(data))
                         stem = "reference" if len(refs) == 1 else f"reference{i + 1}"
-                        bio.name = stem + (".jpg" if data.startswith(b"\xff\xd8\xff") else ".png")
+                        ext = ".webp" if data.startswith(b"RIFF") and data[8:12] == b"WEBP" else ".png"
+                        bio.name = stem + (".jpg" if data.startswith(b"\xff\xd8\xff") else ext)
                         files.append(bio)
+                    mask_args = {}
+                    if mask_png:
+                        mask = stack.enter_context(BytesIO(mask_png))
+                        mask.name = "selection.png"
+                        mask_args["mask"] = mask
                     success, last_error = consume_openai_image(client.images, "edit", save_response,
                         model=model_name, image=files[0] if len(files) == 1 else files,
-                        prompt=full_prompt, n=1, size=size, quality=quality,
+                        prompt=full_prompt, n=1, size=size, quality=quality, **mask_args,
                     )
             else:
                 success, last_error = consume_openai_image(client.images, "generate", save_response,
@@ -861,7 +883,7 @@ def _sync_generate_image_openai(
                 return False, f"model not available: {model_name} ({err[:80]})"
             if "401" in err or "invalid api key" in err_lower:
                 return False, f"invalid OpenAI API key: {err[:80]}"
-            if "size" in err_lower and size != "1536x1024":
+            if "size" in err_lower and size != "1536x1024" and not mask_png:
                 # 16:9 の大きさ（NATIVE_16_9_SIZE）を断られたら、従来の 3:2 で描いて 16:9 に合わせる
                 # （やり直しの回数は既定1回なので、回数を使わずに1度だけ呼び直す）
                 return _sync_generate_image_openai(client, full_prompt, output_path, model_name=model_name,
@@ -892,6 +914,7 @@ class ParallelImageGenerator:
         edit_image_path: Optional[str] = None,       # 個別再生成: 元画像を微調整する参照
         realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
         style_lock_text: str = "",  # 世界観ロック: チャンネルの設定文を全イラスト/図解に固定
+        region_edit: Optional[RegionEdit] = None,
     ):
         if provider not in VALID_PROVIDERS:
             raise ValueError(f"unknown provider: {provider} (valid: {VALID_PROVIDERS})")
@@ -901,6 +924,8 @@ class ParallelImageGenerator:
         self.style_preset = style_preset
         self.realphoto_watermark = bool(realphoto_watermark)
         self.style_lock_text = (style_lock_text or "").strip()
+        self.region_edit = region_edit
+        self.keizai_reference = bool(reference_image_path and Path(reference_image_path).name == "keizai_professor.png")
 
         # 参照画像（キャラ固定用）。character=True のシーンでのみ使用。
         # ファイルが無ければ None（=テキスト方式に自動フォールバック、壊れない）。
@@ -925,12 +950,15 @@ class ParallelImageGenerator:
         self.suasi_artwork = self.suasi_artworks.get("good")
         self.suasi_edit_recipe = None
         self.edit_reference_mime = "image/png"
-        if edit_image_path:
+        if region_edit:
+            self.edit_reference_bytes = region_edit.source_png
+        elif edit_image_path:
             try:
                 ep = Path(edit_image_path)
                 if ep.exists() and ep.stat().st_size > 50:
                     self.edit_reference_bytes = ep.read_bytes()
-                    self.edit_reference_mime = "image/jpeg" if ep.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+                    self.edit_reference_mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                                                ".webp": "image/webp"}.get(ep.suffix.lower(), "image/png")
             except Exception:
                 self.edit_reference_bytes = None
         if self.suasi_artwork and self.edit_reference_bytes:
@@ -1002,19 +1030,26 @@ class ParallelImageGenerator:
             ref = self.reference_bytes if use_reference else None
             ref_mime = self.reference_mime
         if self.provider == PROVIDER_NANOBANANA:
+            if self.region_edit:
+                ref = _reference_parts(ref, ref_mime) + [(self.region_edit.mask_png, "image/png")]
+                full_prompt += ("\n\nThe LAST image is a binary selection map aligned with the FIRST image. "
+                                "Edit only the white areas. Black areas are protected. Return the first image "
+                                "with the requested edit in the same frame. Do not draw the map.")
             return _sync_generate_image_gemini(
                 self.gemini_client, full_prompt, output_path, self.gemini_model,
                 reference_bytes=ref, reference_mime=ref_mime,
                 defer_body=self.gemini_deferred_body,
+                **({"region_edit": True} if self.region_edit else {}),
             )
         else:  # gpt-image
             return _sync_generate_image_openai(
                 self.openai_client, full_prompt, output_path,
                 model_name=self.openai_model,
-                size=openai_size_for(self.openai_model, self.style_lock_text, self.openai_size),
+                size=NATIVE_16_9_SIZE if self.region_edit else openai_size_for(self.openai_model, self.style_lock_text, self.openai_size),
                 quality=self.openai_quality,
                 reference_bytes=ref,
-                fill="crop" if full_bleed(self.style_lock_text) else "pad",
+                fill="region" if self.region_edit else ("crop" if full_bleed(self.style_lock_text) else "pad"),
+                **({"mask_png": self.region_edit.mask_png} if self.region_edit else {}),
             )
 
     async def _generate_one(
@@ -1121,24 +1156,29 @@ class ParallelImageGenerator:
             # v3 Step6: エンティティ follower の一貫性ロック（キャラ固定シーンとは排他）。
             # nanobanana は canonical 画像を参照に渡す。gpt-image は文言のみ（v3.0）。
             if prompt_entry.get("edit_source") and self.edit_reference_bytes:
-                if (not self.suasi_artwork and self.style_lock_text and self.reference_bytes is not None):
-                    # 世界観ロックのチャンネルの手直し：元画像を1枚目に、先生の見本を後ろに渡す（2026-11-15）。
-                    # 元画像だけだと、手直しを重ねるたびに先生の顔（特に目）がずれていった
+                subject = prompt_entry.get("edit_subject")
+                if instruction_edit and subject is None and self.keizai_reference and self.style_lock_text:
+                    subject = edit_subject(prompt_entry["edit_instruction"])
+                if (not self.suasi_artwork and (self.style_lock_text or subject == "professor") and self.reference_bytes is not None
+                        and subject in (None, "professor")):
+                    # 先生本人を直す時だけ、元画像を先頭にして人物見本を渡す。
                     refs = character_set or [(self.reference_bytes, self.reference_mime)]
                     ref_override = [(self.edit_reference_bytes, self.edit_reference_mime)] + refs
                     ref_mime_override = None
-                    # 依頼だけの手直しでも先生の見本は渡す（顔がずれないように・11/15）。
-                    # 「読みやすさ・重なりも直す」の _EDIT_SOURCE_INSTRUCTION は付けない（指示外を変える元だった）
                     full_prompt = (("" if instruction_edit else _EDIT_SOURCE_INSTRUCTION + "\n\n")
                                    + _EDIT_CHARACTER_REFERENCE_INSTRUCTION + "\n\n" + scene_prompt)
                 else:
                     ref_override = self.edit_reference_bytes
                     ref_mime_override = self.edit_reference_mime
                     if instruction_edit:
-                        # 渡すのは元画像だけなので、先生の参照画像を前提にした文も付けない
                         full_prompt = scene_prompt
+                        if subject == "ordinary" and prompt_type != "realphoto":
+                            full_prompt += "\n\n" + _ORDINARY_PERSON_EDIT
                     elif not self.suasi_artwork:
                         full_prompt = _EDIT_SOURCE_INSTRUCTION + "\n\n" + full_prompt
+                if self.region_edit:
+                    full_prompt += ("\n\nEdit only the selected areas of the first image, at their original "
+                                    "positions and scale. Preserve the framing and surrounding pixels.")
 
             if entity_role == "follower" and not use_reference and not self.suasi_artwork:
                 if self.provider == PROVIDER_NANOBANANA and entity_ref_bytes:
@@ -1343,6 +1383,7 @@ def run_parallel_generation(
     edit_image_path: Optional[str] = None,       # 個別再生成: 元画像を微調整する参照
     realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
     style_lock_text: str = "",  # 世界観ロック（空なら従来どおり）
+    region_edit: Optional[RegionEdit] = None,
 ) -> list:
     """同期エントリポイント: pipeline から呼び出す"""
     # 環境変数からデフォルト補完
@@ -1370,6 +1411,7 @@ def run_parallel_generation(
         edit_image_path=edit_image_path,
         realphoto_watermark=realphoto_watermark,
         style_lock_text=style_lock_text,
+        region_edit=region_edit,
     )
     try:
         return asyncio.run(generator.generate_all(prompts, output_dir))

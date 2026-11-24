@@ -4,6 +4,7 @@
   const poseNames = {pointing:'指差し', thinking:'考える', surprised:'驚く', explaining:'両手で説明', good:'グッド'};
   const base = '/api/material-jobs/' + encodeURIComponent(window.materialJobId);
   let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
+  const regionEditor = window.MaterialRegions?.(valid => { $('variant-submit').disabled = busy || !valid; });
   const storageKey = 'material.selection.v1.' + window.materialJobId;
   const pendingKey = 'material.pending.v1.' + window.materialJobId;
   // 編集への指示：書きかけ（まだ保存していない文）・保存待ちのタイマー・画像の場面番号
@@ -51,6 +52,7 @@
       });
     });
     $('operation-state').hidden = !active.size;
+    if (regionEditor && $('preview-dialog').open) $('review-mark').disabled = busy || active.has(reviewNo);
     $('operation-state').dataset.tone = 'working';
     $('operation-state').textContent = active.size + ' 場面の候補を作成・確認中です。ほかの場面の確認・採用・候補追加を続けられます。';
   }
@@ -168,6 +170,7 @@
     $('comment-review-start').disabled = value || !firstCommentRow;
     document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
     updateReviewNavigation();
+    if (regionEditor && !regionEditor.valid()) $('variant-submit').disabled = true;
     updateOperations();
   }
   function draw() {
@@ -280,7 +283,7 @@
     } catch (error) { Studio.notice(error.message, true); if ($('preview-dialog').open) $('review-status').textContent = error.message; return false; }
     finally { setBusy(false); }
   }
-  function variant(no, kind, candidate) {
+  function variant(no, kind, candidate, selectRegion = false) {
     const current = sceneOperation(no);
     if (current && current.state !== 'failed') return;
     const row = data.rows.find(row => String(row.no) === no);
@@ -294,12 +297,15 @@
     if ($('pose-field')) { $('pose-field').hidden = !ai; $('suasi-pose').value = ''; }
     $('instruction').hidden = $('instruction-label').hidden = !ai;
     $('instruction').required = kind === 'edit';
+    $('instruction-label').textContent = kind === 'edit' ? 'どう直しますか？' : 'どんな案にするか';
+    $('instruction').placeholder = kind === 'edit' ? '例：矢印を消す、男性を会社員に変える' : '例：主役を大きく、余白を減らして';
     $('image-file').hidden = $('file-label').hidden = kind !== 'upload';
     $('image-file').required = kind === 'upload';
     $('count-field').hidden = !ai;
     $('variant-preview').hidden = !candidate;
     if (candidate) $('variant-preview').src = src(candidate);
     $('variant-submit').textContent = ai ? '候補を生成する' : kind === 'flip' ? '反転して追加' : '取り込む';
+    regionEditor?.reset(kind === 'edit' && !!candidate, selectRegion);
     $('variant-help').textContent = kind === 'flip' ? '画像内の文字も反転します。文字がある素材は、指示して手直ししてください。元の候補は残ります。' :
       ai ? '画像生成を実行します（利用先の従量料金が発生します）。元の候補・採用状態は残ります。' : '元の候補を残して取り込みます。PNG・JPEG・WebPに対応しています。';
     $('variant-dialog').showModal();
@@ -381,6 +387,11 @@
     $('review-grid').hidden = !focused; $('review-no-candidate').hidden = !!focused;
     $('review-adopt').hidden = $('review-adopt-next').hidden = !focused || isHidden;
     $('review-visibility').hidden = !focused;
+    if (regionEditor) {
+      $('review-mark').hidden = !focused || isHidden;
+      const op = sceneOperation(reviewNo);
+      $('review-mark').disabled = busy || (!!op && op.state !== 'failed');
+    }
     $('review-visibility').textContent = isHidden ? '候補に戻す' : '候補から非表示';
     $('review-visibility').dataset.visibilityLocked = String(!focused || focused.id === chosen);
     $('review-visibility').disabled = busy || !focused || focused.id === chosen;
@@ -434,6 +445,10 @@
   }
   $('review-next').addEventListener('click', reviewNext);
   $('review-candidate-id').addEventListener('change', event => { reviewCandidate = event.target.value; renderReview(); });
+  $('review-mark')?.addEventListener('click', () => {
+    const candidate = sceneCandidates(reviewNo).find(c => c.id === reviewCandidate);
+    if (!busy && candidate) variant(reviewNo, 'edit', candidate, true);
+  });
   $('review-use-reference').addEventListener('click', () => {
     if (busy || !reviewReference) return;
     [reviewCandidate, reviewReference] = [reviewReference, reviewCandidate];
@@ -488,6 +503,7 @@
     const current = sceneOperation(submitted.no);
     if (current && current.state !== 'failed') return;
     const body = new FormData();
+    if (submitted.kind === 'edit' && regionEditor && !regionEditor.append(body)) return;
     Object.entries({...submitted, revision:data.library.revision}).forEach(([key, value]) => body.append(key, value));
     body.append('instruction', $('instruction').value); body.append('count', $('variant-count').value);
     if ($('suasi-pose') && !$('pose-field').hidden) body.append('suasi_pose', $('suasi-pose').value);

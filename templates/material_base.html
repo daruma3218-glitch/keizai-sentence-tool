@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='studio_status.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='material_queue.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='material_home.css', v='20261110') }}">
+  {% block page_styles %}{% endblock %}
   <script src="{{ url_for('static', filename='studio_status.js') }}"></script>
 {% include '_studio_icons.html' %}
 </head>

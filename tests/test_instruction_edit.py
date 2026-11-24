@@ -6,7 +6,7 @@
 「読みやすさ・重なりも直す」を付けて送っていたため、描き直しになっていた。2枚頼むと2枚目は別の構図を指示していた。
 図解スタジオ（zukai-tool の image_edit.INSTRUCT_SUFFIX）と同じ「依頼＋ほかは全く同じに保つ」にする。
 
-- 先生のいるチャンネル（世界観ロック＋見本）では、元画像を1枚目・先生の見本を後ろに渡す 11/15 の決まりは保つ
+- カラクリの先生本人の修正には見本を渡し、一般の人物・図解の手直しには元画像だけを渡す
 - 場面の指示・構図の案・チャンネルの画風の文・文字の決まりは送らない
 - 元画像が無い時・新しい候補を作る時は今までどおり
 """
@@ -17,6 +17,8 @@ from pathlib import Path
 from PIL import Image
 
 import generator
+import pytest
+from character_refs import edit_subject
 import suasi_presenter as presenter
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,13 +68,40 @@ def _assert_only_the_request(prompt):
         assert redraw not in prompt, redraw
 
 
-def test_professor_channel_sends_only_the_request_with_the_professor_samples(tmp_path, monkeypatch):
+def test_arrow_edit_in_professor_channel_uses_source_only(tmp_path, monkeypatch):
     prompt, refs, source = _run(tmp_path, monkeypatch, _entry())
     _assert_only_the_request(prompt)
-    # 先生の顔がずれないように、元画像を1枚目・見本を後ろに渡す決まり（11/15）は保つ
+    assert refs == source and "professor" not in prompt
+
+
+def test_editing_the_professor_keeps_the_four_authenticated_samples(tmp_path, monkeypatch):
+    ask = "新居先生の目を見本どおりに戻して"
+    prompt, refs, source = _run(tmp_path, monkeypatch, _entry(edit_instruction=ask))
+    assert generator.instruction_edit_prompt(ask) in prompt
     assert prompt.startswith(generator._EDIT_CHARACTER_REFERENCE_INSTRUCTION)
-    assert isinstance(refs, list) and len(refs) >= 2
+    assert isinstance(refs, list) and len(refs) == 5
     assert refs[0][0] == source
+
+
+@pytest.mark.parametrize("ask, role", [
+    ("男性のサラリーマンに", "ordinary"), ("先生を一般の男性に変える", "ordinary"),
+    ("新井先生ではなく会社員に", "ordinary"), ("先生の隣に会社員を追加", "ordinary"),
+    ("新居先生の顔はそのまま、右の男性の目だけ丸く", "ordinary"),
+    ("新居先生にはしないで。普通の男性にして", "ordinary"),
+    ("先生の目になっているので、一般の男性に戻して", "ordinary"),
+    ("先生の目が強すぎるので会社員の顔に戻す", "ordinary"),
+    ("新居先生本人の目を直す", "professor"),
+    ("先生を消して", "source"), ("新井先生のまぶたを元に戻す", "professor"),
+    ("左の会社員を新居先生に変更", "professor"), ("矢印を消す", "source")])
+def test_edit_subject_follows_the_current_request(ask, role):
+    assert edit_subject(ask) == role
+
+
+def test_generic_man_in_a_professor_scene_is_not_given_any_professor_sample(tmp_path, monkeypatch):
+    entry = _entry(character=True, prompt="The professor points at the arrow.", edit_instruction="男性のサラリーマンに")
+    prompt, refs, source = _run(tmp_path, monkeypatch, entry)
+    assert refs == source and generator._ORDINARY_PERSON_EDIT in prompt
+    assert "professor" not in prompt and "Variant" not in prompt
 
 
 def test_channel_without_lock_sends_exactly_the_request_and_the_source(tmp_path, monkeypatch):
