@@ -157,6 +157,7 @@ def load_library(job_dir):
     library.setdefault("selection_revision", library["revision"])
     library.setdefault("hidden_candidates", {})
     library.setdefault("edit_notes", {})
+    library.setdefault("additional_selections", {})
     return library
 
 
@@ -234,6 +235,60 @@ def visible_candidates(library, no):
             if not library.get("hidden_candidates", {}).get(item["id"])]
 
 
+def selected_ids(library, no):
+    """First image stays readable by older clients. The tail follows playback order."""
+    key = str(no)
+    first = library["selections"].get(key)
+    return [first, *library.get("additional_selections", {}).get(key, [])] if first else []
+
+
+def image_number(no, index):
+    return no if index == 0 else f"{no}-{index + 1}"
+
+
+def is_russia_job(job_dir):
+    for filename in ("material_context.json", "manifest.json", "job.json"):
+        info = read(Path(job_dir) / filename, {}) or {}
+        channel_id = info.get("channel_id") or info.get("source_channel_id")
+        if channel_id:
+            return channel_id in ("russia", "roshia")
+    return False
+
+
+def set_selection(lib, no, ids):
+    if ids:
+        lib["selections"][no] = ids[0]
+    else:
+        lib["selections"].pop(no, None)
+    if len(ids) > 1:
+        lib["additional_selections"][no] = ids[1:]
+    else:
+        lib["additional_selections"].pop(no, None)
+
+
+def change_image_order(lib, no, action, cid):
+    ids = selected_ids(lib, no)
+    picked = candidate(lib, no, cid)
+    if lib["hidden_candidates"].get(picked["id"]):
+        raise ValueError("非表示の候補です。候補に戻してから採用してください")
+    if action == "select":
+        if cid not in ids:
+            ids[:1] = [cid]
+    elif action == "append":
+        ids.append(cid)  # Duplicate requests were handled before creating an undo point.
+    else:
+        if cid not in ids:
+            raise ValueError("採用中の画像を選んでください")
+        index = ids.index(cid)
+        target = index + (-1 if action == "earlier" else 1)
+        if not 0 <= target < len(ids):
+            raise ValueError("この位置には移動できません")
+        ids[index], ids[target] = ids[target], ids[index]
+    if action == "select" or not lib["selections"].get(no) or lib["display"].get(no) in {"hold", "none"}:
+        lib["display"][no] = "image"
+    set_selection(lib, no, ids)
+
+
 def selection_change(job_dir, body):
     with LOCK:
         lib = load_library(job_dir)
@@ -244,22 +299,26 @@ def selection_change(job_dir, body):
         if not any(str(r.get("no")) == no for r in source_rows(job_dir)):
             raise ValueError("場面が見つかりません")
         action = body.get("action")
-        if action == "select":
-            picked = candidate(lib, no, body.get("candidate_id"))
-            if lib["hidden_candidates"].get(picked["id"]):
-                raise ValueError("非表示の候補です。候補に戻してから採用してください")
-            lib["selections"][no] = picked["id"]
-            lib["display"][no] = "image"
+        if action in {"select", "append", "earlier", "later"}:
+            if action != "select" and not is_russia_job(job_dir):
+                raise ValueError("このチャンネルでは1場面につき1枚を採用します")
+            if action == "append" and body.get("candidate_id") in selected_ids(lib, no):
+                return lib
+            change_image_order(lib, no, action, body.get("candidate_id"))
         elif action in {"hide", "restore"}:
             picked = candidate(lib, no, body.get("candidate_id"))
             if action == "hide":
-                if lib["selections"].get(no) == picked["id"]:
+                if picked["id"] in selected_ids(lib, no):
                     raise ValueError("採用中の画像です。採用を解除するか、別の候補を採用してから非表示にしてください")
                 lib["hidden_candidates"][picked["id"]] = True
             else:
                 lib["hidden_candidates"].pop(picked["id"], None)
         elif action == "clear":
-            lib["selections"].pop(no, None)
+            ids = selected_ids(lib, no)
+            cid = body.get("candidate_id") or lib["selections"].get(no)
+            if cid and cid not in ids:
+                raise ValueError("採用中の画像を選んでください")
+            set_selection(lib, no, [item for item in ids if item != cid])
         elif action == "flag":
             lib["flags"][no] = str(body.get("note") or "要修正")[:500]
         elif action == "unflag":
@@ -268,7 +327,7 @@ def selection_change(job_dir, body):
             lib["display"][no] = "image"
         elif action in {"hold", "none"}:
             lib["display"][no] = action
-            lib["selections"].pop(no, None)
+            set_selection(lib, no, [])
         elif action == "undo":
             previous = read(Path(job_dir) / "material_previous.json")
             if not previous or previous.get("after_selection_revision", previous["after_revision"]) != lib["selection_revision"]:
@@ -276,16 +335,19 @@ def selection_change(job_dir, body):
             for key in ("selections", "display", "flags"):
                 lib[key] = previous[key]
             lib["hidden_candidates"] = previous.get("hidden_candidates", {})
+            lib["additional_selections"] = previous.get("additional_selections", {})
         else:
             raise ValueError("操作が不正です")
         old = load_library(job_dir)
         save(Path(job_dir) / "material_previous.json",
-             {k: old[k] for k in ("selections", "display", "flags", "hidden_candidates")} |
+             {k: old[k] for k in ("selections", "additional_selections", "display", "flags", "hidden_candidates")} |
              {"after_revision": lib["revision"] + 1, "after_selection_revision": lib["selection_revision"] + 1})
         lib["selection_revision"] += 1
         detail = {"no": no}
         if action in {"hide", "restore"}:
             detail["candidate_id"] = picked["id"]
+        elif action in {"select", "append", "earlier", "later", "clear"} and body.get("candidate_id"):
+            detail["candidate_id"] = body["candidate_id"]
         commit_library(job_dir, lib, action, detail)
         return lib
 
@@ -339,7 +401,32 @@ def selection_hash(job_dir, lib=None):
     if notes:
         # Only notes of adopted images reach the editor. Older exports keep their identity.
         contents["edit_notes"] = notes
+    if lib.get("additional_selections"):
+        contents["additional_selections"] = {
+            no: [(candidate(lib, no, cid), lib["edit_notes"].get(cid, "")) for cid in tail]
+            for no, tail in lib["additional_selections"].items() if tail
+        }
     return hashlib.sha256(json.dumps(contents, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def handoff_images(job_dir, lib, no, numbered):
+    images = []
+    for index, cid in enumerate(selected_ids(lib, no)):
+        asset = dict(candidate(lib, no, cid))
+        path = safe_path(job_dir, asset["filename"])
+        if not path.is_file() or digest(path) != asset["sha256"]:
+            raise ValueError("採用素材の内容が変わっています")
+        number = image_number(no, index)
+        if numbered:
+            asset["archive_filename"] = f"images/{number}{path.suffix.lower()}"
+        images.append({"number": number, "asset": asset, "edit_note": lib["edit_notes"].get(cid, "")})
+    return images
+
+
+def row_images(row):
+    """One editor row per image; keep the handoff JSON grouped by sentence."""
+    return row.get("image_sequence") or [
+        {"number": row["no"], "asset": row["asset"], "edit_note": row["edit_note"]}]
 
 
 def handoff(job_dir):
@@ -348,6 +435,7 @@ def handoff(job_dir):
     if not context:
         raise ValueError("先にチャンネルと案件をひも付けてください")
     lib = load_library(job_dir)
+    numbered = is_russia_job(job_dir)
     state = read(Path(job_dir) / "job.json", {}) or {}
     rows, missing, previous, previous_chapter = [], [], None, None
     for r in source_rows(job_dir):
@@ -356,16 +444,12 @@ def handoff(job_dir):
         previous_chapter = r.get("chapter_index", 0)
         no = str(r["no"])
         display = lib["display"].get(no, r.get("display") or ("none" if r.get("route") == "skip" else "image"))
-        chosen = lib["selections"].get(no)
-        asset = candidate(lib, no, chosen) if chosen else None
-        if asset:
-            path = safe_path(job_dir, asset["filename"])
-            if not path.is_file() or digest(path) != asset["sha256"]:
-                raise ValueError("採用素材の内容が変わっています")
+        images = handoff_images(job_dir, lib, r["no"], numbered) if display == "image" else []
+        first = images[0] if images else {}
         if display == "image":
-            if not asset:
+            if not images:
                 missing.append({"no": r["no"], "reason": "素材の採用待ち"})
-            previous = asset
+            previous = images[-1]["asset"] if images else None
         elif display == "hold" and previous is None:
             missing.append({"no": r["no"], "reason": "継続する前の素材がありません"})
         elif display == "none":
@@ -376,10 +460,12 @@ def handoff(job_dir):
             missing.append({"no": r["no"], "reason": lib["flags"][no]})
         rows.append({"no": r["no"], "chapter_index": r.get("chapter_index", 0),
                      "block_index": r.get("block_index", 0), "sentence": r.get("sentence", ""),
-                     "display": display, "asset": asset if display == "image" else None,
-                     "edit_note": selected_edit_note(lib, no, display),
+                     "display": display, "asset": first.get("asset"),
+                     "edit_note": first.get("edit_note", ""),
                      "hold_asset_id": previous["id"] if display == "hold" and previous else None,
                      "estimated_start": r.get("est_start"), "timing_status": "narration_alignment_required"})
+        if len(images) > 1:
+            rows[-1]["image_sequence"] = images
     status = state.get("status", "unknown")
     ready = bool(rows) and not missing and status == "completed"
     return {"schema": "material-studio-handoff", "schema_version": 1,

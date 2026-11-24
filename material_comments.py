@@ -194,11 +194,14 @@ def export_lines(job_dir, mode, library):
             continue
         no = c["no"]
         candidates = library["candidates"].get(no) or []
-        current = library["selections"].get(no) or (candidates[-1]["id"] if candidates else "")
-        old = "（前の候補へ）" if c["candidate_id"] != current else ""
+        adopted = store.selected_ids(library, no)
+        current = adopted or ([candidates[-1]["id"]] if candidates else [])
+        cid = c["candidate_id"]
+        old = "" if cid in current else "（前の候補へ）"
+        number = str(store.image_number(no, adopted.index(cid))) if cid in adopted else no
         date = datetime.fromisoformat(c["created_at"]).astimezone(JST)
         label = "済" if parent["status"] == "resolved" else "未対応"
         body = "取り消されたコメント" if c["withdrawn"] else c["body"]
         reply = "↳ " if c["parent_id"] else ""
-        by_scene.setdefault(no, []).append(f"{reply}[{label}] {c['author_name']} {date.month}/{date.day}{old}：{body}")
+        by_scene.setdefault(number, []).append(f"{reply}[{label}] {c['author_name']} {date.month}/{date.day}{old}：{body}")
     return {no: "\n".join(lines) for no, lines in by_scene.items()}

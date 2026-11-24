@@ -554,21 +554,27 @@ def register(module):
             tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
             tmp.close()
             with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_STORED) as archive:
-                archive.writestr("material-handoff.json", json.dumps(data, ensure_ascii=False, indent=2))
                 stream = io.StringIO()
                 writer = csv.writer(stream)
                 writer.writerow(["章", "番号", "原稿", "表示", "採用画像", "編集への指示", "出典", "クレジット", "版", "要修正メモ", "コメント"])
                 memo = material_review.HEADERS.index("要修正メモ")
                 review_notes = {str(r["values"][0]): r["values"][memo] for r in material_review.review_rows(d, comments="none")[1]}
+                written = set()
                 for row in data["rows"]:
-                    asset = row["asset"] or {}
-                    filename = asset.get("filename", "")
-                    writer.writerow([material_review.csv_text(v) for v in [row["chapter_index"], row["no"], row["sentence"], row["display"],
-                                     filename, row.get("edit_note", ""), asset.get("web_source_url", ""), asset.get("attribution", ""),
-                                     asset.get("sha256", ""), review_notes.get(str(row["no"]), ""), ""]])
+                    for item in store.row_images(row):
+                        asset = item["asset"] or {}
+                        name = asset.get("archive_filename") or asset.get("filename", "")
+                        if name and name not in written:
+                            archive.write(store.safe_path(d, asset["filename"]), name)
+                            written.add(name)
+                        if asset:
+                            asset["filename"] = name  # References in the ZIP resolve inside this ZIP.
+                        writer.writerow([material_review.csv_text(v) for v in [
+                            row["chapter_index"], item["number"], row["sentence"], row["display"], name,
+                            item["edit_note"], asset.get("web_source_url", ""), asset.get("attribution", ""),
+                            asset.get("sha256", ""), review_notes.get(str(item["number"]), ""), ""]])
                 archive.writestr("採用素材.csv", "\ufeff" + stream.getvalue())
-                for filename in {r["asset"]["filename"] for r in data["rows"] if r["asset"]}:
-                    archive.write(store.safe_path(d, filename), filename)
+                archive.writestr("material-handoff.json", json.dumps(data, ensure_ascii=False, indent=2))
                 archive.writestr("README.txt", "採用した素材と原稿の対応です。推定時刻は音声に未同期です。\n"
                                  "ready_for_editing は素材の準備状態で、動画の最終承認ではありません。\n" +
                                  ("" if record else "この旧ダウンロード経路は、素材画面の書き出し記録・変更照合の対象外です。\n"))

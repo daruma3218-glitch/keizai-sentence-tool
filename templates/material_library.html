@@ -96,6 +96,7 @@
         <p id="review-operation" class="hint" role="status" hidden></p>
       </div>
       {% endif %}
+      {% if channel.id == 'russia' %}<div id="review-sequence" class="image-sequence-tools" role="group" aria-label="この文で使う画像と順番" hidden></div>{% endif %}
       <button type="button" id="review-visibility" class="text-button">候補から非表示</button><div id="review-note-box" class="note-field" hidden><textarea id="review-note-input" class="edit-note-input" rows="1" maxlength="1000" placeholder="✎ 編集への指示・出典URL" aria-label="編集への指示・出典URL"></textarea><span class="note-state" aria-live="polite"></span></div></div>
       <section id="image-comments" class="comment-panel" aria-labelledby="comment-heading">
         <h3 id="comment-heading" class="sr-only">この画像のコメント</h3>
@@ -132,9 +133,9 @@
 {% endblock %}
 {% block scripts %}
 <script>window.materialJobId = {{ job_id | tojson }}; window.materialChannelId = {{ channel.id | tojson }};</script>
-<script src="{{ url_for('static', filename='material_view.js') }}"></script>
+<script src="{{ url_for('static', filename='material_view.js', v='20261124seq') }}"></script>
 <script src="{{ url_for('static', filename='material_comments.js') }}"></script>
 {% if channel.id == 'economy' %}<script src="{{ url_for('static', filename='material_regions.js', v='20261124') }}"></script>{% endif %}
-<script src="{{ url_for('static', filename='material_library.js', v='20261124r') }}"></script>
-<script src="{{ url_for('static', filename='material_sheet_export.js') }}"></script>
+<script src="{{ url_for('static', filename='material_library.js', v='20261124seq') }}"></script>
+<script src="{{ url_for('static', filename='material_sheet_export.js', v='20261124seq') }}"></script>
 {% endblock %}

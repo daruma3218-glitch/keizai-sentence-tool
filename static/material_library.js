@@ -6,14 +6,25 @@
   let data = null, filter = 'all', busy = false, operation = null, flagNo = '', initialView = true, canSavePosition = false;
   const regionEditor = window.MaterialRegions?.(valid => { $('variant-submit').disabled = busy || !valid; });
   const imageActions = window.materialChannelId === 'russia' ? $('review-image-actions') : null;
+  const sequenceTools = $('review-sequence');
   const storageKey = 'material.selection.v1.' + window.materialJobId;
   const pendingKey = 'material.pending.v1.' + window.materialJobId;
   // 編集への指示：書きかけ（まだ保存していない文）・保存待ちのタイマー・画像の場面番号
-  const noteDrafts = new Map(), noteTimers = new Map(), noteScenes = new Map();
+  const noteDrafts = new Map(), noteTimers = new Map(), noteScenes = new Map(), noteWrites = new Map();
   const noteValue = id => noteDrafts.has(id) ? noteDrafts.get(id) : (data?.library.edit_notes?.[id] || '');
-  const noteField = (no, id) => '<div class="note-field"><textarea class="edit-note-input" rows="1" maxlength="1000" data-no="' + esc(no) +
-    '" data-note-for="' + esc(id) + '" placeholder="✎ 編集への指示・出典URL" aria-label="編集への指示・出典URL">' + esc(noteValue(id)) +
+  const notePlaceholder = index => index > 0 ? '任意：例「〇〇」からこの画像' : '✎ 編集への指示・出典URL';
+  const noteField = (no, id, index) => '<div class="note-field"><textarea class="edit-note-input" rows="1" maxlength="1000" data-no="' + esc(no) +
+    '" data-note-for="' + esc(id) + '" placeholder="' + notePlaceholder(index) + '" aria-label="編集への指示・出典URL">' + esc(noteValue(id)) +
     '</textarea><span class="note-state" aria-live="polite"></span></div>';
+  function sequenceButtons(ids, id, allowClear = false) {
+    if (!sequenceTools || !id || !ids.length) return '';
+    const position = ids.indexOf(id);
+    const button = (action, label) => '<button type="button" class="button compact" data-action="' + action + '">' + label + '</button>';
+    if (position < 0) return button('append', (ids.length + 1) + '枚目として追加');
+    return (position > 0 ? button('earlier', '順番を前へ') : '') +
+      (position < ids.length - 1 ? button('later', '順番を後ろへ') : '') +
+      (allowClear ? button('clear', 'この画像の採用を解除') : '');
+  }
   const pending = new Map(), watching = new Set();
   try {
     const saved = JSON.parse(localStorage.getItem(pendingKey) || '[]');
@@ -193,7 +204,7 @@
   function setBusy(value) {
     busy = value;
     $('comment-review-start').disabled = value || !firstCommentRow;
-    document.querySelectorAll('#rows button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
+    document.querySelectorAll('#rows button, #review-sequence button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
     updateReviewNavigation();
     if (regionEditor && !regionEditor.valid()) $('variant-submit').disabled = true;
     updateOperations();
@@ -248,7 +259,12 @@
     if (pending && !MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
     $('visible-count').textContent = visible.length + ' / ' + rows.length + ' 場面を表示';
     $('rows').innerHTML = visible.map(row => {
-      const no = String(row.no), candidates = sceneCandidates(no), selected = lib.selections[no], mode = display(row);
+      const no = String(row.no), ids = MaterialView.selectedIds(lib, no), mode = display(row);
+      const candidates = sceneCandidates(no);
+      if (sequenceTools && ids.length > 1) {
+        const order = new Map(ids.map((id, index) => [id, index]));
+        candidates.sort((a, b) => (order.get(a.id) ?? ids.length) - (order.get(b.id) ?? ids.length));
+      }
       const hiddenInScene = (lib.candidates[no] || []).filter(c => lib.hidden_candidates?.[c.id]).length;
       const selectionState = MaterialView.state(row, lib);
       return '<article tabindex="-1" class="scene" data-tone="' + StudioStatus.describe(selectionState).tone + '" data-selection-tone data-no="' + esc(no) + '"><div class="scene-caption"><div><span class="scene-number">' +
@@ -263,7 +279,9 @@
         '<p class="scene-operation status-text" role="status" aria-live="polite" hidden></p>' +
         (hiddenInScene ? '<p class="hint">非表示の候補 ' + hiddenInScene + '枚' + (!candidates.length ? ' · 上の「非表示の候補も表示」から戻せます。' : '') + '</p>' : '') +
         '</div><div class="candidate-strip">' + candidates.map(c => {
-          const chosen = c.id === selected, hidden = !!lib.hidden_candidates?.[c.id];
+          const position = ids.indexOf(c.id), chosen = position >= 0, hidden = !!lib.hidden_candidates?.[c.id];
+          const chooseLabel = chosen ? (sequenceTools ? '✓ 採用中 ' + esc(MaterialView.imageNumber(no, position)) + '（解除）' : '✓ 採用中（解除する）') :
+            sequenceTools && ids.length ? '1枚目と入れ替える' : 'この候補を採用';
           return '<div class="candidate ' + (chosen ? 'selected' : hidden ? 'candidate-hidden' : '') + '" data-candidate="' + esc(c.id) + '">' +
             '<button class="image-button" data-action="preview" aria-label="候補を拡大"><img loading="lazy" src="' + src(c) + '" alt="' + esc(c.label) + '"></button>' +
             '<div class="candidate-body"><div class="candidate-caption"><strong>' + esc(c.label) + '</strong><span class="hint">' + esc(c.created_at?.slice(0,10)) + '</span></div>' +
@@ -271,9 +289,10 @@
             (poseNames[c.presenter?.pose_id] ? '<p class="hint">すあし社長：' + esc(poseNames[c.presenter.pose_id]) + '</p>' : '') +
             '<button type="button" class="button wide candidate-comments" data-action="comments">' + esc(comments.label(c.id)) + '</button>' +
             (hidden ? '<button class="button wide" data-action="restore">候補に戻す</button>' :
-              '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + (chosen ? '✓ 採用中（解除する）' : 'この候補を採用') + '</button>' +
+              '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + chooseLabel + '</button>' +
+              (sequenceTools && ids.length ? '<div class="image-sequence-tools">' + sequenceButtons(ids, c.id) + '</div>' : '') +
               // 採用した画像（と、指示が残っている画像）の真下に、そのまま書ける欄を出す。
-              (chosen || noteValue(c.id) ? noteField(no, c.id) : '') +
+              (chosen || noteValue(c.id) ? noteField(no, c.id, position) : '') +
               '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><div class="candidate-more-actions"><button data-action="flip">左右反転</button><button data-action="hide" data-visibility-locked="' + chosen + '"' + (chosen ? ' disabled title="採用を解除してから非表示にできます"' : '') + '>候補から非表示</button></div></details></div>') +
             (c.web_source_url ? '<a class="hint" href="' + esc(/^https?:\/\//.test(c.web_source_url) ? c.web_source_url : '#') + '" target="_blank" rel="noopener">出典を確認 ↗</a>' : '') +
             '</div></div>';
@@ -386,6 +405,7 @@
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
     const candidates = sceneCandidates(reviewNo), chosen = data.library.selections[reviewNo];
+    const ids = MaterialView.selectedIds(data.library, reviewNo);
     if (!candidates.some(c => c.id === reviewCandidate)) reviewCandidate = candidates.find(c => c.id === chosen)?.id || candidates[0]?.id || '';
     if (!candidates.some(c => c.id === reviewReference) || reviewReference === reviewCandidate) reviewReference = candidates.find(c => c.id !== reviewCandidate)?.id || '';
     $('review-location').textContent = '場面 ' + String(row.no).padStart(3,'0') + ' · ' + (row.chapter_title || '章 ' + (row.chapter_index ?? 1));
@@ -399,11 +419,16 @@
     $('review-candidate-id').hidden = reading && candidates.length < 2;
     $('review-flag').hidden = !data.library.flags[reviewNo];
     $('review-flag').textContent = '要修正：' + (data.library.flags[reviewNo] || '') + '（採用後もメモは残ります）';
-    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + (reading && c.label === '最初の候補' ? '' : ' · ' + esc(c.label)) + (c.id === chosen ? ' · 採用中' : '') + (data.library.hidden_candidates?.[c.id] ? ' · 非表示' : '') + '</option>').join('');
+    const options = candidates.map((c,i) => '<option value="' + esc(c.id) + '">候補 ' + (i + 1) + (reading && c.label === '最初の候補' ? '' : ' · ' + esc(c.label)) + (ids.includes(c.id) ? ' · 採用中' + (sequenceTools ? ' ' + esc(MaterialView.imageNumber(reviewNo, ids.indexOf(c.id))) : '') : '') + (data.library.hidden_candidates?.[c.id] ? ' · 非表示' : '') + '</option>').join('');
     $('review-candidate-id').innerHTML = $('review-reference-id').innerHTML = options;
     $('review-candidate-id').value = reviewCandidate; $('review-reference-id').value = reviewReference;
     const focused = candidates.find(c => c.id === reviewCandidate), reference = candidates.find(c => c.id === reviewReference);
     const isHidden = !!data.library.hidden_candidates?.[focused?.id];
+    const adopted = ids.includes(focused?.id);
+    if (sequenceTools) {
+      sequenceTools.innerHTML = sequenceButtons(ids, focused?.id, true);
+      sequenceTools.hidden = reading || isHidden || !sequenceTools.childElementCount;
+    }
     if (imageActions) {
       imageActions.hidden = reading || !focused || isHidden;
       const type = focused?.route || row.route;
@@ -428,24 +453,31 @@
       $('review-mark').disabled = busy || (!!op && op.state !== 'failed');
     }
     $('review-visibility').textContent = isHidden ? '候補に戻す' : '候補から非表示';
-    $('review-visibility').dataset.visibilityLocked = String(!focused || focused.id === chosen);
-    $('review-visibility').disabled = busy || !focused || focused.id === chosen;
-    $('review-visibility').title = focused?.id === chosen ? '採用を解除してから非表示にできます' : '';
+    $('review-visibility').dataset.visibilityLocked = String(!focused || adopted);
+    $('review-visibility').disabled = busy || !focused || adopted;
+    $('review-visibility').title = adopted ? '採用を解除してから非表示にできます' : '';
     $('review-show-hidden').hidden = !!focused || !MaterialView.candidates(data.library, reviewNo, true).length;
     const noteInputEl = $('review-note-input');
+    noteInputEl.placeholder = notePlaceholder(ids.indexOf(focused?.id));
     $('review-note-box').hidden = !focused || isHidden;
     if (focused && (document.activeElement !== noteInputEl || noteInputEl.dataset.noteFor !== focused.id)) {
       noteInputEl.dataset.noteFor = focused.id; noteInputEl.dataset.no = reviewNo;
       noteInputEl.value = noteValue(focused.id);
     }
-    $('review-chosen').textContent = isHidden ?'非表示の候補 · 候補に戻すと採用できます' : focused?.id === chosen ? '✓ 採用中の画像' :
+    $('review-chosen').textContent = isHidden ?'非表示の候補 · 候補に戻すと採用できます' : adopted ? '✓ 採用中の画像' +
+      (sequenceTools ? ' · ' + MaterialView.imageNumber(reviewNo, ids.indexOf(focused.id)) + '（' + (ids.indexOf(focused.id) + 1) + '枚目）' : '') :
       $('preview-dialog').dataset.mode === 'comments' ? '未採用の候補' : '採用すると、この場面で使う画像として保存されます。';
     comments.selectImage(reviewNo, reviewCandidate);
     const next = MaterialView.nextPending(data.rows, data.library, reviewNo, currentView());
     $('review-skip').hidden = !next;
     $('review-more').hidden = !focused && !next;
     $('review-adopt-next').textContent = next ? '採用して次へ →' : '採用して一覧へ戻る';
-    $('review-adopt').textContent = focused?.id === chosen ? '採用中の候補を保存' : '採用してこの場面にとどまる';
+    $('review-adopt').textContent = adopted ? '採用中の候補を保存' : '採用してこの場面にとどまる';
+    if (sequenceTools && ids.length) {
+      const verb = adopted ? '' : '1枚目と入れ替えて';
+      $('review-adopt-next').textContent = verb + (next ? '次へ →' : '一覧へ戻る');
+      $('review-adopt').textContent = adopted ? 'この場面にとどまる' : '1枚目と入れ替える';
+    }
     updateReviewNavigation();
   }
   function openReview(no, candidate, mode = $('preview-dialog').open ? $('preview-dialog').dataset.mode : 'compare') {
@@ -480,6 +512,11 @@
   }
   $('review-next').addEventListener('click', reviewNext);
   $('review-candidate-id').addEventListener('change', event => { reviewCandidate = event.target.value; renderReview(); });
+  sequenceTools?.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-action]');
+    if (!button || busy || !reviewCandidate) return;
+    if (await select(reviewNo, button.dataset.action, reviewCandidate)) $('review-status').textContent = '使う画像と順番を保存しました。';
+  });
   imageActions?.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (!button || button.disabled || busy) return;
@@ -517,7 +554,8 @@
   async function adoptReview(advance) {
     if (busy || !reviewCandidate) return;
     $('review-status').textContent = '採用を保存しています…';
-    if (!await select(reviewNo, 'select', reviewCandidate)) return;
+    const alreadyAdopted = sequenceTools && MaterialView.selectedIds(data.library, reviewNo).includes(reviewCandidate);
+    if (!alreadyAdopted && !await select(reviewNo, 'select', reviewCandidate)) return;
     if (!$('preview-dialog').open) return;
     $('review-status').textContent = '採用を保存しました。';
     $('review-more').open = false;
@@ -592,17 +630,32 @@
   }
   async function saveNote(id) {
     clearTimeout(noteTimers.get(id)); noteTimers.delete(id);
-    if (!noteDrafts.has(id)) return;
+    const active = noteWrites.get(id);
+    if (active && !await active) return false;
+    if (active) return saveNote(id);
+    if (!noteDrafts.has(id)) return true;
     const note = noteDrafts.get(id).trim(), editing = () => document.activeElement?.dataset?.noteFor === id;
-    if (note === (data.library.edit_notes?.[id] || '')) { if (!editing()) noteDrafts.delete(id); return; }
+    if (note === (data.library.edit_notes?.[id] || '')) { if (!editing()) noteDrafts.delete(id); return true; }
     markNote(id, 'saving');
+    const writing = persistNote(id, note, editing);
+    noteWrites.set(id, writing);
+    try { return await writing; } finally { noteWrites.delete(id); }
+  }
+  async function persistNote(id, note, editing) {
     try {
       const next = await Studio.api(base + '/edit-note', {method:'POST', body:JSON.stringify({no:noteScenes.get(id), candidate_id:id, note})});
       if (!editing() && noteDrafts.get(id)?.trim() === note) noteDrafts.delete(id);
       applyPayload(next);
       markNote(id, 'saved');
-    } catch (error) { markNote(id, 'error'); Studio.notice(error.message, true); }
+      return true;
+    } catch (error) { markNote(id, 'error'); Studio.notice(error.message, true); return false; }
   }
+  async function flushEditNotes() {
+    const ids = new Set([...noteDrafts.keys(), ...noteWrites.keys()]);
+    const saved = await Promise.all([...ids].map(id => saveNote(id)));
+    if (saved.includes(false)) throw new Error('編集への指示を保存できませんでした。書き出す前に、もう一度お試しください。');
+  }
+  window.flushMaterialEditNotes = flushEditNotes;
   function markNote(id, state) {
     document.querySelectorAll('.note-field').forEach(box => {
       if (box.querySelector('.edit-note-input')?.dataset.noteFor !== id) return;
@@ -616,8 +669,9 @@
   const onNoteInput = event => { if (event.target.classList?.contains('edit-note-input')) noteInput(event.target); };
   const onNoteLeave = event => {
     const field = event.target;
-    if (field.classList?.contains('edit-note-input') && (noteTimers.has(field.dataset.noteFor) || noteDrafts.has(field.dataset.noteFor))) {
-      setTimeout(() => saveNote(field.dataset.noteFor));
+    const id = field.dataset?.noteFor;
+    if (field.classList?.contains('edit-note-input') && (noteTimers.has(id) || noteDrafts.has(id))) {
+      setTimeout(() => saveNote(id));
     }
   };
   // 一覧のカードの欄と、比較の窓の欄（どちらも入力・離れた時の知らせが親まで届く）
@@ -667,6 +721,7 @@
     event.preventDefault(); if (busy) return;
     setBusy(true);
     try {
+      await flushEditNotes();
       exportPlan = await Studio.api(base + '/handoff');
       setBusy(false);
       const openComments = exportPlan.review_comments.open;

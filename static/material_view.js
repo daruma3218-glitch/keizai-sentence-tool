@@ -4,6 +4,8 @@
   const chapter = row => row.chapter_index != null ? 'i:' + row.chapter_index : row.chapter_title ? 't:' + row.chapter_title : 'unknown';
   const candidates = (lib, no, includeHidden = false) => (lib.candidates[String(no)] || [])
     .filter(c => includeHidden || !lib.hidden_candidates?.[c.id]);
+  const selectedIds = (lib, no) => lib.selections[no] ? [lib.selections[no], ...(lib.additional_selections?.[no] || [])] : [];
+  const imageNumber = (no, index) => index ? no + '-' + (index + 1) : String(no);
   function state(row, lib) {
     const no = String(row.no);
     if (lib.flags[no]) return 'flagged';
@@ -49,7 +51,7 @@
       offset:Number.isFinite(value.offset) ? Math.max(-5000, Math.min(5000, value.offset)) : 0,
       y:Number.isFinite(value.y) ? Math.max(0, value.y) : 0};
   }
-  const api = {mode, chapter, state, matches, saved, nextPending, remaining, candidates};
+  const api = {mode, chapter, state, matches, saved, nextPending, remaining, candidates, selectedIds, imageNumber};
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.MaterialView = api;
 })(typeof window === 'object' ? window : {});

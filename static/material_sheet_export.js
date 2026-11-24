@@ -44,6 +44,12 @@
     const open = panel.querySelector('[data-sheet-open]');
     const scope = panel.querySelector('[data-sheet-comments]');
     const csv = panel.querySelector('[data-review-csv]');
+    csv?.addEventListener('click', async event => {
+      if (!window.flushMaterialEditNotes) return;
+      event.preventDefault();
+      try { await window.flushMaterialEditNotes(); window.location.assign(csv.href); }
+      catch (error) { status.textContent = error.message; }
+    });
     const query = () => '?comments=' + encodeURIComponent(scope?.value || 'none');
     scope?.addEventListener('change', () => { csv.search = query(); });
     const clientId = panel.dataset.googleClientId;
@@ -61,6 +67,7 @@
           }
           try {
             say('画像プレビューと全場面の一覧を準備しています…');
+            await window.flushMaterialEditNotes?.();
             const response = await fetch('/api/material-jobs/' + encodeURIComponent(panel.dataset.jobId) + '/review.xlsx' + query(), {
               method:'POST', credentials:'same-origin', headers:{'X-Material-CSRF':document.querySelector('meta[name="material-csrf"]').content}
             });

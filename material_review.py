@@ -48,6 +48,7 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
     with store.LOCK:
         library = store.load_library(d)
         discussions = export_lines(d, comments, library)
+        numbered = store.is_russia_job(d)
         sources = store.source_rows(d)
         rows, previous, chapter = [], None, None
         for row in sources:
@@ -56,49 +57,54 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
                 previous = None
             chapter = row.get("chapter_index", 0)
             mode = library["display"].get(no, row.get("display") or ("none" if row.get("route") == "skip" else "image"))
-            chosen = library["selections"].get(no)
+            ids = store.selected_ids(library, no) if mode == "image" else []
             candidates = store.visible_candidates(library, no)
-            candidate = store.candidate(library, no, chosen) if chosen else (candidates[-1] if candidates else None)
-            path, image_url, source, credit, checksum = None, "", row.get("web_source_url", ""), row.get("attribution", ""), ""
-            status = STATUS.get(row.get("status", ""), row.get("status") or "未生成")
-            route = row.get("route", "")
-            if candidate:
-                path = store.safe_path(d, candidate["filename"])
-                checksum = candidate["sha256"]
-                image_url = origin + "/materials/asset/" + quote(d.name, safe="") + "/" + quote(candidate["id"], safe="")
-                source, credit = candidate.get("web_source_url", source), candidate.get("attribution", credit)
-                route = candidate.get("route") or route
-                status = "採用済み" if chosen else "候補あり・未採用"
-            elif library["candidates"].get(no):
-                # Do not reintroduce a hidden original through the legacy fallback.
-                status = "候補はすべて非表示・未採用"
-            elif row.get("filename") or row.get("web_local_file"):
-                filename = row.get("filename") or row["web_local_file"]
-                path = store.safe_path(d / "images", filename)
-                image_url = origin + "/results/" + quote(d.name, safe="") + "/images/" + quote(filename, safe="")
-                if row.get("status") not in {"failed", "generating"}:
-                    status = "生成済み・未採用"
-            if mode == "hold":
-                if previous:
-                    path, image_url, source, credit, checksum, route = previous
-                    status = "前の素材を継続"
+            images = [store.candidate(library, no, cid) for cid in ids] or [candidates[-1] if candidates else None]
+            chosen = bool(ids)
+            for index, candidate in enumerate(images):
+                path, image_url, source, credit, checksum = None, "", row.get("web_source_url", ""), row.get("attribution", ""), ""
+                status = STATUS.get(row.get("status", ""), row.get("status") or "未生成")
+                route = row.get("route", "")
+                if candidate:
+                    path = store.safe_path(d, candidate["filename"])
+                    checksum = candidate["sha256"]
+                    image_url = origin + "/materials/asset/" + quote(d.name, safe="") + "/" + quote(candidate["id"], safe="")
+                    source, credit = candidate.get("web_source_url", source), candidate.get("attribution", credit)
+                    route = candidate.get("route") or route
+                    status = "採用済み" if chosen else "候補あり・未採用"
+                elif library["candidates"].get(no):
+                    # Do not reintroduce a hidden original through the legacy fallback.
+                    status = "候補はすべて非表示・未採用"
+                elif row.get("filename") or row.get("web_local_file"):
+                    filename = row.get("filename") or row["web_local_file"]
+                    path = store.safe_path(d / "images", filename)
+                    image_url = origin + "/results/" + quote(d.name, safe="") + "/images/" + quote(filename, safe="")
+                    if row.get("status") not in {"failed", "generating"}:
+                        status = "生成済み・未採用"
+                if mode == "hold":
+                    if previous:
+                        path, image_url, source, credit, checksum, route = previous
+                        status = "前の素材を継続"
+                    else:
+                        path, image_url, checksum = None, "", ""
+                        status = "継続元なし・要確認"
+                elif mode == "none":
+                    # A skipped scene can still have candidates. Show them for review,
+                    # but do not turn them into adopted images or continuation sources.
+                    previous = None
+                    status = ("素材なし・候補あり" if path else STATUS.get(row.get("status"), "素材なし"))
                 else:
-                    path, image_url, checksum = None, "", ""
-                    status = "継続元なし・要確認"
-            elif mode == "none":
-                # A skipped scene can still have candidates. Show them for review,
-                # but do not turn them into adopted images or continuation sources.
-                previous = None
-                status = ("素材なし・候補あり" if path else STATUS.get(row.get("status"), "素材なし"))
-            else:
-                previous = (path, image_url, source, credit, checksum, route) if path else None
-            note = library["flags"].get(no) or row.get("verify_reason") or row.get("error", "")
-            # The note belongs to the image shown in this row. A continued scene reuses the earlier note's row.
-            edit_note = library["edit_notes"].get(candidate["id"], "") if candidate and mode == "image" else ""
-            rows.append({"values": [row["no"], "", "", discussions.get(no, ""), row.get("sentence", ""), edit_note, status,
-                                     DISPLAY.get(mode, mode), row.get("chapter_title") or chapter,
-                                     ROUTES.get(route, route),
-                                     image_url, source, credit, note], "path": path, "sha256": checksum})
+                    previous = (path, image_url, source, credit, checksum, route) if path else None
+                note = library["flags"].get(no) or row.get("verify_reason") or row.get("error", "")
+                # The note belongs to the image shown in this row. A continued scene reuses the earlier note's row.
+                edit_note = library["edit_notes"].get(candidate["id"], "") if candidate and mode == "image" else ""
+                number = store.image_number(row["no"], index)
+                rows.append({"source_no": no, "adopted_filename": str(number) + path.suffix if numbered and chosen else "",
+                             "license": (candidate or {}).get("license", row.get("license", "")),
+                             "values": [number, "", "", discussions.get(str(number), ""), row.get("sentence", ""), edit_note, status,
+                                         DISPLAY.get(mode, mode), row.get("chapter_title") or chapter,
+                                         ROUTES.get(route, route),
+                                         image_url, source, credit, note], "path": path, "sha256": checksum})
         context = store.read(d / "material_context.json", {}) or {}
         manifest = store.read(d / "manifest.json", {}) or {}
         state = store.read(d / "job.json", {}) or {}
@@ -119,21 +125,35 @@ def review_csv(job_dir, comments="all"):
     return title, ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
-def extend_legacy_csv(job_dir, raw_csv):
+def extend_legacy_csv(job_dir, raw_csv, *, expand_adoptions=True):
     """Keep all existing columns/order, append review fields using current row state."""
     _, rows = review_rows(job_dir, comments="none")
-    by_no = {str(row["values"][0]): row["values"] for row in rows}
+    by_no = {}
+    for row in rows:
+        by_no.setdefault(row["source_no"], []).append(row)
     reader = csv.reader(io.StringIO(raw_csv.lstrip("\ufeff")))
     header = next(reader, [])
     no_index = next((header.index(key) for key in ("№", "番号", "No", "no") if key in header), None)
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerow(header + ["画像URL", "生成・採用状態", "編集への指示", "要修正メモ", "コメント"])
+    keys = ("画像URL", "状態", "編集への指示", "要修正メモ", "コメント")
     for existing in reader:
-        values = by_no.get(str(existing[no_index]) if no_index is not None and len(existing) > no_index else "")
-        keys = ("画像URL", "状態", "編集への指示", "要修正メモ", "コメント")
-        extra = [values[HEADERS.index(key)] for key in keys] if values else [""] * len(keys)
-        writer.writerow([csv_text(value) for value in existing + extra])
+        no = existing[no_index] if no_index is not None and len(existing) > no_index else ""
+        matches = by_no.get(no, [])
+        for item in (matches if expand_adoptions else matches[:1]) or [None]:
+            values = item["values"] if item else []
+            fields = list(existing)
+            if expand_adoptions and item and item["adopted_filename"]:
+                fields[no_index] = values[0]
+                updates = {"画像": item["adopted_filename"], "ソース": values[HEADERS.index("種類")],
+                           "URL": values[HEADERS.index("出典")], "クレジット": values[HEADERS.index("クレジット")],
+                           "ライセンス": item["license"], "エンジン": "", "URL種別": ""}
+                for key, val in updates.items():
+                    if key in header and header.index(key) < len(fields):
+                        fields[header.index(key)] = val
+            extra = [values[HEADERS.index(key)] for key in keys] if values else [""] * len(keys)
+            writer.writerow([csv_text(value) for value in fields + extra])
     return ("\ufeff" + stream.getvalue()).encode("utf-8")
 
 
@@ -184,6 +204,8 @@ def write_workbook(job_dir, destination, comments="all"):
                     literal = "全文は「コメントの続き」シートの場面 " + str(row["values"][0]) + " をご覧ください。"
                 cell = sheet.cell(index, column, literal)
                 cell.data_type = "s"  # Manuscripts beginning with '=' are not formulas.
+                if column == 1:
+                    cell.number_format = "@"  # Google Sheets must keep e.g. 12-2 as an identifier.
                 cell.font = Font(name="Arial", size=11, color="202B28")
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
                 cell.fill = PatternFill("solid", fgColor="FFF5CD" if column == 3 else "E8F1FB" if column == note_column and literal

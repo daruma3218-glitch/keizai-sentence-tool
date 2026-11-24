@@ -272,7 +272,7 @@ def version():
         "material_studio": {"version": material_store.VERSION, "entry": "/materials",
                             "immutable_candidates": True, "handoff_schema": 1,
                             "background_candidates": True, "selection_revision": True,
-                            "edit_notes": True, "russia_image_actions": True},
+                            "edit_notes": True, "russia_image_actions": True, "russia_ordered_images": True},
         "image_generation": {**generation_status(), "operation_slots": studio_operations.limit(),
                              "accepted_operations_limit": studio_operations.queue_limit()},
         "git_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
@@ -2929,7 +2929,7 @@ def download_zip(job_id):
             if p is not None and p.is_file():
                 if extra == "result.csv":
                     from material_review import extend_legacy_csv
-                    zf.writestr(arc, extend_legacy_csv(result_dir, p.read_text(encoding="utf-8-sig")))
+                    zf.writestr(arc, extend_legacy_csv(result_dir, p.read_text(encoding="utf-8-sig"), expand_adoptions=False))
                 else:
                     zf.write(p, arc)
 
