@@ -3,8 +3,10 @@
 
 try:
     from . import subscription_runtime as _subscription
+    from .json_storage import read as _read_json, save as save_json
 except ImportError:
     import subscription_runtime as _subscription
+    from json_storage import read as _read_json, save as save_json
 
 
 import json
@@ -222,21 +224,10 @@ def parse_json_object(text: str) -> dict:
     return {}
 
 
-def save_json(path: Path, data) -> None:
-    """JSON ファイルを保存（ディレクトリも作成）"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
 def load_json(path: Path, default=None):
     """JSON ファイルを読み込み"""
-    if not path.exists():
-        return default if default is not None else {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _read_json(path)
     except (json.JSONDecodeError, OSError):
         return default if default is not None else {}
 

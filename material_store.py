@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from PIL import Image
+from json_storage import read as _read_json, save
 from safe_images import open_image
 
 VERSION = "2026-11-20.1"
@@ -50,19 +51,11 @@ def channel(value):
 
 def read(path, default=None):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        return _read_json(path)
     except FileNotFoundError:
         return copy.deepcopy(default)
     except json.JSONDecodeError:
         raise ValueError("制作データの更新中です。少し待って読み込み直してください")
-
-
-def save(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp.replace(path)
 
 
 def digest(path):

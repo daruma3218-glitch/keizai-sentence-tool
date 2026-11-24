@@ -52,6 +52,19 @@ def test_second_job_waits_until_the_first_finishes(isolated, monkeypatch):
     assert appmod.generation_board() == {"running": None, "waiting": []}
 
 
+def test_queue_is_released_if_display_of_next_job_fails(isolated, monkeypatch):
+    completed = []
+    monkeypatch.setattr(appmod, "_run_pipeline_body", lambda job: completed.append(job))
+    def bad_board():
+        raise OSError("cannot read a waiting job")
+    with monkeypatch.context() as patch:
+        patch.setattr(appmod, "generation_board", bad_board)
+        appmod._run_pipeline_thread("first")
+    assert appmod._RUNNING["job_id"] is None and not appmod._GENERATION_SLOT.locked()
+    appmod._run_pipeline_thread("second")
+    assert completed == ["first", "second"]
+
+
 def test_done_message_counts_flagged_images_and_mentions_next_job():
     state = {"status": "completed", "title": "ステルス値上げ", "creator": "新居",
              "generated": 38, "total_sentences": 45}

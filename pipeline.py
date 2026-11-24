@@ -460,9 +460,7 @@ class SentencePipeline:
         # 共有ロックで書き込みを直列化（同時書き込みによる更新消失を防ぐ）
         with SNAPSHOT_IO_LOCK:
             try:
-                (self.output_dir / "rows_progress.json").write_text(
-                    json.dumps(snapshot, ensure_ascii=False), encoding="utf-8"
-                )
+                save_json(self.output_dir / "rows_progress.json", snapshot, indent=None)
             except Exception:
                 pass
 

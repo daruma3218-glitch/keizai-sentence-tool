@@ -9,6 +9,7 @@ import functools
 import io
 import csv
 import json
+import logging
 import os
 import secrets
 import sys
@@ -326,7 +327,7 @@ def _set_job_state(job_id: str, **kwargs):
     with _jobs_lock:
         if job_id not in _jobs:
             try:
-                saved = json.loads((OUTPUT_DIR / job_id / "job.json").read_text(encoding="utf-8"))
+                saved = material_store.read(OUTPUT_DIR / job_id / "job.json", {})
                 if isinstance(saved, dict):
                     _jobs[job_id] = saved
             except (OSError, ValueError):
@@ -350,7 +351,8 @@ def _get_job_state(job_id: str) -> dict:
     job_path = OUTPUT_DIR / job_id / "job.json"
     if job_path.exists():
         try:
-            return json.loads(job_path.read_text(encoding="utf-8"))
+            state = material_store.read(job_path, {})
+            return state if isinstance(state, dict) else {}
         except Exception:
             pass
     return {}
@@ -363,15 +365,18 @@ def _add_log(job_id: str, category: str, message: str, detail: str = ""):
         "message": message,
         "detail": detail,
     }
+    path = OUTPUT_DIR / job_id / "logs.json"
     with _jobs_lock:
-        logs = _job_logs.setdefault(job_id, [])
-        logs.append(entry)
-    try:
-        (OUTPUT_DIR / job_id / "logs.json").write_text(
-            json.dumps(_job_logs[job_id], ensure_ascii=False), encoding="utf-8"
-        )
-    except Exception:
-        pass
+        try:
+            if job_id not in _job_logs:
+                previous = material_store.read(path, [])
+                if not isinstance(previous, list):
+                    raise ValueError("invalid log history")
+                _job_logs[job_id] = previous
+            _job_logs[job_id].append(entry)
+            material_store.save(path, _job_logs[job_id], indent=None)
+        except (OSError, ValueError) as exc:
+            logging.warning("Could not append studio job log: %s", type(exc).__name__)
 
 
 
@@ -464,12 +469,17 @@ def _run_pipeline_thread(job_id: str, *args, **kwargs):
     try:
         _run_pipeline_body(job_id, *args, **kwargs)
     finally:
-        job_control.clear(OUTPUT_DIR / job_id)  # 止める指示はこの回だけ（再開で残らないように）
-        # 次に始まる回は、枠を渡す前に控える（渡した直後に順番待ちの列から消えるため）
-        next_job = (generation_board()["waiting"] or [None])[0]
-        with _QUEUE_LOCK:
-            _RUNNING["job_id"] = None
-        slot.release()
+        next_job = None
+        try:
+            job_control.clear(OUTPUT_DIR / job_id)
+            # 枠を渡す直前に次の件名を控え、通知用の読み取りに失敗しても次の回に枠を渡す。
+            next_job = (generation_board()["waiting"] or [None])[0]
+        except Exception as exc:
+            logging.warning("Could not prepare the studio queue summary: %s", type(exc).__name__)
+        finally:
+            with _QUEUE_LOCK:
+                _RUNNING["job_id"] = None
+            slot.release()
         try:
             _notify_job_done(job_id, next_job)
         except Exception as e:
@@ -675,7 +685,7 @@ def _run_pipeline_body(job_id: str, manuscript_text: str, user_instructions: str
                     r["error"] = f"ジョブ中断: {str(e)[:120]}"
                     dirty = True
             if dirty:
-                rows_path.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+                material_store.save(rows_path, snap, indent=None)
         except Exception:
             pass
         _set_job_state(job_id, status="error", message=str(e)[:200], percent=0)
@@ -1060,7 +1070,7 @@ def api_scene_fix():
         "events": events[-30:],
         "created_at": datetime.now().isoformat(),
     }
-    (job_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    material_store.save(job_dir / "manifest.json", manifest)
     (job_dir / "scene.txt").write_text(sentence, encoding="utf-8")
 
     return jsonify({"ok": True, **manifest})
@@ -1195,7 +1205,7 @@ def api_scene_fix_revise(job_id):
     variant["url"] = revised["url"]
     variant["revision_no"] = revision_no
     variant["revised_at"] = revised["created_at"]
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    material_store.save(manifest_path, manifest)
 
     return jsonify({"ok": True, "job_id": job_id, "variant": variant, "revision": revised})
 
@@ -1222,9 +1232,9 @@ def api_scene_fix_select(job_id):
         "url": variant.get("url", ""),
         "selected_at": datetime.now().isoformat(),
     }
-    (job_dir / "selected_variant.json").write_text(json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8")
+    material_store.save(job_dir / "selected_variant.json", selected)
     manifest["selected_variant"] = selected
-    (job_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    material_store.save(job_dir / "manifest.json", manifest)
     return jsonify({"ok": True, **selected})
 
 
@@ -1420,8 +1430,7 @@ def start_job():
         (job_dir / "user_instructions.txt").write_text(user_instructions, encoding="utf-8")
     # .docx の見出しから作った章構造を保存（pipeline が読み込む）
     if prebuilt_chapters:
-        (job_dir / "prebuilt_chapters.json").write_text(
-            json.dumps({"chapters": prebuilt_chapters}, ensure_ascii=False), encoding="utf-8")
+        material_store.save(job_dir / "prebuilt_chapters.json", {"chapters": prebuilt_chapters}, indent=None)
 
     # 冒頭・終わりの固定画像（任意）を保存（images/intro.*, images/outro.*）
     (job_dir / "images").mkdir(parents=True, exist_ok=True)
@@ -1457,16 +1466,20 @@ def start_job():
         creator=(request.form.get("creator") or "").strip()[:20],
     )
 
-    thread = threading.Thread(
-        target=_run_pipeline_thread,
-        args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
-              skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
-              channel_id, ch_keys, character_ref_path, title_override, fact_context),
-        kwargs={"openai_model": openai_model,
-                "profile_override": material_project["profile"] if material_project else None},
-        daemon=True,
-    )
-    thread.start()
+    try:
+        threading.Thread(
+            target=_run_pipeline_thread,
+            args=(job_id, manuscript_text, user_instructions, concurrency, provider, openai_quality,
+                  skip_decorative, style_preset, web_image_count, max_diagrams, route_mode, worldview_desc, verify_diagrams,
+                  channel_id, ch_keys, character_ref_path, title_override, fact_context),
+            kwargs={"openai_model": openai_model,
+                    "profile_override": material_project["profile"] if material_project else None},
+            daemon=True,
+        ).start()
+    except RuntimeError:
+        message = "原稿と設定を保存しました。生成を開始できなかったため、進捗画面から再開してください。"
+        _set_job_state(job_id, status="interrupted", message=message)
+        return jsonify(error=message, job_id=job_id, redirect=url_for("progress_page", job_id=job_id)), 503
     return jsonify({"job_id": job_id, "redirect": f"/progress/{job_id}"})
 
 
@@ -1694,7 +1707,7 @@ def api_rows(job_id):
 @app.route("/api/logs/<job_id>")
 @login_required
 def api_logs(job_id):
-    since = int(request.args.get("since", 0))
+    since = max(0, request.args.get("since", 0, type=int))
     with _jobs_lock:
         logs = list(_job_logs.get(job_id, []))
     if not logs:
@@ -1927,7 +1940,7 @@ def _finish_cancelled_job(job_dir, job_id: str) -> None:
                 r["error"] = "中止しました"
                 dirty = True
         if dirty:
-            rows_path.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+            material_store.save(rows_path, snap, indent=None)
     except Exception:
         pass
     _set_job_state(job_id, status="cancelled", message="途中で止めました。作り終えた素材は残っています。続きは「残りの生成を再開」から。")
@@ -1975,7 +1988,6 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=No
     同時に2枚再生成した場合や、実行中ジョブの _dump_snapshot と重なった場合に
     片方の更新が失われる競合を防ぐ。
     """
-    import json as _json
     snap_path = job_dir / "rows_progress.json"
     with SNAPSHOT_IO_LOCK:
         snap = load_json(snap_path, {"rows": []})
@@ -1994,7 +2006,7 @@ def _update_regen_snapshot(job_dir, no, ok, filename=None, engine=None, route=No
                     r.update(extra)
                 break
         try:
-            snap_path.write_text(_json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+            material_store.save(snap_path, snap, indent=None)
         except Exception:
             pass
 
@@ -2042,7 +2054,6 @@ def _find_existing_scene_image(job_dir, no, snap_row=None, target=None):
 
 def _save_regen_prompt(job_dir, row):
     """ルート変更再生成で作った prompt を prompts.json に保存して次回再生成でも使えるようにする。"""
-    import json as _json
     prompts_path = job_dir / "prompts.json"
     data = load_json(prompts_path, {"rows": []})
     rows = data.get("rows", [])
@@ -2058,7 +2069,7 @@ def _save_regen_prompt(job_dir, row):
         rows.append(row)
     data["rows"] = rows
     try:
-        prompts_path.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        material_store.save(prompts_path, data, indent=None)
     except Exception:
         pass
 

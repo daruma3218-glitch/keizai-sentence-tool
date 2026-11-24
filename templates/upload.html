@@ -715,6 +715,10 @@
         const res = await fetch('/start', { method: 'POST', body: formData });
         const data = await res.json();
         if (!res.ok) {
+          if (data.job_id && data.redirect) {
+            window.location.href = data.redirect;
+            return;
+          }
           errorBox.textContent = data.error || 'エラーが発生しました';
           errorBox.classList.remove('hidden');
           submitBtn.disabled = false;
