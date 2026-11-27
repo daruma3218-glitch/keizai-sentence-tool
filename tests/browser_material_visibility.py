@@ -16,17 +16,52 @@ from browser_material_comments import seed
 import material_store as store
 
 
+def check_compare_backdrop(page, width):
+    scene = page.locator('article.scene[data-no="3"]')
+    compare = scene.get_by_role("button", name="大きく比較・採用")
+    dialog = page.locator("#preview-dialog")
+    compare.click()
+    box = dialog.bounding_box()
+    y = box["y"] + box["height"] / 2
+    left, inside, right = box["x"] - 3, box["x"] + 2, box["x"] + box["width"] + 3
+    assert 0 < left < inside < right < width
+    page.mouse.click(inside, y)  # The white padding can target the dialog itself too.
+    expect(dialog).to_be_visible()
+    for start, end in ((inside, left), (left, inside)):
+        page.mouse.move(start, y)
+        page.mouse.down()
+        page.mouse.move(end, y, steps=4)
+        page.mouse.up()
+        expect(dialog).to_be_visible()
+    click = page.touchscreen.tap if width < 700 else page.mouse.click
+    click(left, y)
+    expect(dialog).to_be_hidden()
+    expect(scene).to_be_focused()
+
+    compare.click()
+    note = "この場面からFLOW動画を使用"
+    dialog.get_by_role("textbox", name="採用画像なしの編集指示").fill(note)
+    with page.expect_response(lambda r: r.url.endswith("/edit-note") and r.ok):
+        click(right, y)
+    expect(dialog).to_be_hidden()
+    page.reload()
+    expect(scene.get_by_role("textbox", name="採用画像なしの編集指示")).to_have_value(note)
+    compare.click()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+
+
 def exercise(browser, origin, root, width, output):
     job = f"visibility{width}"
     d = root / "output" / job
     errors, refused = [], []
     context = browser.new_context(viewport={"width": width, "height": 844 if width < 700 else 900},
-                                  service_workers="block")
+                                  has_touch=width < 700, service_workers="block")
     def restrict(route):
         request = route.request
         path = urlsplit(request.url)
         allowed = path.netloc == urlsplit(origin).netloc and (
-            request.method == "GET" or path.path.endswith(("/sync", "/selection")))
+            request.method == "GET" or path.path.endswith(("/sync", "/selection", "/edit-note")))
         if allowed:
             route.continue_()
         else:
@@ -37,6 +72,9 @@ def exercise(browser, origin, root, width, output):
     page.on("pageerror", lambda error: errors.append(str(error)))
     try:
         page.goto(f"{origin}/materials/jobs/{job}")
+        selection_revision = store.load_library(d)["selection_revision"]
+        check_compare_backdrop(page, width)
+        assert store.load_library(d)["selection_revision"] == selection_revision
         scene = page.locator('[data-no="1"]')
         expect(scene.locator(".candidate")).to_have_count(2)
         expect(page.locator("#hidden-candidates-control")).to_be_hidden()
@@ -61,6 +99,8 @@ def exercise(browser, origin, root, width, output):
         scene.locator('[data-action="compare"]').click()
         expect(page.locator("#review-candidate-id option")).to_have_count(1)
         expect(page.locator("#review-visibility")).to_be_disabled()
+        page.locator("#preview-image").click()
+        expect(page.locator("#preview-dialog")).to_be_visible()
         page.locator('[data-close="preview-dialog"]').click()
         page.locator("#show-hidden-candidates").check()
         expect(other.locator(".hidden-candidate-label")).to_have_text("非表示")
@@ -78,6 +118,8 @@ def exercise(browser, origin, root, width, output):
         adopted.locator('[data-action="clear"]').click()
         adopted.locator('[data-action="comments"]').click()
         expect(page.locator("#review-title")).to_have_text("画像のコメント")
+        page.mouse.click(2, 200)
+        expect(page.locator("#preview-dialog")).to_be_visible()
         page.locator("#review-visibility").click()
         expect(page.locator("#review-candidate-id option")).to_have_count(1)
         # Hide the last visible candidate and recover without leaving the dialog.
@@ -102,7 +144,7 @@ def exercise(browser, origin, root, width, output):
             assert path.read_bytes() == content
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
         assert not refused and not errors, (refused, errors)
-        print(f"Chrome {width}px: hide, restore, undo, reload, comparison, comments, all-hidden recovery passed", flush=True)
+        print(f"Chrome {width}px: backdrop dismissal, saved note, hide, restore, undo, comparison and comments passed", flush=True)
     finally:
         context.close()
 

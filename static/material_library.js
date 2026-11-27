@@ -613,9 +613,27 @@
     scene?.scrollIntoView({block:'center',behavior:'instant'});
     scene?.querySelector('[data-action="generate"]')?.focus({preventScroll:true});
   });
-  $('preview-dialog').addEventListener('close', () => {
+  const reviewDialog = $('preview-dialog');
+  let pressedBackdrop = false;
+  function onCompareBackdrop(event) {
+    if (reviewDialog.dataset.mode !== 'compare' || event.target !== reviewDialog) return false;
+    // The backdrop and the white padding both dispatch events to the dialog.
+    const {left, right, top, bottom} = reviewDialog.getBoundingClientRect();
+    return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
+  }
+  reviewDialog.addEventListener('pointerdown', event => {
+    pressedBackdrop = event.isPrimary && event.button === 0 && onCompareBackdrop(event);
+  });
+  reviewDialog.addEventListener('pointercancel', () => { pressedBackdrop = false; });
+  reviewDialog.addEventListener('click', event => {
+    const dismiss = pressedBackdrop && onCompareBackdrop(event);
+    pressedBackdrop = false;
+    if (dismiss) reviewDialog.close();
+  });
+  reviewDialog.addEventListener('close', () => {
+    pressedBackdrop = false;
     const scene = [...document.querySelectorAll('.scene')].find(el => el.dataset.no === reviewNo);
-    const trigger = $('preview-dialog').dataset.mode === 'comments' && reviewTrigger?.isConnected && reviewTrigger;
+    const trigger = reviewDialog.dataset.mode === 'comments' && reviewTrigger?.isConnected && reviewTrigger;
     (trigger || scene || $('review-next')).focus({preventScroll:true});
   });
   $('variant-form').addEventListener('submit', async event => {
