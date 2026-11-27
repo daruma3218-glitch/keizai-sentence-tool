@@ -1,8 +1,4 @@
-"""編集への指示：画像1枚ごとに、編集担当への指示と出典URLを1つの欄に残す（2026-11-20）。
-
-コメント（状態つきの話し合い）とは別に残り、採用した画像の指示だけが
-スプシ・CSV・編集担当へ渡すZIPに出る。指示は場面ではなく画像に付く。
-"""
+"""Image-specific and image-free editor directions through the studio and its exports."""
 import csv
 import io
 import json
@@ -60,6 +56,101 @@ def sample(tmp_path, monkeypatch):
 def save(client, no, candidate_id, note):
     return client.post(URL, data=json.dumps({"no": no, "candidate_id": candidate_id, "note": note}),
                        content_type="application/json", headers=HEADERS)
+
+
+def save_scene(client, no, note):
+    return client.post(URL, json={"scope": "scene", "no": no, "note": note}, headers=HEADERS)
+
+
+def choose(client, no, action, candidate_id=None):
+    api = "/api/material-jobs/sample"
+    revision = client.get(api).get_json()["library"]["selection_revision"]
+    response = client.post(api + "/selection", headers=HEADERS, json={
+        "selection_revision": revision, "no": no, "action": action, "candidate_id": candidate_id})
+    assert response.status_code == 200
+
+
+def test_scene_directions_reach_sheet_csv_and_editor_zip_without_an_image(sample):
+    d, client, _, _, third = sample
+    note = "「店頭で」からFLOW動画「店頭.mp4」を使用\nhttps://example.com/flow"
+    save(client, 3, third, "この候補を採用する時の指示")
+    assert save_scene(client, 3, note).status_code == 200
+    pending = store.handoff(d)
+    assert pending["rows"][2]["edit_note"] == note
+    assert pending["rows"][2]["asset"] is None and not pending["ready_for_editing"]
+    assert review.review_rows(d)[1][2]["values"][review.HEADERS.index("編集への指示")] == note
+
+    choose(client, 3, "none")
+    handoff = client.get("/api/material-jobs/sample/handoff").get_json()
+    assert handoff["ready_for_editing"] and handoff["rows"][2]["asset"] is None
+    response = client.post("/api/material-jobs/sample/export", headers=HEADERS,
+                           json={"revision": handoff["material_revision"], "selection_hash": handoff["selection_hash"]})
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+        row = json.loads(archive.read("material-handoff.json"))["rows"][2]
+        assert (row["display"], row["asset"], row["edit_note"]) == ("none", None, note)
+        table = list(csv.DictReader(io.StringIO(archive.read("採用素材.csv").decode("utf-8-sig"))))
+        assert table[2]["採用画像"] == "" and table[2]["編集への指示"] == note
+        assert store.candidate(store.load_library(d), 3, third)["filename"] not in archive.namelist()
+    csv_rows = list(csv.DictReader(io.StringIO(client.get("/api/material-jobs/sample/review.csv").data.decode("utf-8-sig"))))
+    assert csv_rows[2]["編集への指示"] == note and csv_rows[2]["画像URL"] == ""
+    workbook = io.BytesIO()
+    review.write_workbook(d, workbook)
+    sheet = load_workbook(workbook).active
+    assert sheet["F4"].value == note and sheet["K4"].value in (None, "")
+    assert all(image.anchor._from.row != 3 for image in sheet._images)
+    assert not client.get("/api/material-jobs/sample").get_json()["export"]["changed"]
+    assert save_scene(client, 3, "別の共有URLに変更").status_code == 200
+    assert client.get("/api/material-jobs/sample").get_json()["export"]["changed"]
+
+
+def test_scene_with_zero_candidates_and_legacy_library(sample):
+    d, client, *_ = sample
+    path = d / "material_library.json"
+    old = store.read(path)
+    old.pop("scene_edit_notes", None)
+    store.save(path, old)
+    original = store.selection_hash(d)
+    assert "scene_edit_notes" not in store.read(path)
+    note = "字幕を重ねる"
+    data = save_scene(client, 2, "  " + note + "  ").get_json()["library"]
+    assert data["scene_edit_notes"] == {"2": note} and data["selection_revision"] == old["selection_revision"]
+    assert not data["candidates"].get("2")
+    assert save_scene(client, 2, note).get_json()["library"]["revision"] == data["revision"]
+    row = store.handoff(d)["rows"][1]
+    assert row["edit_note"] == note and row["display"] == "hold" and row["hold_asset_id"]
+    assert row["asset"] is None and store.selection_hash(d) != original
+    choose(client, 2, "none")
+    assert store.handoff(d)["rows"][1]["edit_note"] == note
+    choose(client, 2, "undo")
+    assert save_scene(client, 2, "").get_json()["library"]["scene_edit_notes"] == {}
+    assert store.selection_hash(d) == original
+
+
+def test_changing_adoption_restores_the_matching_note(sample):
+    d, client, _, _, third = sample
+    save_scene(client, 3, "FLOW動画")
+    save(client, 3, third, "画像をズーム")
+    choose(client, 3, "select", third)
+    selected = store.selection_hash(d)
+    save_scene(client, 3, "FLOW動画の共有先を変更")
+    assert store.selection_hash(d) == selected
+    assert store.handoff(d)["rows"][2]["edit_note"] == "画像をズーム"
+    assert review.review_rows(d)[1][2]["values"][review.HEADERS.index("編集への指示")] == "画像をズーム"
+    choose(client, 3, "clear", third)
+    assert store.handoff(d)["rows"][2]["edit_note"] == "FLOW動画の共有先を変更"
+    choose(client, 3, "undo")
+    assert store.handoff(d)["rows"][2]["edit_note"] == "画像をズーム"
+
+
+def test_scene_note_validates_the_target_and_length_before_saving(sample):
+    d, client, first, *_ = sample
+    assert save_scene(client, 8, "無い場面").status_code == 409
+    assert save_scene(client, 3, "あ" * (store.EDIT_NOTE_MAX + 1)).status_code == 409
+    assert client.post(URL, json={"scope": "scene", "no": 3, "note": "x"}).status_code == 403
+    for invalid in ({"scope": "scene", "candidate_id": first}, {"scope": "unknown"}, {}):
+        assert client.post(URL, json={"no": 3, "note": "x", **invalid}, headers=HEADERS).status_code == 409
+    assert store.load_library(d)["scene_edit_notes"] == {}
 
 
 def test_note_is_saved_per_image_and_can_be_cleared(sample):

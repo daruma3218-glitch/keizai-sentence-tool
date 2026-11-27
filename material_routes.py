@@ -241,7 +241,7 @@ def register(module):
     @bp.route("/api/material-jobs/<job_id>/edit-note", methods=["POST"])
     @module.login_required
     def edit_note(job_id):
-        # Directions for the editor (and web source URLs), one per image. Not part of undo.
+        # Editor directions survive selection changes and undo.
         store.edit_note_change(job(job_id), request.get_json(silent=True) or {})
         return jsonify(payload(job(job_id)))
 

@@ -75,6 +75,10 @@
   <p id="review-sentence" class="review-sentence"></p><p id="review-flag" class="hint flag-label" hidden></p>
   <p class="hint review-browse-hint">見る場面を移動 <span>· 採用は変更しません</span></p>
   <nav class="review-navigation" aria-label="拡大したまま場面を移動"><button id="review-prev-scene" type="button" class="button compact">← 前の場面</button><span id="review-position" class="hint" role="status"></span><button id="review-next-scene" type="button" class="button compact">次の場面 →</button></nav>
+  <div id="review-scene-directions" hidden>
+    <div class="note-field"><label for="review-scene-input">採用画像なしの編集指示</label><textarea id="review-scene-input" class="edit-note-input" rows="1" maxlength="1000"></textarea><span class="note-state" aria-live="polite"></span></div>
+    <button id="review-scene-none" type="button" class="button compact">この場面を「素材なし」にする</button>
+  </div>
   <div id="review-grid" class="review-grid">
     <div id="review-reference" class="review-pane"><label for="review-reference-id">比較する候補</label><select id="review-reference-id"></select><img id="review-reference-image" alt="比較する候補の拡大表示"><button id="review-use-reference" type="button" class="button review-use-reference">この候補を選ぶ →</button></div>
     <div class="review-pane review-choice"><div class="review-image-tools"><label id="review-candidate-label" for="review-candidate-id">採用する候補</label><select id="review-candidate-id"></select><button type="button" id="comment-script-toggle" class="text-button" aria-expanded="false" aria-controls="comment-script" hidden>原稿<span aria-hidden="true">⌄</span></button></div><img id="preview-image" alt="表示中の候補画像"><p id="comment-script" hidden></p><p id="review-chosen" class="hint"></p>
@@ -129,13 +133,13 @@
   </div>
 </dialog>
 <dialog id="flag-dialog" aria-labelledby="flag-title"><form id="flag-form"><div class="dialog-heading"><h2 id="flag-title">要修正のメモ</h2><button class="icon-button" type="button" data-close="flag-dialog" aria-label="閉じる">×</button></div><label for="flag-note">確認・修正したい内容</label><textarea id="flag-note" maxlength="500" rows="3" required placeholder="例：画面内の文字を確認する"></textarea><p class="hint">採用や手直しをしても、このメモは残ります。確認後に自分で解除してください。</p><div class="actions"><button class="button" type="button" id="clear-flag">要修正を解除</button><button class="button dark" type="submit">メモを保存</button></div></form></dialog>
-<dialog id="export-dialog" aria-labelledby="export-title"><div class="dialog-heading"><h2 id="export-title">途中の採用素材を書き出します</h2><button class="icon-button" data-close="export-dialog" aria-label="閉じる">×</button></div><p id="export-warning"></p><p class="hint">採用されている素材だけを書き出します。要修正の採用画像も含まれます。素材の準備完了・動画の最終承認にはなりません。</p><div class="actions"><button class="button" data-close="export-dialog" type="button">確認を続ける</button><button class="button dark" id="export-confirm" type="button">途中版として書き出す</button></div></dialog>
+<dialog id="export-dialog" aria-labelledby="export-title"><div class="dialog-heading"><h2 id="export-title">途中の採用素材を書き出します</h2><button class="icon-button" data-close="export-dialog" aria-label="閉じる">×</button></div><p id="export-warning"></p><p class="hint">採用画像と、各場面の編集指示を書き出します。要修正の採用画像も含まれます。素材の準備完了・動画の最終承認にはなりません。</p><div class="actions"><button class="button" data-close="export-dialog" type="button">確認を続ける</button><button class="button dark" id="export-confirm" type="button">途中版として書き出す</button></div></dialog>
 {% endblock %}
 {% block scripts %}
 <script>window.materialJobId = {{ job_id | tojson }}; window.materialChannelId = {{ channel.id | tojson }};</script>
 <script src="{{ url_for('static', filename='material_view.js', v='20261124seq') }}"></script>
 <script src="{{ url_for('static', filename='material_comments.js') }}"></script>
 {% if channel.id == 'economy' %}<script src="{{ url_for('static', filename='material_regions.js', v='20261124') }}"></script>{% endif %}
-<script src="{{ url_for('static', filename='material_library.js', v='20261124seq') }}"></script>
+<script src="{{ url_for('static', filename='material_library.js', v='20261127notes') }}"></script>
 <script src="{{ url_for('static', filename='material_sheet_export.js', v='20261124seq') }}"></script>
 {% endblock %}

@@ -56,8 +56,9 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
             if chapter != row.get("chapter_index", 0):
                 previous = None
             chapter = row.get("chapter_index", 0)
-            mode = library["display"].get(no, row.get("display") or ("none" if row.get("route") == "skip" else "image"))
+            mode = store.display_mode(row, library)
             ids = store.selected_ids(library, no) if mode == "image" else []
+            scene_note = "" if ids else store.selected_edit_note(library, no, mode)
             candidates = store.visible_candidates(library, no)
             images = [store.candidate(library, no, cid) for cid in ids] or [candidates[-1] if candidates else None]
             chosen = bool(ids)
@@ -65,7 +66,10 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
                 path, image_url, source, credit, checksum = None, "", row.get("web_source_url", ""), row.get("attribution", ""), ""
                 status = STATUS.get(row.get("status", ""), row.get("status") or "未生成")
                 route = row.get("route", "")
-                if candidate:
+                if mode == "none" and scene_note:
+                    source = credit = route = ""
+                    status = "素材なし・編集指示あり"
+                elif candidate:
                     path = store.safe_path(d, candidate["filename"])
                     checksum = candidate["sha256"]
                     image_url = origin + "/materials/asset/" + quote(d.name, safe="") + "/" + quote(candidate["id"], safe="")
@@ -89,15 +93,14 @@ def review_rows(job_dir, origin="https://sozai.apprendre.jp", *, comments="all")
                         path, image_url, checksum = None, "", ""
                         status = "継続元なし・要確認"
                 elif mode == "none":
-                    # A skipped scene can still have candidates. Show them for review,
-                    # but do not turn them into adopted images or continuation sources.
                     previous = None
-                    status = ("素材なし・候補あり" if path else STATUS.get(row.get("status"), "素材なし"))
+                    if not scene_note:
+                        status = ("素材なし・候補あり" if path else STATUS.get(row.get("status"), "素材なし"))
                 else:
                     previous = (path, image_url, source, credit, checksum, route) if path else None
                 note = library["flags"].get(no) or row.get("verify_reason") or row.get("error", "")
-                # The note belongs to the image shown in this row. A continued scene reuses the earlier note's row.
-                edit_note = library["edit_notes"].get(candidate["id"], "") if candidate and mode == "image" else ""
+                # Pending previews keep their candidate notes unless the scene has its own directions.
+                edit_note = scene_note or (library["edit_notes"].get(candidate["id"], "") if candidate and mode == "image" else "")
                 number = store.image_number(row["no"], index)
                 rows.append({"source_no": no, "adopted_filename": str(number) + path.suffix if numbered and chosen else "",
                              "license": (candidate or {}).get("license", row.get("license", "")),

@@ -141,6 +141,10 @@ def source_rows(job_dir):
     return sorted(rows, key=lambda r: int(r.get("no") or 0))
 
 
+def display_mode(row, lib):
+    return lib["display"].get(str(row["no"]), row.get("display") or ("none" if row.get("route") == "skip" else "image"))
+
+
 def load_library(job_dir):
     library = read(Path(job_dir) / "material_library.json",
                 {"schema_version": 1, "revision": 0, "candidates": {}, "selections": {},
@@ -150,6 +154,7 @@ def load_library(job_dir):
     library.setdefault("selection_revision", library["revision"])
     library.setdefault("hidden_candidates", {})
     library.setdefault("edit_notes", {})
+    library.setdefault("scene_edit_notes", {})
     library.setdefault("additional_selections", {})
     return library
 
@@ -349,7 +354,7 @@ EDIT_NOTE_MAX = 1000
 
 
 def clean_edit_note(value):
-    """One free-text field per image: directions for the editor and web source URLs."""
+    """Directions for the editor, including asset names and source URLs."""
     note = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     note = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", note).strip()
     if len(note) > EDIT_NOTE_MAX:
@@ -358,27 +363,39 @@ def clean_edit_note(value):
 
 
 def edit_note_change(job_dir, body):
-    """Save or clear the editor note of one image. Notes follow the image, not the scene."""
+    """Keep notes for individual images separate from directions for scenes without one."""
     with LOCK:
         lib = load_library(job_dir)
         no = str(body.get("no"))
         if not any(str(r.get("no")) == no for r in source_rows(job_dir)):
             raise ValueError("場面が見つかりません")
-        picked = candidate(lib, no, body.get("candidate_id"))
+        scope = body.get("scope", "image")
+        detail = {"no": no}
+        if scope == "scene" and not body.get("candidate_id"):
+            notes, key = lib["scene_edit_notes"], no
+            detail["scope"] = "scene"
+        elif scope == "image":
+            key = candidate(lib, no, body.get("candidate_id"))["id"]
+            notes = lib["edit_notes"]
+            detail["candidate_id"] = key
+        else:
+            raise ValueError("編集への指示の保存先を確認してください")
         note = clean_edit_note(body.get("note"))
-        if note == lib["edit_notes"].get(picked["id"], ""):
+        if note == notes.get(key, ""):
             return lib
         if note:
-            lib["edit_notes"][picked["id"]] = note
+            notes[key] = note
         else:
-            lib["edit_notes"].pop(picked["id"], None)
-        commit_library(job_dir, lib, "edit_note", {"no": no, "candidate_id": picked["id"]})
+            notes.pop(key, None)
+        commit_library(job_dir, lib, "edit_note", detail)
         return lib
 
 
 def selected_edit_note(lib, no, display="image"):
     chosen = lib["selections"].get(str(no))
-    return lib.get("edit_notes", {}).get(chosen, "") if chosen and display == "image" else ""
+    if chosen and display == "image":
+        return lib.get("edit_notes", {}).get(chosen, "")
+    return lib.get("scene_edit_notes", {}).get(str(no), "")
 
 
 def selection_hash(job_dir, lib=None):
@@ -386,13 +403,14 @@ def selection_hash(job_dir, lib=None):
     lib = lib if lib is not None else load_library(job_dir)
     row_keys = ("no", "chapter_index", "block_index", "sentence", "display", "route", "est_start")
     selected = {no: candidate(lib, no, cid) for no, cid in lib["selections"].items()}
-    contents = {"rows": [{k: row.get(k) for k in row_keys} for row in source_rows(job_dir)],
+    rows = source_rows(job_dir)
+    contents = {"rows": [{k: row.get(k) for k in row_keys} for row in rows],
                 "selections": selected, "display": lib["display"], "flags": lib["flags"],
                 "source_job_status": (read(Path(job_dir) / "job.json", {}) or {}).get("status", "unknown")}
-    notes = {no: lib.get("edit_notes", {}).get(cid) for no, cid in lib["selections"].items()
-             if lib.get("edit_notes", {}).get(cid)}
+    notes = {str(row["no"]): note for row in rows
+             if (note := selected_edit_note(lib, row["no"], display_mode(row, lib)))}
     if notes:
-        # Only notes of adopted images reach the editor. Older exports keep their identity.
+        # Omit the key when empty to preserve the identity of earlier exports.
         contents["edit_notes"] = notes
     if lib.get("additional_selections"):
         contents["additional_selections"] = {
@@ -436,7 +454,7 @@ def handoff(job_dir):
             previous = None
         previous_chapter = r.get("chapter_index", 0)
         no = str(r["no"])
-        display = lib["display"].get(no, r.get("display") or ("none" if r.get("route") == "skip" else "image"))
+        display = display_mode(r, lib)
         images = handoff_images(job_dir, lib, r["no"], numbered) if display == "image" else []
         first = images[0] if images else {}
         if display == "image":
@@ -454,7 +472,7 @@ def handoff(job_dir):
         rows.append({"no": r["no"], "chapter_index": r.get("chapter_index", 0),
                      "block_index": r.get("block_index", 0), "sentence": r.get("sentence", ""),
                      "display": display, "asset": first.get("asset"),
-                     "edit_note": first.get("edit_note", ""),
+                     "edit_note": selected_edit_note(lib, no, display),
                      "hold_asset_id": previous["id"] if display == "hold" and previous else None,
                      "estimated_start": r.get("est_start"), "timing_status": "narration_alignment_required"})
         if len(images) > 1:

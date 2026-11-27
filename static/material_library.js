@@ -9,13 +9,25 @@
   const sequenceTools = $('review-sequence');
   const storageKey = 'material.selection.v1.' + window.materialJobId;
   const pendingKey = 'material.pending.v1.' + window.materialJobId;
-  // 編集への指示：書きかけ（まだ保存していない文）・保存待ちのタイマー・画像の場面番号
+  // Image and scene drafts use distinct keys, including while a save is in flight.
   const noteDrafts = new Map(), noteTimers = new Map(), noteScenes = new Map(), noteWrites = new Map();
-  const noteValue = id => noteDrafts.has(id) ? noteDrafts.get(id) : (data?.library.edit_notes?.[id] || '');
+  const sceneNoteKey = no => 'scene:' + no;
+  function storedNote(no, id) {
+    return (id === sceneNoteKey(no) ? data.library.scene_edit_notes?.[no] : data.library.edit_notes?.[id]) || '';
+  }
+  const noteValue = (no, id) => noteDrafts.has(id) ? noteDrafts.get(id) : storedNote(no, id);
   const notePlaceholder = index => index > 0 ? '任意：例「〇〇」からこの画像' : '✎ 編集への指示・出典URL';
-  const noteField = (no, id, index) => '<div class="note-field"><textarea class="edit-note-input" rows="1" maxlength="1000" data-no="' + esc(no) +
-    '" data-note-for="' + esc(id) + '" placeholder="' + notePlaceholder(index) + '" aria-label="編集への指示・出典URL">' + esc(noteValue(id)) +
-    '</textarea><span class="note-state" aria-live="polite"></span></div>';
+  const sceneNoteExample = '例：FLOWで作成した「店頭.mp4」を使用。共有URLもここに記入できます。';
+  function noteField(no, id, index) {
+    const scene = id === sceneNoteKey(no);
+    const label = scene ? '採用画像なしの編集指示' : '編集への指示・出典URL';
+    const fieldId = 'scene-note-' + esc(no);
+    const input = '<textarea' + (scene ? ' id="' + fieldId + '"' : '') + ' class="edit-note-input" rows="1" maxlength="1000" data-no="' + esc(no) +
+      '" data-note-for="' + esc(id) + '" placeholder="' + (scene ? sceneNoteExample : notePlaceholder(index)) +
+      '" aria-label="' + label + '">' + esc(noteValue(no, id)) + '</textarea>';
+    return '<div class="note-field">' + (scene ? '<label for="' + fieldId + '">' + label + '</label>' : '') + input +
+      '<span class="note-state" aria-live="polite"></span></div>';
+  }
   function sequenceButtons(ids, id, allowClear = false) {
     if (!sequenceTools || !id || !ids.length) return '';
     const position = ids.indexOf(id);
@@ -204,7 +216,7 @@
   function setBusy(value) {
     busy = value;
     $('comment-review-start').disabled = value || !firstCommentRow;
-    document.querySelectorAll('#rows button, #review-sequence button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
+    document.querySelectorAll('#rows button, #review-sequence button, #refresh, #undo, #variant-submit, #review-adopt, #review-adopt-next, #review-skip, #review-next, #review-use-reference, #review-candidate-id, #review-reference-id, #review-visibility, #show-hidden-candidates, #review-show-hidden, #review-scene-none').forEach(button => { button.disabled = value || button.dataset.visibilityLocked === 'true'; });
     updateReviewNavigation();
     if (regionEditor && !regionEditor.valid()) $('variant-submit').disabled = true;
     updateOperations();
@@ -275,6 +287,7 @@
         '<span class="hint">表示：</span><button data-action="image" class="' + (mode === 'image' ? 'chosen' : '') + '">素材を切り替え</button><button data-action="hold" class="' + (mode === 'hold' ? 'chosen' : '') + '">前の素材を継続</button>' +
         '<button data-action="none" class="' + (mode === 'none' ? 'chosen' : '') + '">素材なし</button>' +
         '<button class="compare-scene" data-action="compare">大きく比較・採用</button><button data-action="flag">' + (lib.flags[no] ? '修正メモを変更' : '要修正にする') + '</button></div>' +
+        (mode !== 'image' || !ids.length ? noteField(no, sceneNoteKey(no)) : '') +
         (lib.flags[no] ? '<p class="hint flag-label">' + esc(lib.flags[no]) + '</p>' : '') +
         '<p class="scene-operation status-text" role="status" aria-live="polite" hidden></p>' +
         (hiddenInScene ? '<p class="hint">非表示の候補 ' + hiddenInScene + '枚' + (!candidates.length ? ' · 上の「非表示の候補も表示」から戻せます。' : '') + '</p>' : '') +
@@ -292,7 +305,7 @@
               '<button class="button ' + (chosen ? 'adopted' : '') + ' wide" data-action="' + (chosen ? 'clear' : 'select') + '">' + chooseLabel + '</button>' +
               (sequenceTools && ids.length ? '<div class="image-sequence-tools">' + sequenceButtons(ids, c.id) + '</div>' : '') +
               // 採用した画像（と、指示が残っている画像）の真下に、そのまま書ける欄を出す。
-              (chosen || noteValue(c.id) ? noteField(no, c.id, position) : '') +
+              (chosen || noteValue(no, c.id) ? noteField(no, c.id, position) : '') +
               '<div class="candidate-tools"><button data-action="edit">この画像を直す</button><details class="candidate-more"><summary>その他</summary><div class="candidate-more-actions"><button data-action="flip">左右反転</button><button data-action="hide" data-visibility-locked="' + chosen + '"' + (chosen ? ' disabled title="採用を解除してから非表示にできます"' : '') + '>候補から非表示</button></div></details></div>') +
             (c.web_source_url ? '<a class="hint" href="' + esc(/^https?:\/\//.test(c.web_source_url) ? c.web_source_url : '#') + '" target="_blank" rel="noopener">出典を確認 ↗</a>' : '') +
             '</div></div>';
@@ -401,6 +414,18 @@
     $('comment-script').hidden = !show;
   }
   $('comment-script-toggle').addEventListener('click', () => showCommentScript($('comment-script').hidden));
+  function showReviewNote(input, key) {
+    if (document.activeElement === input && input.dataset.noteFor === key) return;
+    if (input.dataset.noteFor && input.dataset.noteFor !== key) {
+      const box = input.closest('.note-field');
+      clearTimeout(box.noteStatusTimer);
+      box.dataset.state = '';
+      box.querySelector('.note-state').textContent = '';
+    }
+    input.dataset.noteFor = key;
+    input.dataset.no = reviewNo;
+    input.value = noteValue(reviewNo, key);
+  }
   function renderReview() {
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
@@ -458,11 +483,16 @@
     $('review-visibility').title = adopted ? '採用を解除してから非表示にできます' : '';
     $('review-show-hidden').hidden = !!focused || !MaterialView.candidates(data.library, reviewNo, true).length;
     const noteInputEl = $('review-note-input');
-    noteInputEl.placeholder = notePlaceholder(ids.indexOf(focused?.id));
+    noteInputEl.placeholder = ids.length || reading ? notePlaceholder(ids.indexOf(focused?.id)) : 'この候補を採用する場合の編集指示・出典URL';
     $('review-note-box').hidden = !focused || isHidden;
-    if (focused && (document.activeElement !== noteInputEl || noteInputEl.dataset.noteFor !== focused.id)) {
-      noteInputEl.dataset.noteFor = focused.id; noteInputEl.dataset.no = reviewNo;
-      noteInputEl.value = noteValue(focused.id);
+    if (focused) showReviewNote(noteInputEl, focused.id);
+    const sceneDirections = $('review-scene-directions');
+    sceneDirections.hidden = reading || (display(row) === 'image' && ids.length > 0);
+    if (!sceneDirections.hidden) {
+      const input = $('review-scene-input');
+      input.placeholder = sceneNoteExample;
+      showReviewNote(input, sceneNoteKey(reviewNo));
+      $('review-scene-none').hidden = display(row) === 'none';
     }
     $('review-chosen').textContent = isHidden ?'非表示の候補 · 候補に戻すと採用できます' : adopted ? '✓ 採用中の画像' +
       (sequenceTools ? ' · ' + MaterialView.imageNumber(reviewNo, ids.indexOf(focused.id)) + '（' + (ids.indexOf(focused.id) + 1) + '枚目）' : '') :
@@ -511,6 +541,7 @@
     if (first) openReview(first.no); else Studio.notice('この条件に合う場面はありません。絞り込みを解除してください。');
   }
   $('review-next').addEventListener('click', reviewNext);
+  $('review-scene-none').addEventListener('click', () => select(reviewNo, 'none'));
   $('review-candidate-id').addEventListener('change', event => { reviewCandidate = event.target.value; renderReview(); });
   sequenceTools?.addEventListener('click', async event => {
     const button = event.target.closest('button[data-action]');
@@ -635,18 +666,24 @@
     if (active) return saveNote(id);
     if (!noteDrafts.has(id)) return true;
     const note = noteDrafts.get(id).trim(), editing = () => document.activeElement?.dataset?.noteFor === id;
-    if (note === (data.library.edit_notes?.[id] || '')) { if (!editing()) noteDrafts.delete(id); return true; }
+    if (note === storedNote(noteScenes.get(id), id)) { if (!editing()) noteDrafts.delete(id); return true; }
     markNote(id, 'saving');
     const writing = persistNote(id, note, editing);
     noteWrites.set(id, writing);
     try { return await writing; } finally { noteWrites.delete(id); }
   }
+  function noteBody(id, note) {
+    const no = noteScenes.get(id);
+    const target = id === sceneNoteKey(no) ? {scope:'scene'} : {candidate_id:id};
+    return JSON.stringify({no, ...target, note});
+  }
   async function persistNote(id, note, editing) {
     try {
-      const next = await Studio.api(base + '/edit-note', {method:'POST', body:JSON.stringify({no:noteScenes.get(id), candidate_id:id, note})});
-      if (!editing() && noteDrafts.get(id)?.trim() === note) noteDrafts.delete(id);
+      const next = await Studio.api(base + '/edit-note', {method:'POST', body:noteBody(id, note)});
+      const current = noteDrafts.get(id)?.trim() === note;
+      if (!editing() && current) noteDrafts.delete(id);
       applyPayload(next);
-      markNote(id, 'saved');
+      if (current) markNote(id, 'saved');
       return true;
     } catch (error) { markNote(id, 'error'); Studio.notice(error.message, true); return false; }
   }
@@ -659,12 +696,14 @@
   function markNote(id, state) {
     document.querySelectorAll('.note-field').forEach(box => {
       if (box.querySelector('.edit-note-input')?.dataset.noteFor !== id) return;
+      clearTimeout(box.noteStatusTimer);
       box.dataset.state = state;
-      box.querySelector('.note-state').textContent = {saving:'保存中…', saved:'✓ 保存', error:'保存できません'}[state] || '';
+      const status = box.querySelector('.note-state');
+      status.textContent = {saving:'保存中…', saved:'✓ 保存', error:'保存できません'}[state] || '';
+      if (state === 'saved') box.noteStatusTimer = setTimeout(() => {
+        box.dataset.state = ''; status.textContent = '';
+      }, 1800);
     });
-    if (state === 'saved') setTimeout(() => document.querySelectorAll('.note-field[data-state="saved"]').forEach(box => {
-      if (box.querySelector('.edit-note-input')?.dataset.noteFor === id) { box.dataset.state = ''; box.querySelector('.note-state').textContent = ''; }
-    }), 1800);
   }
   const onNoteInput = event => { if (event.target.classList?.contains('edit-note-input')) noteInput(event.target); };
   const onNoteLeave = event => {
@@ -675,14 +714,14 @@
     }
   };
   // 一覧のカードの欄と、比較の窓の欄（どちらも入力・離れた時の知らせが親まで届く）
-  [$('rows'), $('review-note-box')].forEach(box => { box.addEventListener('input', onNoteInput); box.addEventListener('focusout', onNoteLeave); });
+  [$('rows'), $('review-note-box'), $('review-scene-directions')].forEach(box => { box.addEventListener('input', onNoteInput); box.addEventListener('focusout', onNoteLeave); });
   window.addEventListener('pagehide', () => {
     // 書いてすぐ閉じた時も、待っている保存を送り切る。
     const csrf = document.querySelector('meta[name="material-csrf"]')?.content || '';
     for (const id of [...noteTimers.keys()]) {
       clearTimeout(noteTimers.get(id));
       fetch(base + '/edit-note', {method:'POST', keepalive:true, headers:{'Content-Type':'application/json', 'X-Material-CSRF':csrf},
-        body:JSON.stringify({no:noteScenes.get(id), candidate_id:id, note:(noteDrafts.get(id) || '').trim()})});
+        body:noteBody(id, (noteDrafts.get(id) || '').trim())});
     }
   });
   document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
