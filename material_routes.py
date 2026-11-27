@@ -447,7 +447,7 @@ def register(module):
                 with IMAGE_SLOTS:
                     region = material_regions.prepare(source_path, polygons, provider) if polygons else None
                     results = run_parallel_generation(
-                        prompts=prompts, output_dir=output, provider=provider,
+                        prompts=prompts, output_dir=output, provider=provider, channel_id=ch["id"],
                         gemini_api_key=keys["gemini"], openai_api_key=keys["openai"],
                         openai_quality=defaults.get("openai_quality", "medium"),
                         openai_model=defaults.get("openai_image_model"),
@@ -477,6 +477,8 @@ def register(module):
                                           "provider": provider, "request_id": request_id,
                                           "presenter": result.get("presenter")}))
                 if not produced:
+                    if any(r.get("error") == russia_materials.BLACK_BACKGROUND_MESSAGE for r in results):
+                        raise russia_materials.BlackBackground(russia_materials.BLACK_BACKGROUND_MESSAGE)
                     if region:
                         raise material_regions.RegionEditError("部分修正案を作成できませんでした。元画像と採用状態を保持しました。")
                     raise ValueError("候補を作成できませんでした。元画像と採用状態は保持しています")
@@ -491,7 +493,7 @@ def register(module):
                 lib = store.load_library(d)
                 lib["requests"][request_id].update(status="failed", finished_at=store.now())
                 store.commit_library(d, lib, "operation_failed", {"request_id": request_id})
-            if isinstance(exc, (material_regions.RegionEditError, russia_materials.MapUnavailable)):
+            if isinstance(exc, (material_regions.RegionEditError, russia_materials.MapUnavailable, russia_materials.BlackBackground)):
                 raise
             raise ValueError("候補の作成に失敗しました。元画像・採用状態を保持しました。再読込で結果を確認してください")
         finally:

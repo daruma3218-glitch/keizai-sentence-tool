@@ -39,6 +39,7 @@ from safe_images import open_image
 from PIL import __version__ as PILLOW_VERSION
 import cloudflare_access
 import material_store
+from russia_materials import BLACK_BACKGROUND_MESSAGE
 from channel_styles import is_suasi_style
 from pipeline import SentencePipeline, VALID_STYLES
 from generator import (PROVIDER_NANOBANANA, PROVIDER_GPT_IMAGE, VALID_PROVIDERS,
@@ -1003,6 +1004,7 @@ def api_scene_fix():
     try:
         results = run_parallel_generation(
             prompts=prompts,
+            channel_id=channel_id,
             output_dir=images_dir,
             provider=provider,
             gemini_api_key=ch_keys.get("gemini") or None,
@@ -1018,7 +1020,8 @@ def api_scene_fix():
         )
         # 参照画像つきの編集生成は provider 側の制約で全滅することがある。
         # 生成ボタン自体は止めず、通常生成へ自動フォールバックする。
-        if reference_image_path and not any(r.get("success") for r in results):
+        if reference_image_path and not any(r.get("success") or r.get("error") == BLACK_BACKGROUND_MESSAGE
+                                            for r in results):
             events.append({
                 "status": "fallback",
                 "message": "参照画像つき生成が失敗したため、通常生成に切り替えました",
@@ -1026,6 +1029,7 @@ def api_scene_fix():
             fallback_prompts = [{**p, "edit_source": False} for p in prompts]
             results = run_parallel_generation(
                 prompts=fallback_prompts,
+                channel_id=channel_id,
                 output_dir=images_dir,
                 provider=provider,
                 gemini_api_key=ch_keys.get("gemini") or None,
@@ -1170,6 +1174,7 @@ def api_scene_fix_revise(job_id):
     try:
         results = run_parallel_generation(
             prompts=[entry],
+            channel_id=channel_id,
             output_dir=images_dir,
             provider=provider,
             gemini_api_key=ch_keys.get("gemini") or None,
@@ -2634,6 +2639,7 @@ def api_regenerate(job_id, no):
     try:
         results = run_parallel_generation(
             prompts=[entry],
+            channel_id=channel_id,
             output_dir=job_dir / "images",
             provider=provider,
             gemini_api_key=ch_keys.get("gemini") or None,

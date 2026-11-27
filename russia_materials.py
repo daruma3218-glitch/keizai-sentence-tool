@@ -1,6 +1,41 @@
 """ロシアの素材選びにある、図解の手直しと種類を選んだ候補追加。"""
 import json
 
+from PIL import Image
+
+
+BACKGROUND = "#D9E1E8"
+NEAR_BLACK = 38
+BACKGROUND_RULE = (
+    "Russia channel background requirement: use a light, opaque, full-frame background. "
+    f"For graphics use {BACKGROUND} as the base and #A8B9C4 as the secondary background. "
+    "Use #1B365D for main elements, #2C4C3B for comparisons, #E5A91A for neutral, "
+    "#A6192E for warnings and #B7950B for emphasis. The color hierarchy may vary. Keep saturation low. "
+    "Keep real scenes naturally lit. Never use a black, near-black, dark navy or transparent backdrop, "
+    "including behind the cards and in the margins. Replace such a backdrop even in a source image "
+    "being edited. Retain dark details and legible labels. Never print color codes in the image."
+)
+BLACK_BACKGROUND_MESSAGE = "生成画像の背景が黒いため、候補に追加しませんでした。"
+
+
+class BlackBackground(ValueError):
+    pass
+
+
+def has_black_backdrop(image):
+    """A black surround occupies both the frame edges and a substantial area, unlike dark labels."""
+    with image.resize((48, 27), Image.Resampling.BOX) as sample:
+        pixels = sample.load()
+        dark = edge_dark = 0
+        w, h = sample.size
+        for y in range(h):
+            for x in range(w):
+                if max(pixels[x, y]) <= NEAR_BLACK:
+                    dark += 1
+                    if x in (0, w - 1) or y in (0, h - 1):
+                        edge_dark += 1
+        return edge_dark >= .60 * (2 * w + 2 * h - 4) and dark >= .30 * w * h
+
 
 EDIT_PRESETS = {
     "remove_text": ("文字を全部消す", "画像内の文字・数字・ラベルをすべて消し、跡を背景に自然になじませる。"

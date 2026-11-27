@@ -201,6 +201,7 @@ def test_every_generation_call_site_passes_the_lock():
         assert gen_calls, path
         for call in gen_calls:
             assert "style_lock_text" in {k.arg for k in call.keywords}, f"{path.name}:{call.lineno}"
+            assert "channel_id" in {k.arg for k in call.keywords}, f"{path.name}:{call.lineno}"
         for call in prompt_calls:
             assert "style_lock" in {k.arg for k in call.keywords}, f"{path.name}:{call.lineno}"
 

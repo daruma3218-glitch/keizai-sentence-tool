@@ -3,6 +3,7 @@ import json
 import sys
 import zipfile
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -193,7 +194,8 @@ def test_scene_fix_revise_generated_variant(tmp_path, monkeypatch):
 
 
 
-def test_scene_fix_reference_generation_falls_back_when_edit_fails(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reason", ["edit unavailable", appmod.BLACK_BACKGROUND_MESSAGE])
+def test_scene_fix_reference_generation_fallback(tmp_path, monkeypatch, reason):
     out_root = tmp_path / "output"
     monkeypatch.setattr(appmod, "OUTPUT_DIR", out_root)
     monkeypatch.setattr(appmod, "APP_PASSWORD", "")
@@ -211,7 +213,7 @@ def test_scene_fix_reference_generation_falls_back_when_edit_fails(tmp_path, mon
         calls.append({"prompts": prompts, "kwargs": kwargs})
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if kwargs.get("edit_image_path"):
-            return [{"index": p["index"], "success": False, "filename": None, "error": "edit unavailable"} for p in prompts]
+            return [{"index": p["index"], "success": False, "filename": None, "error": reason} for p in prompts]
         out = []
         for p in prompts:
             fname = f"{p['index']}.png"
@@ -233,6 +235,10 @@ def test_scene_fix_reference_generation_falls_back_when_edit_fails(tmp_path, mon
 
     assert resp.status_code == 200
     body = resp.get_json()
+    if reason == appmod.BLACK_BACKGROUND_MESSAGE:
+        assert len(calls) == 1
+        assert all(not v["ok"] and v["error"] == reason for v in body["variants"])
+        return
     assert all(v["ok"] for v in body["variants"])
     assert len(calls) == 2
     assert calls[0]["kwargs"]["edit_image_path"]

@@ -1,6 +1,8 @@
+import base64
 import hashlib
 import json
 from io import BytesIO
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pytest
@@ -10,6 +12,7 @@ import generator
 import material_review
 import material_store as store
 import russia_map_renderer
+import russia_materials
 import subscription_runtime
 from test_materials import choose, make_job, studio
 
@@ -19,6 +22,87 @@ def post(client, headers, job, source, request_id, kind, **fields):
                 revision=store.load_library(job)["revision"])
     body.update(fields)
     return client.post(f"/api/material-jobs/{job.name}/variant", headers=headers, data=body)
+
+
+@pytest.mark.parametrize("provider,channel", [("gpt-image", "russia"), ("nanobanana", "roshia")])
+def test_provider_enforces_background_for_generation_and_edits(tmp_path, monkeypatch, provider, channel):
+    import openai
+
+    prompts = []
+    def respond(**args):
+        if "prompt" in args:
+            prompts.append(args["prompt"])
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(png))])
+        contents = args["contents"]
+        prompts.append(contents[-1] if isinstance(contents, list) else contents)
+        return SimpleNamespace(parts=[SimpleNamespace(inline_data=SimpleNamespace(data=png, mime_type="image/png"))])
+
+    monkeypatch.setattr(openai, "OpenAI", lambda **_: SimpleNamespace(images=SimpleNamespace(generate=respond, edit=respond)))
+    monkeypatch.setattr(generator.genai, "Client", lambda **_: SimpleNamespace(models=SimpleNamespace(generate_content=respond)))
+    monkeypatch.setattr(generator, "MAX_RETRIES", 3)
+    gen = generator.ParallelImageGenerator(provider, openai_api_key="offline", gemini_api_key="offline", channel_id=channel)
+    path = tmp_path / "result.png"
+    data = BytesIO()
+    with Image.new("RGBA", (96, 64), (0, 0, 0, 0)) as image:
+        image.paste((12, 15, 19, 255), (20, 20, 75, 45))  # A dark foreground subject is valid.
+        image.save(data, "PNG")
+    png = data.getvalue()
+    assert gen._dispatch_sync_generate("scene", path)[0]
+    original = path.read_bytes()
+    with Image.open(path) as saved:
+        assert saved.mode == "RGB"
+        assert saved.getpixel((0, 0)) == saved.getpixel((14, 2)) == (217, 225, 232)
+        assert saved.getpixel((50, 32)) == (12, 15, 19)
+
+    data = BytesIO()
+    with Image.new("RGB", (96, 54), (11, 12, 15)) as image:
+        image.paste("#D9E1E8", (20, 14, 75, 40))
+        image.save(data, "PNG")
+    png = data.getvalue()
+    assert gen._dispatch_sync_generate("edit", path, ref_bytes_override=original) == (
+        False, russia_materials.BLACK_BACKGROUND_MESSAGE)
+    assert len(prompts) == 2 and all(russia_materials.BACKGROUND_RULE in p for p in prompts)
+    assert path.read_bytes() == original
+    generator._save_as_16_9(png, path)  # Other channels can use the same dark art.
+    with Image.open(path) as saved:
+        assert saved.getpixel((0, 0)) == (11, 12, 15)
+
+
+def test_indexed_transparency_and_black_corners(tmp_path):
+    output = tmp_path / "result.png"
+    for mode in ("P", "RGB"):
+        data = BytesIO()
+        with Image.new(mode, (96, 64), 0) as image:
+            if mode == "P":
+                image.putpalette([0, 0, 0, 27, 54, 93] + [0] * 762)
+                image.paste(1, (36, 24, 60, 40))
+                image.save(data, "PNG", transparency=0)
+            else:
+                image.paste("#D9E1E8", (0, 0, 96, 64))
+                for x in (0, 46, 92):
+                    for y in (0, 30, 60):
+                        image.paste("black", (x, y, x+4, y+4))
+                image.save(data, "PNG")
+        generator._save_as_16_9(data.getvalue(), output, light_background=True)
+        with Image.open(output) as saved:
+            assert saved.getpixel((0, 0)) == (217, 225, 232)
+            assert saved.getpixel((57, 32)) == ((27, 54, 93) if mode == "P" else (0, 0, 0))
+
+
+def test_black_variant_reports_the_reason_and_keeps_the_adoption(studio, monkeypatch):
+    client, headers, root = studio
+    job, _, original = make_job(root, channel="russia")
+    choose(job, original)
+    before = store.load_library(job)
+    monkeypatch.setenv("ROSHIA_OPENAI_API_KEY", "offline-test")
+    monkeypatch.setenv("ROSHIA_GEMINI_API_KEY", "offline-test")
+    monkeypatch.setattr(generator, "run_parallel_generation", lambda **_: [
+        {"success":False, "filename":None, "error":russia_materials.BLACK_BACKGROUND_MESSAGE}])
+    response = post(client, headers, job, original, "dark-background", "generate", target_type="diagram")
+    assert response.status_code == 409 and response.json["error"] == russia_materials.BLACK_BACKGROUND_MESSAGE
+    after = store.load_library(job)
+    assert after["requests"]["dark-background"]["status"] == "failed"
+    assert before["candidates"] == after["candidates"] and before["selections"] == after["selections"]
 
 
 def test_edits_retypes_and_exports_keep_the_source(studio, monkeypatch):
@@ -47,6 +131,7 @@ def test_edits_retypes_and_exports_keep_the_source(studio, monkeypatch):
         library = result.json["library"]
         new = library["candidates"]["1"][-1]
         opts = requests[-1]
+        assert opts["channel_id"] == "russia"
         assert new["parent_id"] == original["id"] and new["route"] == target
         assert opts["edit_image_path"] is None and opts["prompts"][0]["type"] == target
         assert opts["realphoto_watermark"] == (target == "realphoto")

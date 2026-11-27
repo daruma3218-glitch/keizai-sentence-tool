@@ -13,6 +13,7 @@ from werkzeug.serving import make_server
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from browser_material_comments import seed
+from browser_material_editing import exercise_editing
 import material_store as store
 
 
@@ -169,6 +170,7 @@ def main(output):
                         try:
                             for width in [390, 1366]:
                                 exercise(browser, f"http://127.0.0.1:{server.server_port}", root, width, output)
+                                exercise_editing(browser, f"http://127.0.0.1:{server.server_port}", root, width)
                         finally:
                             browser.close()
                 finally:

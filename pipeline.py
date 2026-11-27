@@ -1511,6 +1511,7 @@ class SentencePipeline:
 
                 provider_results = run_parallel_generation(
                     prompts=provider_targets,
+                    channel_id=self.channel_id,
                     output_dir=self.images_dir,
                     provider=target_provider,
                     gemini_api_key=gemini_key,
@@ -1697,6 +1698,7 @@ class SentencePipeline:
                     fb_concurrency = min(eff_concurrency, 3)
                     web_fallback_results = run_parallel_generation(
                         prompts=fallback_targets,
+                        channel_id=self.channel_id,
                         output_dir=self.images_dir,
                         provider=self.provider,
                         gemini_api_key=gemini_key,
@@ -2233,6 +2235,7 @@ class SentencePipeline:
         for provider, group in self._group_by_provider(fix_targets):
             run_parallel_generation(
                 prompts=group,
+                channel_id=self.channel_id,
                 output_dir=self.images_dir,
                 provider=provider,
                 gemini_api_key=gemini_key,
@@ -2423,6 +2426,7 @@ class SentencePipeline:
         for provider, group in self._group_by_provider(entries):
             run_parallel_generation(
                 prompts=group,
+                channel_id=self.channel_id,
                 output_dir=self.images_dir,
                 provider=provider,
                 gemini_api_key=gemini_key,
@@ -2566,6 +2570,7 @@ class SentencePipeline:
             for provider, group in self._group_by_provider(entries):
                 run_parallel_generation(
                     prompts=group, output_dir=self.images_dir, provider=provider,
+                    channel_id=self.channel_id,
                     gemini_api_key=gemini_key, openai_api_key=openai_key,
                     openai_quality=self.openai_quality, openai_model=self.openai_model,
                     concurrency=2, style_preset=self.style_preset,

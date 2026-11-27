@@ -28,6 +28,7 @@ from PIL import Image
 from image_memory import effective_concurrency, image_operation, image_slot
 from image_transport import consume_openai_image, consume_gemini_image, before_gemini_image_body
 from image_files import save_png_atomic
+import russia_materials
 from channel_styles import is_suasi_style
 from suasi_presenter import BOARD_INSTRUCTION, compose_presenter, diagram_edit_source, load_artworks, read_recipe
 from suasi_pose import select_pose, POSE_NAMES
@@ -164,7 +165,7 @@ def _crop_to_16_9(img: Image.Image) -> Image.Image:
     return img.crop((left, 0, left + new_w, h))
 
 
-def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> None:
+def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad", *, light_background=False) -> None:
     """画像バイト列を 16:9 で保存する（fill="pad": レターボックス方式 / fill="crop": 画面いっぱい）。
 
     クロップせず画像全体を 16:9 フレーム内に収め、はみ出さないようにする。
@@ -182,6 +183,11 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
                 raise ValueError("部分修正の出力が元の画角と合いません")
             save_png_atomic(img, output_path)
             return
+        if light_background and ("A" in img.getbands() or "transparency" in img.info):
+            rgba = img if img.mode == "RGBA" else stack.enter_context(closing(img.convert("RGBA")))
+            matte = stack.enter_context(closing(Image.new("RGB", img.size, russia_materials.BACKGROUND)))
+            matte.paste(rgba, mask=rgba)
+            img = matte
         if img.mode not in ("RGB", "RGBA"):
             img = stack.enter_context(closing(img.convert("RGB")))
         if fill == "crop":
@@ -189,14 +195,17 @@ def _save_as_16_9(image_bytes: bytes, output_path: Path, fill: str = "pad") -> N
             cropped = _crop_to_16_9(rgb)
             if cropped is not rgb:
                 stack.enter_context(closing(cropped))
-            save_png_atomic(cropped, output_path)
-            return
+            img = cropped
+        if light_background and russia_materials.has_black_backdrop(img):
+            raise russia_materials.BlackBackground(russia_materials.BLACK_BACKGROUND_MESSAGE)
         w, h = img.size
         current = w / h if h else 1.0
-        if abs(current - TARGET_RATIO) < 0.01:
+        if fill == "crop" or abs(current - TARGET_RATIO) < 0.01:
             save_png_atomic(img, output_path)
             return
         bg = _detect_background_color(img)
+        if light_background and max(bg) <= russia_materials.NEAR_BLACK:
+            bg = russia_materials.BACKGROUND
         if current > TARGET_RATIO:
             canvas_w, canvas_h = w, int(round(w / TARGET_RATIO))
         else:
@@ -742,6 +751,7 @@ def _sync_generate_image_gemini(
     reference_mime: str = "image/png",
     defer_body: bool = False,
     region_edit: bool = False,
+    light_background: bool = False,
 ) -> tuple:
     """1 枚の画像を同期生成（Gemini）。
 
@@ -762,7 +772,8 @@ def _sync_generate_image_gemini(
                 img_data = inline.data
                 if isinstance(img_data, str):
                     img_data = base64.b64decode(img_data)
-                _save_as_16_9(img_data, output_path, fill="region" if region_edit else "pad")
+                _save_as_16_9(img_data, output_path, fill="region" if region_edit else "pad",
+                              light_background=light_background)
                 return True, ""
         for part in parts_iter:
             txt = getattr(part, "text", None)
@@ -783,6 +794,8 @@ def _sync_generate_image_gemini(
             if success:
                 return True, ""
 
+        except russia_materials.BlackBackground as e:
+            return False, str(e)
         except Exception as e:
             err = str(e)
             last_error = err[:200]
@@ -809,6 +822,7 @@ def _sync_generate_image_openai(
     reference_bytes: Optional[bytes] = None,  # キャラ固定の参照画像（あれば images.edit）
     fill: str = "pad",  # 16:9 への合わせ方（"crop" で画面いっぱい）
     mask_png: Optional[bytes] = None,
+    light_background: bool = False,
 ) -> tuple:
     """1 枚の画像を同期生成（OpenAI gpt-image）。
 
@@ -824,12 +838,12 @@ def _sync_generate_image_openai(
         if b64:
             img_data = base64.b64decode(b64)
             b64 = datum = response = None
-            _save_as_16_9(img_data, output_path, fill=fill)
+            _save_as_16_9(img_data, output_path, fill=fill, light_background=light_background)
             return True, ""
         if url:
             import urllib.request
             with urllib.request.urlopen(url, timeout=60) as result:
-                _save_as_16_9(result.read(), output_path, fill=fill)
+                _save_as_16_9(result.read(), output_path, fill=fill, light_background=light_background)
             return True, ""
         return False, "neither b64_json nor url in response"
 
@@ -869,6 +883,8 @@ def _sync_generate_image_openai(
             if success:
                 return True, ""
 
+        except russia_materials.BlackBackground as e:
+            return False, str(e)
         except Exception as e:
             err = str(e)
             last_error = err[:200]
@@ -888,7 +904,8 @@ def _sync_generate_image_openai(
                 # （やり直しの回数は既定1回なので、回数を使わずに1度だけ呼び直す）
                 return _sync_generate_image_openai(client, full_prompt, output_path, model_name=model_name,
                                                    size="1536x1024", quality=quality,
-                                                   reference_bytes=reference_bytes, fill=fill)
+                                                   reference_bytes=reference_bytes, fill=fill,
+                                                   light_background=light_background)
             time.sleep(3 + 2 * attempt)
 
     return False, last_error or "max retries exceeded"
@@ -915,6 +932,7 @@ class ParallelImageGenerator:
         realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
         style_lock_text: str = "",  # 世界観ロック: チャンネルの設定文を全イラスト/図解に固定
         region_edit: Optional[RegionEdit] = None,
+        channel_id: str = "",
     ):
         if provider not in VALID_PROVIDERS:
             raise ValueError(f"unknown provider: {provider} (valid: {VALID_PROVIDERS})")
@@ -925,6 +943,7 @@ class ParallelImageGenerator:
         self.realphoto_watermark = bool(realphoto_watermark)
         self.style_lock_text = (style_lock_text or "").strip()
         self.region_edit = region_edit
+        self.light_background = channel_id in ("roshia", "russia")
         self.keizai_reference = bool(reference_image_path and Path(reference_image_path).name == "keizai_professor.png")
 
         # 参照画像（キャラ固定用）。character=True のシーンでのみ使用。
@@ -1029,6 +1048,8 @@ class ParallelImageGenerator:
         else:
             ref = self.reference_bytes if use_reference else None
             ref_mime = self.reference_mime
+        if self.light_background:
+            full_prompt += "\n\n" + russia_materials.BACKGROUND_RULE
         if self.provider == PROVIDER_NANOBANANA:
             if self.region_edit:
                 ref = _reference_parts(ref, ref_mime) + [(self.region_edit.mask_png, "image/png")]
@@ -1039,6 +1060,7 @@ class ParallelImageGenerator:
                 self.gemini_client, full_prompt, output_path, self.gemini_model,
                 reference_bytes=ref, reference_mime=ref_mime,
                 defer_body=self.gemini_deferred_body,
+                light_background=self.light_background,
                 **({"region_edit": True} if self.region_edit else {}),
             )
         else:  # gpt-image
@@ -1049,6 +1071,7 @@ class ParallelImageGenerator:
                 quality=self.openai_quality,
                 reference_bytes=ref,
                 fill="region" if self.region_edit else ("crop" if full_bleed(self.style_lock_text) else "pad"),
+                light_background=self.light_background,
                 **({"mask_png": self.region_edit.mask_png} if self.region_edit else {}),
             )
 
@@ -1384,6 +1407,7 @@ def run_parallel_generation(
     realphoto_watermark: bool = False,  # v3 Step5: realphoto に「イメージ」焼き込み
     style_lock_text: str = "",  # 世界観ロック（空なら従来どおり）
     region_edit: Optional[RegionEdit] = None,
+    channel_id: str = "",
 ) -> list:
     """同期エントリポイント: pipeline から呼び出す"""
     # 環境変数からデフォルト補完
@@ -1412,6 +1436,7 @@ def run_parallel_generation(
         realphoto_watermark=realphoto_watermark,
         style_lock_text=style_lock_text,
         region_edit=region_edit,
+        channel_id=channel_id,
     )
     try:
         return asyncio.run(generator.generate_all(prompts, output_dir))

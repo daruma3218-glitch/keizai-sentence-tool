@@ -11,6 +11,8 @@
   const pendingKey = 'material.pending.v1.' + window.materialJobId;
   // Image and scene drafts use distinct keys, including while a save is in flight.
   const noteDrafts = new Map(), noteTimers = new Map(), noteScenes = new Map(), noteWrites = new Map();
+  const noteDelay = 2500;
+  let composingNote = null, redrawAfterComposition = false;
   const sceneNoteKey = no => 'scene:' + no;
   function storedNote(no, id) {
     return (id === sceneNoteKey(no) ? data.library.scene_edit_notes?.[no] : data.library.edit_notes?.[id]) || '';
@@ -101,7 +103,8 @@
     const active = document.activeElement;
     const noteFocus = active?.classList?.contains('edit-note-input') && active.closest('#rows')
       ? {id:active.dataset.noteFor, start:active.selectionStart, end:active.selectionEnd} : null;
-    data = next; draw();
+    data = next;
+    if (!draw()) return;
     if (noteFocus) {
       // 描き直しても、書いている欄と入力位置はそのまま。
       const field = [...document.querySelectorAll('#rows .edit-note-input')].find(el => el.dataset.noteFor === noteFocus.id);
@@ -223,6 +226,8 @@
   }
   function draw() {
     if (!data) return;
+    // Replacing the textarea ends an active IME session, even if focus is restored.
+    if (composingNote) { redrawAfterComposition = true; return false; }
     const lib = data.library, rows = data.rows;
     const hiddenCount = Object.values(lib.hidden_candidates || {}).filter(Boolean).length;
     $('hidden-candidates-control').hidden = !hiddenCount;
@@ -270,7 +275,14 @@
     firstCommentRow = visible.find(row => sceneCandidates(row.no).length);
     if (pending && !MaterialView.nextPending(rows, lib, '', currentView())) $('review-next').textContent = 'この範囲の素材を見直す';
     $('visible-count').textContent = visible.length + ' / ' + rows.length + ' 場面を表示';
-    $('rows').innerHTML = visible.map(row => {
+    const list = $('rows'), stripPositions = new Map();
+    for (const strip of list.querySelectorAll('.candidate-strip')) {
+      const left = strip.scrollLeft;
+      if (left > 0) stripPositions.set(strip.parentElement.dataset.no, {
+        left, atEnd:strip.scrollWidth - strip.clientWidth - left <= 2
+      });
+    }
+    list.innerHTML = visible.map(row => {
       const no = String(row.no), ids = MaterialView.selectedIds(lib, no), mode = display(row);
       const candidates = sceneCandidates(no);
       if (sequenceTools && ids.length > 1) {
@@ -312,12 +324,19 @@
         }).join('') + '<div class="add-candidate"><span>＋</span><strong>' + (candidates.length ? '別の案も比べる' : 'この場面の素材を追加') + '</strong>' +
         '<button class="button" data-action="generate">候補を生成</button><button class="text-button" data-action="upload">画像を取り込む</button></div></div></article>';
     }).join('') || '<div class="empty"><p>' + (rows.length ? '該当する場面がありません。絞り込みを解除して確認できます。' : '原稿を解析中、またはまだ素材がありません。「詳しい進捗・手直し」から確認できます。') + '</p></div>';
+    if (stripPositions.size) {
+      for (const strip of list.querySelectorAll('.candidate-strip')) {
+        const position = stripPositions.get(strip.parentElement.dataset.no);
+        if (position) strip.scrollLeft = position.atEnd ? strip.scrollWidth : position.left;
+      }
+    }
     const operations = Object.values(lib.requests);
     const requested = operations.reduce((n, op) => n + (op.requested_images || 0), 0);
     $('cost-note').textContent = 'この画面からの追加生成：' + requested + ' 案を依頼。金額は未集計です。利用先の請求と照合して振り返ります。';
     if ($('preview-dialog').open) renderReview();
     setBusy(busy);
     if (initialView) { initialView = false; restorePosition(lastVisit); }
+    return true;
   }
   async function refresh() {
     if (busy) return;
@@ -427,6 +446,7 @@
     input.value = noteValue(reviewNo, key);
   }
   function renderReview() {
+    if (composingNote) { redrawAfterComposition = true; return; }
     const row = data.rows.find(row => String(row.no) === reviewNo);
     if (!row) return;
     const candidates = sceneCandidates(reviewNo), chosen = data.library.selections[reviewNo];
@@ -668,16 +688,23 @@
     $('flag-dialog').close(); select(flagNo, 'flag', undefined, $('flag-note').value.trim());
   });
   $('clear-flag').addEventListener('click', () => { if (!busy) { $('flag-dialog').close(); select(flagNo, 'unflag'); } });
-  // 編集への指示：書いたら少し待って自動で保存する（保存ボタンは無い）。欄を離れた時もすぐ保存する。
-  // 採用・生成などの操作中（busy）でも書ける。保存の結果で一覧を描き直しても、書きかけの文と入力位置は残す。
+  // Drafts only contain committed text. The IME owns its preedit text until compositionend.
+  function startComposition(field) {
+    composingNote = field;
+    const id = field.dataset.noteFor;
+    clearTimeout(noteTimers.get(id));
+    noteTimers.delete(id);
+    markNote(id, '');
+  }
   function noteInput(field) {
     const id = field.dataset.noteFor, no = field.dataset.no;
     noteDrafts.set(id, field.value); noteScenes.set(id, no);
     markNote(id, '');
     clearTimeout(noteTimers.get(id));
-    noteTimers.set(id, setTimeout(() => saveNote(id), 900));
+    noteTimers.set(id, setTimeout(() => saveNote(id), document.activeElement === field ? noteDelay : 0));
   }
   async function saveNote(id) {
+    if (composingNote?.dataset.noteFor === id) return true;
     clearTimeout(noteTimers.get(id)); noteTimers.delete(id);
     const active = noteWrites.get(id);
     if (active && !await active) return false;
@@ -701,11 +728,12 @@
       const current = noteDrafts.get(id)?.trim() === note;
       if (!editing() && current) noteDrafts.delete(id);
       applyPayload(next);
-      if (current) markNote(id, 'saved');
+      if (current && composingNote?.dataset.noteFor !== id) markNote(id, 'saved');
       return true;
     } catch (error) { markNote(id, 'error'); Studio.notice(error.message, true); return false; }
   }
   async function flushEditNotes() {
+    if (composingNote) throw new Error('編集中の文字を確定してから書き出してください。');
     const ids = new Set([...noteDrafts.keys(), ...noteWrites.keys()]);
     const saved = await Promise.all([...ids].map(id => saveNote(id)));
     if (saved.includes(false)) throw new Error('編集への指示を保存できませんでした。書き出す前に、もう一度お試しください。');
@@ -723,23 +751,37 @@
       }, 1800);
     });
   }
-  const onNoteInput = event => { if (event.target.classList?.contains('edit-note-input')) noteInput(event.target); };
-  const onNoteLeave = event => {
-    const field = event.target;
-    const id = field.dataset?.noteFor;
-    if (field.classList?.contains('edit-note-input') && (noteTimers.has(id) || noteDrafts.has(id))) {
-      setTimeout(() => saveNote(id));
-    }
-  };
-  // 一覧のカードの欄と、比較の窓の欄（どちらも入力・離れた時の知らせが親まで届く）
-  [$('rows'), $('review-note-box'), $('review-scene-directions')].forEach(box => { box.addEventListener('input', onNoteInput); box.addEventListener('focusout', onNoteLeave); });
+  const isNote = field => field.classList?.contains('edit-note-input');
+  for (const box of [$('rows'), $('review-note-box'), $('review-scene-directions')]) {
+    box.addEventListener('compositionstart', ({target}) => { if (isNote(target)) startComposition(target); });
+    box.addEventListener('input', ({target, isComposing}) => {
+      if (!isNote(target) || composingNote === target) return;
+      if (isComposing) startComposition(target);
+      else noteInput(target);
+    });
+    box.addEventListener('compositionend', ({target}) => {
+      if (!isNote(target)) return;
+      composingNote = null;
+      noteInput(target);
+      if (redrawAfterComposition) setTimeout(() => {
+        if (!composingNote && redrawAfterComposition) { redrawAfterComposition = false; applyPayload(data); }
+      });
+    });
+    box.addEventListener('focusout', ({target}) => {
+      const id = target.dataset.noteFor;
+      if (isNote(target) && noteDrafts.has(id)) setTimeout(() => {
+        if (document.activeElement?.dataset?.noteFor !== id) saveNote(id);
+      });
+    });
+  }
   window.addEventListener('pagehide', () => {
     // 書いてすぐ閉じた時も、待っている保存を送り切る。
     const csrf = document.querySelector('meta[name="material-csrf"]')?.content || '';
-    for (const id of [...noteTimers.keys()]) {
+    for (const [id, value] of noteDrafts) {
       clearTimeout(noteTimers.get(id));
+      if (!noteWrites.has(id) && value.trim() === storedNote(noteScenes.get(id), id)) continue;
       fetch(base + '/edit-note', {method:'POST', keepalive:true, headers:{'Content-Type':'application/json', 'X-Material-CSRF':csrf},
-        body:noteBody(id, (noteDrafts.get(id) || '').trim())});
+        body:noteBody(id, value.trim())});
     }
   });
   document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
